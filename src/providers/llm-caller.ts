@@ -1,14 +1,16 @@
 /**
  * Multi-provider LLM caller — direct HTTP, no SDKs.
  *
- * Based on kondi-council's llm-caller.ts with additions:
- * - Separate input/output token tracking
- * - NVIDIA router support
- * - Anthropic prompt caching support
- * - Configurable max_tokens per call
+ * Supports:
+ * - Simple single-turn (systemPrompt + userMessage)
+ * - Multi-turn with tool use (messages array + tools)
+ * - Anthropic, OpenAI-compatible, and Gemini providers
  */
 
-import type { ProviderId, LLMRequest, LLMResponse } from '../types.ts';
+import type {
+  ProviderId, LLMRequest, LLMResponse,
+  ToolDefinition, ToolCall, LLMMessage,
+} from '../types.ts';
 
 // ---------------------------------------------------------------------------
 // Default models per provider
@@ -41,7 +43,7 @@ function getApiKey(provider: ProviderId): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// Provider implementations
+// Anthropic
 // ---------------------------------------------------------------------------
 
 async function callAnthropic(
@@ -51,9 +53,8 @@ async function callAnthropic(
 ): Promise<LLMResponse> {
   const start = Date.now();
 
+  // System content
   const systemContent: Array<{ type: string; text: string; cache_control?: { type: string } }> = [];
-
-  // If there's a cacheable prefix, send it as a separate system block with cache_control
   if (req.cacheablePrefix) {
     systemContent.push({
       type: 'text',
@@ -63,6 +64,30 @@ async function callAnthropic(
   }
   systemContent.push({ type: 'text', text: req.systemPrompt });
 
+  // Messages — multi-turn or single-turn
+  let messages: any[];
+  if (req.messages) {
+    messages = anthropicMessages(req.messages);
+  } else {
+    messages = [{ role: 'user', content: req.userMessage || '' }];
+  }
+
+  // Tools
+  const tools = req.tools?.map(t => ({
+    name: t.name,
+    description: t.description,
+    input_schema: t.parameters,
+  }));
+
+  const body: any = {
+    model,
+    max_tokens: req.maxOutputTokens ?? 8192,
+    system: systemContent,
+    messages,
+    ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+    ...(tools ? { tools } : {}),
+  };
+
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -71,13 +96,7 @@ async function callAnthropic(
       'anthropic-beta': 'prompt-caching-2024-07-31',
       'x-api-key': apiKey,
     },
-    body: JSON.stringify({
-      model,
-      max_tokens: req.maxOutputTokens ?? 8192,
-      system: systemContent,
-      messages: [{ role: 'user', content: req.userMessage }],
-      ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!resp.ok) {
@@ -86,11 +105,23 @@ async function callAnthropic(
   }
 
   const data: any = await resp.json();
-  const content = data.content
-    ?.filter((b: any) => b.type === 'text')
-    .map((b: any) => b.text)
-    .join('\n') || '';
   const usage = data.usage || {};
+
+  // Parse response — may contain text and/or tool_use blocks
+  let content = '';
+  const toolCalls: ToolCall[] = [];
+
+  for (const block of data.content || []) {
+    if (block.type === 'text') {
+      content += block.text;
+    } else if (block.type === 'tool_use') {
+      toolCalls.push({
+        id: block.id,
+        name: block.name,
+        arguments: block.input || {},
+      });
+    }
+  }
 
   return {
     content,
@@ -100,8 +131,57 @@ async function callAnthropic(
     outputTokens: usage.output_tokens || 0,
     latencyMs: Date.now() - start,
     cached: (usage.cache_read_input_tokens || 0) > 0,
+    ...(toolCalls.length > 0 ? { toolCalls } : {}),
   };
 }
+
+/** Convert abstract LLMMessage[] to Anthropic message format */
+function anthropicMessages(messages: LLMMessage[]): any[] {
+  const result: any[] = [];
+
+  for (const msg of messages) {
+    if (msg.role === 'user') {
+      result.push({ role: 'user', content: msg.content || '' });
+    } else if (msg.role === 'assistant') {
+      // Assistant message may have text + tool_use blocks
+      const content: any[] = [];
+      if (msg.content) {
+        content.push({ type: 'text', text: msg.content });
+      }
+      if (msg.toolCalls) {
+        for (const tc of msg.toolCalls) {
+          content.push({
+            type: 'tool_use',
+            id: tc.id,
+            name: tc.name,
+            input: tc.arguments,
+          });
+        }
+      }
+      result.push({ role: 'assistant', content });
+    } else if (msg.role === 'tool') {
+      // Anthropic: tool results are sent as user messages with tool_result content blocks
+      const content: any[] = [];
+      if (msg.toolResults) {
+        for (const tr of msg.toolResults) {
+          content.push({
+            type: 'tool_result',
+            tool_use_id: tr.toolCallId,
+            content: tr.content,
+            ...(tr.isError ? { is_error: true } : {}),
+          });
+        }
+      }
+      result.push({ role: 'user', content });
+    }
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI-compatible (OpenAI, DeepSeek, xAI, NVIDIA router, Ollama)
+// ---------------------------------------------------------------------------
 
 async function callOpenAICompatible(
   baseUrl: string,
@@ -116,21 +196,45 @@ async function callOpenAICompatible(
     ? `${req.cacheablePrefix}\n\n${req.systemPrompt}`
     : req.systemPrompt;
 
+  // Messages — multi-turn or single-turn
+  let messages: any[];
+  if (req.messages) {
+    messages = [
+      { role: 'system', content: systemContent },
+      ...openaiMessages(req.messages),
+    ];
+  } else {
+    messages = [
+      { role: 'system', content: systemContent },
+      { role: 'user', content: req.userMessage || '' },
+    ];
+  }
+
+  // Tools
+  const tools = req.tools?.map(t => ({
+    type: 'function' as const,
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+    },
+  }));
+
+  const body: any = {
+    model,
+    messages,
+    max_tokens: req.maxOutputTokens ?? 8192,
+    ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+    ...(tools ? { tools } : {}),
+  };
+
   const resp = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: systemContent },
-        { role: 'user', content: req.userMessage },
-      ],
-      max_tokens: req.maxOutputTokens ?? 8192,
-      ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!resp.ok) {
@@ -139,19 +243,76 @@ async function callOpenAICompatible(
   }
 
   const data: any = await resp.json();
-  const content = data.choices?.[0]?.message?.content || '';
+  const choice = data.choices?.[0]?.message || {};
   const usage = data.usage || {};
   const actualModel = data.model || model;
 
+  // Parse tool calls
+  const toolCalls: ToolCall[] = [];
+  if (choice.tool_calls) {
+    for (const tc of choice.tool_calls) {
+      toolCalls.push({
+        id: tc.id,
+        name: tc.function.name,
+        arguments: typeof tc.function.arguments === 'string'
+          ? JSON.parse(tc.function.arguments)
+          : tc.function.arguments,
+      });
+    }
+  }
+
   return {
-    content,
+    content: choice.content || '',
     model: actualModel,
     provider,
     inputTokens: usage.prompt_tokens || 0,
     outputTokens: usage.completion_tokens || 0,
     latencyMs: Date.now() - start,
+    ...(toolCalls.length > 0 ? { toolCalls } : {}),
   };
 }
+
+/** Convert abstract LLMMessage[] to OpenAI message format */
+function openaiMessages(messages: LLMMessage[]): any[] {
+  const result: any[] = [];
+
+  for (const msg of messages) {
+    if (msg.role === 'user') {
+      result.push({ role: 'user', content: msg.content || '' });
+    } else if (msg.role === 'assistant') {
+      const entry: any = { role: 'assistant' };
+      if (msg.content) entry.content = msg.content;
+      if (msg.toolCalls) {
+        entry.tool_calls = msg.toolCalls.map(tc => ({
+          id: tc.id,
+          type: 'function',
+          function: {
+            name: tc.name,
+            arguments: JSON.stringify(tc.arguments),
+          },
+        }));
+      }
+      result.push(entry);
+    } else if (msg.role === 'tool') {
+      // OpenAI: each tool result is a separate message with role: 'tool'
+      if (msg.toolResults) {
+        for (const tr of msg.toolResults) {
+          result.push({
+            role: 'tool',
+            tool_call_id: tr.toolCallId,
+            content: tr.content,
+          });
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Gemini
+// ---------------------------------------------------------------------------
 
 async function callGemini(
   apiKey: string,
@@ -164,19 +325,39 @@ async function callGemini(
     ? `${req.cacheablePrefix}\n\n${req.systemPrompt}`
     : req.systemPrompt;
 
+  // Gemini tool use: function_declarations
+  const tools = req.tools ? [{
+    function_declarations: req.tools.map(t => ({
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+    })),
+  }] : undefined;
+
+  // Messages — multi-turn or single-turn
+  let contents: any[];
+  if (req.messages) {
+    contents = geminiMessages(req.messages);
+  } else {
+    contents = [{ role: 'user', parts: [{ text: req.userMessage || '' }] }];
+  }
+
+  const body: any = {
+    system_instruction: { parts: [{ text: systemText }] },
+    contents,
+    generationConfig: {
+      maxOutputTokens: req.maxOutputTokens ?? 8192,
+      ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+    },
+    ...(tools ? { tools } : {}),
+  };
+
   const resp = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/${model}:generateContent?key=${apiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: systemText }] },
-        contents: [{ role: 'user', parts: [{ text: req.userMessage }] }],
-        generationConfig: {
-          maxOutputTokens: req.maxOutputTokens ?? 8192,
-          ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
-        },
-      }),
+      body: JSON.stringify(body),
     },
   );
 
@@ -186,10 +367,23 @@ async function callGemini(
   }
 
   const data: any = await resp.json();
-  const content = data.candidates?.[0]?.content?.parts
-    ?.map((p: any) => p.text)
-    .join('\n') || '';
   const usage = data.usageMetadata || {};
+
+  let content = '';
+  const toolCalls: ToolCall[] = [];
+
+  const parts = data.candidates?.[0]?.content?.parts || [];
+  for (const part of parts) {
+    if (part.text) {
+      content += part.text;
+    } else if (part.functionCall) {
+      toolCalls.push({
+        id: `gemini-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        name: part.functionCall.name,
+        arguments: part.functionCall.args || {},
+      });
+    }
+  }
 
   return {
     content,
@@ -198,7 +392,46 @@ async function callGemini(
     inputTokens: usage.promptTokenCount || 0,
     outputTokens: usage.candidatesTokenCount || 0,
     latencyMs: Date.now() - start,
+    ...(toolCalls.length > 0 ? { toolCalls } : {}),
   };
+}
+
+/** Convert abstract LLMMessage[] to Gemini contents format */
+function geminiMessages(messages: LLMMessage[]): any[] {
+  const result: any[] = [];
+
+  for (const msg of messages) {
+    if (msg.role === 'user') {
+      result.push({ role: 'user', parts: [{ text: msg.content || '' }] });
+    } else if (msg.role === 'assistant') {
+      const parts: any[] = [];
+      if (msg.content) parts.push({ text: msg.content });
+      if (msg.toolCalls) {
+        for (const tc of msg.toolCalls) {
+          parts.push({
+            functionCall: { name: tc.name, args: tc.arguments },
+          });
+        }
+      }
+      result.push({ role: 'model', parts });
+    } else if (msg.role === 'tool') {
+      // Gemini: functionResponse parts
+      const parts: any[] = [];
+      if (msg.toolResults) {
+        for (const tr of msg.toolResults) {
+          parts.push({
+            functionResponse: {
+              name: tr.toolCallId, // Gemini uses name, not id
+              response: { content: tr.content },
+            },
+          });
+        }
+      }
+      result.push({ role: 'function', parts });
+    }
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------

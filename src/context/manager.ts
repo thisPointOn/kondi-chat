@@ -1,36 +1,29 @@
 /**
  * Context Manager — maintains conversation state across turns.
  *
- * The core abstraction for model-agnostic context management.
- * Maintains:
- *   - Full message history (for export, never sent raw to models)
- *   - Working state (semantic summary, updated progressively)
+ * Assembles prompts for the conversation model using:
+ *   - Session state (decisions, constraints, plan)
  *   - Recent exchange window (last N turns at full fidelity)
  *   - Compressed history (older turns summarized)
- *   - Grounding context (codebase/docs, loaded once)
- *
- * On each turn, assembles a prompt from these pieces within a token budget.
+ *   - Repo map (structured codebase summary)
+ *   - Grounding context (raw codebase, lowest priority)
  */
 
-import type { Message, Session, WorkingState, LLMResponse, ProviderId } from '../types.ts';
+import type { Message, Session, SessionState, RepoMap, LLMResponse, ProviderId } from '../types.ts';
 import { ContextBudget, estimateTokens } from './budget.ts';
 import { callLLM } from '../providers/llm-caller.ts';
+import type { Ledger } from '../audit/ledger.ts';
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
 export interface ContextManagerConfig {
-  /** Max tokens for assembled context (default 30K — conservative for router) */
   contextBudget?: number;
-  /** Number of recent turns to keep at full fidelity (default 4) */
   recentWindowSize?: number;
-  /** Trigger compression when history exceeds this many turns (default 6) */
   compressionThreshold?: number;
-  /** Provider/model to use for compression (default: same as active) */
   compressionProvider?: ProviderId;
   compressionModel?: string;
-  /** System prompt for the assistant */
   systemPrompt?: string;
 }
 
@@ -40,7 +33,18 @@ const DEFAULT_CONFIG: Required<ContextManagerConfig> = {
   compressionThreshold: 6,
   compressionProvider: 'anthropic',
   compressionModel: 'claude-haiku-4-5-20251001',
-  systemPrompt: 'You are a helpful assistant.',
+  systemPrompt: `You are a coding assistant with access to tools. You can read files, search code, run commands, and create task cards for code changes.
+
+When the user asks you to implement, fix, refactor, or test something:
+1. Use read_file and search_code to understand the current state
+2. Use update_plan to track what you're doing
+3. Use create_task to dispatch the coding work (this runs: dispatch → execute → verify → reflect)
+4. Report the results
+
+For questions about the codebase, use read_file and search_code to find answers.
+For running tests or builds, use run_command.
+
+Be concise and direct. Act on requests — don't just describe what you would do.`,
 };
 
 // ---------------------------------------------------------------------------
@@ -50,28 +54,22 @@ const DEFAULT_CONFIG: Required<ContextManagerConfig> = {
 export class ContextManager {
   private session: Session;
   private config: Required<ContextManagerConfig>;
-
-  /** Compressed narrative of older turns */
   private compressedHistory: string = '';
+  private ledger?: Ledger;
 
-  constructor(session: Session, config?: ContextManagerConfig) {
+  constructor(session: Session, config?: ContextManagerConfig, ledger?: Ledger) {
     this.session = session;
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this.ledger = ledger;
   }
 
-  getSession(): Session {
-    return this.session;
-  }
-
-  getConfig(): Required<ContextManagerConfig> {
-    return this.config;
-  }
+  getSession(): Session { return this.session; }
+  getConfig(): Required<ContextManagerConfig> { return this.config; }
 
   // -------------------------------------------------------------------------
   // Turn management
   // -------------------------------------------------------------------------
 
-  /** Record a user message */
   addUserMessage(content: string): void {
     this.session.messages.push({
       role: 'user',
@@ -81,7 +79,6 @@ export class ContextManager {
     });
   }
 
-  /** Record an assistant response */
   addAssistantMessage(response: LLMResponse): void {
     this.session.messages.push({
       role: 'assistant',
@@ -94,33 +91,31 @@ export class ContextManager {
       outputTokens: response.outputTokens,
     });
 
-    // Update cost tracking
     this.session.totalInputTokens += response.inputTokens;
     this.session.totalOutputTokens += response.outputTokens;
   }
 
   // -------------------------------------------------------------------------
-  // Context assembly — the core function
+  // Context assembly
   // -------------------------------------------------------------------------
 
-  /**
-   * Assemble the prompt to send to the LLM for the current turn.
-   * Returns { systemPrompt, userMessage } ready for callLLM.
-   */
   assemblePrompt(): { systemPrompt: string; userMessage: string; cacheablePrefix?: string } {
     const budget = new ContextBudget(this.config.contextBudget);
-
-    // Priority 1: Current user message (the latest turn, always included)
     const currentMessage = this.session.messages[this.session.messages.length - 1];
-    // This goes directly as userMessage, not in the budget
 
-    // Priority 2: Working state
-    const workingStateText = this.formatWorkingState();
-    if (workingStateText) {
-      budget.add('working-state', `## Conversation State\n${workingStateText}`, 2, false);
+    // Priority 1: Session state (always fits — small and fixed-size)
+    const stateText = this.formatSessionState();
+    if (stateText) {
+      budget.add('session-state', `## Session State\n${stateText}`, 1, false);
     }
 
-    // Priority 3: Recent exchange window (last N turns, full fidelity)
+    // Priority 2: Repo map (small, structured)
+    if (this.session.repoMap) {
+      const mapText = this.formatRepoMap();
+      budget.add('repo-map', `## Repo Map\n${mapText}`, 2, false);
+    }
+
+    // Priority 3: Recent exchange window
     const recentWindow = this.getRecentWindow();
     if (recentWindow) {
       budget.add('recent-exchanges', `## Recent Conversation\n${recentWindow}`, 3, true);
@@ -131,14 +126,13 @@ export class ContextManager {
       budget.add('compressed-history', `## Earlier Discussion\n${this.compressedHistory}`, 4, true);
     }
 
-    // Priority 5: Grounding context (codebase, docs)
+    // Priority 5: Grounding context (raw codebase — big, expendable)
     if (this.session.groundingContext) {
-      budget.add('grounding-context', `## Project Context\n${this.session.groundingContext}`, 5, true);
+      budget.add('grounding-context', `## Project Files\n${this.session.groundingContext}`, 5, true);
     }
 
     const assembledContext = budget.assemble();
 
-    // Log budget info
     const dropped = budget.getDropped();
     const compressed = budget.getCompressed();
     if (dropped.length > 0 || compressed.length > 0) {
@@ -148,10 +142,10 @@ export class ContextManager {
       process.stderr.write(`[context] Budget ${this.config.contextBudget} tokens — ${parts.join('; ')}\n`);
     }
 
-    // Grounding context can be cached (Anthropic) — separate it if present
+    // Grounding context can be cached (Anthropic)
     let cacheablePrefix: string | undefined;
     if (this.session.groundingContext && !dropped.includes('grounding-context')) {
-      cacheablePrefix = `## Project Context\n${this.session.groundingContext}`;
+      cacheablePrefix = `## Project Files\n${this.session.groundingContext}`;
     }
 
     return {
@@ -164,102 +158,88 @@ export class ContextManager {
   }
 
   // -------------------------------------------------------------------------
-  // Compression
+  // Compression & state updates
   // -------------------------------------------------------------------------
 
-  /**
-   * Compress older messages into a narrative summary.
-   * Called automatically when history exceeds compressionThreshold.
-   */
   async maybeCompress(): Promise<void> {
     const messages = this.session.messages;
     const totalTurns = messages.filter(m => m.role === 'user').length;
-
     if (totalTurns < this.config.compressionThreshold) return;
 
-    // Messages outside the recent window that haven't been compressed yet
-    const recentCount = this.config.recentWindowSize * 2; // user+assistant pairs
+    const recentCount = this.config.recentWindowSize * 2;
     const toCompress = messages.slice(0, messages.length - recentCount);
-
     if (toCompress.length === 0) return;
 
-    const transcript = toCompress
-      .map(m => `[${m.role}]: ${m.content}`)
-      .join('\n\n');
-
-    const existingHistory = this.compressedHistory
-      ? `Previous summary:\n${this.compressedHistory}\n\nNew messages to incorporate:\n`
+    const transcript = toCompress.map(m => `[${m.role}]: ${m.content}`).join('\n\n');
+    const existing = this.compressedHistory
+      ? `Previous summary:\n${this.compressedHistory}\n\nNew messages:\n`
       : '';
 
     try {
       const response = await callLLM({
         provider: this.config.compressionProvider,
         model: this.config.compressionModel,
-        systemPrompt: 'You are a conversation summarizer. Produce a concise narrative summary that preserves all key decisions, technical details, constraints, and context. Do not add commentary. Write in past tense.',
-        userMessage: `${existingHistory}${transcript}\n\nSummarize the above conversation into a concise narrative (max 500 words). Preserve all technical decisions, code references, and architectural choices.`,
+        systemPrompt: 'Summarize this conversation concisely. Preserve all technical decisions, code references, and constraints. Past tense. No commentary.',
+        userMessage: `${existing}${transcript}\n\nSummarize (max 500 words):`,
         maxOutputTokens: 1000,
         temperature: 0,
       });
 
       this.compressedHistory = response.content;
-
-      // Track compression cost
       this.session.totalInputTokens += response.inputTokens;
       this.session.totalOutputTokens += response.outputTokens;
+
+      this.ledger?.record('compress', response, 'Conversation compression');
     } catch (error) {
-      // Compression failure is non-fatal — proceed without it
       process.stderr.write(`[context] Compression failed: ${(error as Error).message}\n`);
     }
   }
 
-  /**
-   * Update working state based on the latest exchange.
-   * Uses a cheap model to extract decisions, constraints, and updates.
-   */
-  async updateWorkingState(): Promise<void> {
+  async updateSessionState(): Promise<void> {
     const messages = this.session.messages;
     if (messages.length < 2) return;
 
-    // Only update every 2 turns to save calls
     const turnCount = messages.filter(m => m.role === 'user').length;
-    if (turnCount <= this.session.workingState.lastUpdatedAtTurn + 1) return;
+    if (turnCount <= this.session.state.lastUpdatedAtTurn + 1) return;
 
     const lastExchange = messages.slice(-4).map(m => `[${m.role}]: ${m.content}`).join('\n\n');
-
-    const currentState = this.formatWorkingState();
+    const currentState = this.formatSessionState();
 
     try {
       const response = await callLLM({
         provider: this.config.compressionProvider,
         model: this.config.compressionModel,
-        systemPrompt: `You update a working state document for a conversation. Output ONLY valid JSON matching this shape:
+        systemPrompt: `Update the session state. Output ONLY valid JSON:
 {
-  "summary": "1-3 sentence summary of conversation so far",
-  "decisions": ["decision 1", "decision 2"],
+  "goal": "current goal",
+  "decisions": ["decision 1"],
   "constraints": ["constraint 1"],
-  "openQuestions": ["question 1"],
-  "rejectedApproaches": ["approach 1 — reason"]
+  "currentPlan": ["step 1", "step 2"],
+  "recentFailures": ["failure 1"]
 }
-Keep lists short (max 5 items each). Remove resolved questions. Remove old decisions that are superseded.`,
-        userMessage: `Current state:\n${currentState || '(empty — first update)'}\n\nLatest exchange:\n${lastExchange}\n\nOutput updated state as JSON:`,
+Keep lists short (max 5 items). Remove resolved items.`,
+        userMessage: `Current state:\n${currentState || '(empty)'}\n\nLatest exchange:\n${lastExchange}\n\nUpdated state as JSON:`,
         maxOutputTokens: 800,
         temperature: 0,
       });
 
       const parsed = JSON.parse(response.content);
-      this.session.workingState = {
-        summary: parsed.summary || this.session.workingState.summary,
-        decisions: parsed.decisions || this.session.workingState.decisions,
-        constraints: parsed.constraints || this.session.workingState.constraints,
-        openQuestions: parsed.openQuestions || this.session.workingState.openQuestions,
-        rejectedApproaches: parsed.rejectedApproaches || this.session.workingState.rejectedApproaches,
+      this.session.state = {
+        ...this.session.state,
+        goal: parsed.goal || this.session.state.goal,
+        decisions: parsed.decisions || this.session.state.decisions,
+        constraints: parsed.constraints || this.session.state.constraints,
+        currentPlan: parsed.currentPlan || this.session.state.currentPlan,
+        recentFailures: parsed.recentFailures || this.session.state.recentFailures,
         lastUpdatedAtTurn: turnCount,
       };
 
       this.session.totalInputTokens += response.inputTokens;
       this.session.totalOutputTokens += response.outputTokens;
+
+      this.ledger?.record('state_update', response, 'Session state update');
     } catch {
-      // Working state update failure is non-fatal
+      // Non-fatal
     }
   }
 
@@ -269,27 +249,47 @@ Keep lists short (max 5 items each). Remove resolved questions. Remove old decis
 
   private getRecentWindow(): string {
     const messages = this.session.messages;
-    // Last N turns (user+assistant pairs) — excluding the very latest user message
-    // which goes as the actual userMessage
     const windowMessages = messages.slice(-(this.config.recentWindowSize * 2 + 1), -1);
-
     if (windowMessages.length === 0) return '';
-
     return windowMessages
       .map(m => `[${m.role}${m.model ? ` (${m.model})` : ''}]: ${m.content}`)
       .join('\n\n');
   }
 
-  private formatWorkingState(): string {
-    const ws = this.session.workingState;
-    if (!ws.summary && ws.decisions.length === 0) return '';
+  private formatSessionState(): string {
+    const s = this.session.state;
+    if (!s.goal && s.decisions.length === 0 && s.currentPlan.length === 0) return '';
 
     const parts: string[] = [];
-    if (ws.summary) parts.push(ws.summary);
-    if (ws.decisions.length > 0) parts.push(`Decisions: ${ws.decisions.join('; ')}`);
-    if (ws.constraints.length > 0) parts.push(`Constraints: ${ws.constraints.join('; ')}`);
-    if (ws.openQuestions.length > 0) parts.push(`Open questions: ${ws.openQuestions.join('; ')}`);
-    if (ws.rejectedApproaches.length > 0) parts.push(`Rejected: ${ws.rejectedApproaches.join('; ')}`);
+    if (s.goal) parts.push(`Goal: ${s.goal}`);
+    if (s.currentPlan.length > 0) parts.push(`Plan: ${s.currentPlan.join(' → ')}`);
+    if (s.decisions.length > 0) parts.push(`Decisions: ${s.decisions.join('; ')}`);
+    if (s.constraints.length > 0) parts.push(`Constraints: ${s.constraints.join('; ')}`);
+    if (s.activeTaskId) parts.push(`Active task: ${s.activeTaskId}`);
+    if (s.recentFailures.length > 0) parts.push(`Recent failures: ${s.recentFailures.join('; ')}`);
+    return parts.join('\n');
+  }
+
+  private formatRepoMap(): string {
+    const r = this.session.repoMap;
+    if (!r) return '';
+    const parts: string[] = [];
+    parts.push(`Stack: ${r.stack.join(', ')}`);
+    if (r.entrypoints.length > 0) parts.push(`Entrypoints: ${r.entrypoints.join(', ')}`);
+    if (r.subsystems.length > 0) {
+      parts.push('Subsystems:');
+      for (const s of r.subsystems) {
+        parts.push(`  ${s.name} (${s.paths.join(', ')}): ${s.purpose}`);
+      }
+    }
+    const cmds = r.commands;
+    const cmdParts = [];
+    if (cmds.build) cmdParts.push(`build: ${cmds.build}`);
+    if (cmds.test) cmdParts.push(`test: ${cmds.test}`);
+    if (cmds.lint) cmdParts.push(`lint: ${cmds.lint}`);
+    if (cmds.typecheck) cmdParts.push(`typecheck: ${cmds.typecheck}`);
+    if (cmdParts.length > 0) parts.push(`Commands: ${cmdParts.join(', ')}`);
+    if (r.conventions.length > 0) parts.push(`Conventions: ${r.conventions.join('; ')}`);
     return parts.join('\n');
   }
 }
@@ -304,14 +304,15 @@ export function createSession(provider: ProviderId, model?: string, workingDirec
     createdAt: new Date().toISOString(),
     workingDirectory,
     messages: [],
-    workingState: {
-      summary: '',
+    state: {
+      goal: '',
       decisions: [],
       constraints: [],
-      openQuestions: [],
-      rejectedApproaches: [],
+      currentPlan: [],
+      recentFailures: [],
       lastUpdatedAtTurn: 0,
     },
+    tasks: [],
     activeProvider: provider,
     activeModel: model,
     totalInputTokens: 0,

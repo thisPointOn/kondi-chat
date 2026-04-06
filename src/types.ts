@@ -25,10 +25,10 @@ export interface ProviderConfig {
 export interface ModelInfo {
   id: string;
   provider: ProviderId;
-  contextWindow: number;       // max input tokens
+  contextWindow: number;
   maxOutputTokens: number;
-  inputCostPer1M: number;      // USD per 1M input tokens
-  outputCostPer1M: number;     // USD per 1M output tokens
+  inputCostPer1M: number;
+  outputCostPer1M: number;
   supportsCaching?: boolean;
 }
 
@@ -40,11 +40,111 @@ export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: string;
-  model?: string;              // which model produced this (assistant only)
+  model?: string;
   provider?: ProviderId;
-  tokenCount?: number;         // estimated token count of content
-  inputTokens?: number;        // tokens billed as input for this turn
-  outputTokens?: number;       // tokens billed as output for this turn
+  tokenCount?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Repo Map — structured codebase summary, created once per repo
+// ---------------------------------------------------------------------------
+
+export interface RepoMap {
+  stack: string[];
+  entrypoints: string[];
+  subsystems: Array<{ name: string; paths: string[]; purpose: string }>;
+  commands: { build?: string; test?: string; lint?: string; typecheck?: string };
+  conventions: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Session State — durable conversation memory
+// ---------------------------------------------------------------------------
+
+export interface SessionState {
+  goal: string;
+  decisions: string[];
+  constraints: string[];
+  currentPlan: string[];
+  activeTaskId?: string;
+  recentFailures: string[];
+  lastUpdatedAtTurn: number;
+}
+
+// ---------------------------------------------------------------------------
+// Task Card — bounded work packet for execution
+// ---------------------------------------------------------------------------
+
+/**
+ * Task kinds are open-ended. Defaults: implementation, fix, refactor, test, analysis.
+ * Users/plugins can add domain-specific kinds: robot-control, image-generation, etc.
+ * The router learns to route new kinds through training data.
+ */
+export type TaskKind = string;
+
+export interface TaskCard {
+  id: string;
+  kind: TaskKind;
+  goal: string;
+  relevantFiles: string[];
+  constraints: string[];
+  acceptanceCriteria: string[];
+  outputMode: 'diff' | 'file_replacements' | 'text';
+  failures: number;
+  createdAt: string;
+  completedAt?: string;
+  status: 'pending' | 'executing' | 'verifying' | 'passed' | 'failed' | 'promoted';
+}
+
+// ---------------------------------------------------------------------------
+// Verification
+// ---------------------------------------------------------------------------
+
+export interface VerificationResult {
+  passed: boolean;
+  testOutput?: string;
+  lintOutput?: string;
+  typecheckOutput?: string;
+  error?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Audit Ledger — every LLM call recorded
+// ---------------------------------------------------------------------------
+
+export type LedgerPhase =
+  | 'discuss'          // frontier: user conversation
+  | 'commit'           // system: state update
+  | 'dispatch'         // frontier: task card creation
+  | 'execute'          // worker: code generation
+  | 'verify'           // local: tests/lint/typecheck
+  | 'reflect'          // frontier: summarize results
+  | 'compress'         // cheap: context compression
+  | 'state_update';    // cheap: working state update
+
+export interface LedgerEntry {
+  id: string;
+  timestamp: string;
+  phase: LedgerPhase;
+  provider: ProviderId;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  latencyMs: number;
+  costUsd: number;
+  cached: boolean;
+
+  /** What was sent (system + user prompt) */
+  promptSummary: string;
+  /** What came back */
+  responseSummary: string;
+
+  /** Associated task card ID, if any */
+  taskId?: string;
+  /** Was this a promotion (retry with better model)? */
+  promoted?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -59,11 +159,17 @@ export interface Session {
   /** Full message history — never truncated, used for export/replay */
   messages: Message[];
 
-  /** Evolving summary of the conversation so far */
-  workingState: WorkingState;
+  /** Durable session state */
+  state: SessionState;
 
-  /** Grounding context (codebase, docs) — loaded once at session start */
+  /** Repo map — structured codebase summary */
+  repoMap?: RepoMap;
+
+  /** Raw grounding context for prompt assembly */
   groundingContext?: string;
+
+  /** All task cards created during this session */
+  tasks: TaskCard[];
 
   /** Active provider/model (can change mid-session) */
   activeProvider: ProviderId;
@@ -76,62 +182,71 @@ export interface Session {
 }
 
 // ---------------------------------------------------------------------------
-// Working State — the "semantic memory" of the conversation
-// ---------------------------------------------------------------------------
-
-export interface WorkingState {
-  /** High-level summary of what's been discussed/decided */
-  summary: string;
-
-  /** Key decisions made during the conversation */
-  decisions: string[];
-
-  /** Active constraints or requirements */
-  constraints: string[];
-
-  /** Open questions or unresolved topics */
-  openQuestions: string[];
-
-  /** What was tried and rejected */
-  rejectedApproaches: string[];
-
-  /** Last updated turn number */
-  lastUpdatedAtTurn: number;
-}
-
-// ---------------------------------------------------------------------------
 // Context Budget
 // ---------------------------------------------------------------------------
 
 export interface ContextSection {
   key: string;
   content: string;
-  priority: number;           // 1 = highest, included first
-  compressible: boolean;      // can be summarized if budget is tight
+  priority: number;
+  compressible: boolean;
   tokenEstimate: number;
 }
 
 // ---------------------------------------------------------------------------
-// LLM Call
+// Tool Use
 // ---------------------------------------------------------------------------
+
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>; // JSON Schema
+}
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface ToolResult {
+  toolCallId: string;
+  content: string;
+  isError?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// LLM Call — multi-turn message for agent loops
+// ---------------------------------------------------------------------------
+
+export interface LLMMessage {
+  role: 'user' | 'assistant' | 'tool';
+  content?: string;
+  toolCalls?: ToolCall[];     // assistant messages with tool use
+  toolResults?: ToolResult[]; // tool-result messages
+}
 
 export interface LLMRequest {
   provider: ProviderId;
   model?: string;
   systemPrompt: string;
-  userMessage: string;
+  /** Simple single-turn: set userMessage */
+  userMessage?: string;
+  /** Multi-turn agent loop: set messages instead */
+  messages?: LLMMessage[];
+  tools?: ToolDefinition[];
   maxOutputTokens?: number;
   temperature?: number;
-  /** Cacheable prefix for providers that support it (Anthropic) */
   cacheablePrefix?: string;
 }
 
 export interface LLMResponse {
   content: string;
-  model: string;              // actual model used (important for router)
+  model: string;
   provider: ProviderId;
   inputTokens: number;
   outputTokens: number;
   latencyMs: number;
-  cached?: boolean;           // was prompt cache hit (Anthropic)
+  cached?: boolean;
+  toolCalls?: ToolCall[];
 }
