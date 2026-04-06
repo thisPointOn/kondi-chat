@@ -20,7 +20,7 @@
 import { createInterface } from 'node:readline';
 import { resolve } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
-import type { ProviderId } from '../types.ts';
+import type { ProviderId, Session } from '../types.ts';
 import { callLLM } from '../providers/llm-caller.ts';
 import { ContextManager, createSession } from '../context/manager.ts';
 import { bootstrapDirectory, type BootstrapDepth } from '../context/bootstrap.ts';
@@ -265,7 +265,7 @@ async function handleCommand(
     }
 
     case '/status': {
-      const turns = session.messages.filter(m => m.role === 'user').length;
+      const turns = session.messages.filter((m: { role: string }) => m.role === 'user').length;
       console.log(`Session: ${session.id.slice(0, 8)}`);
       console.log(`Provider: ${session.activeProvider}/${session.activeModel || 'default'}`);
       console.log(`Turns: ${turns}`);

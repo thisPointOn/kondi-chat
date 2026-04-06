@@ -85,7 +85,7 @@ async function callAnthropic(
     throw new Error(`Anthropic API ${resp.status}: ${text.substring(0, 500)}`);
   }
 
-  const data = await resp.json();
+  const data: any = await resp.json();
   const content = data.content
     ?.filter((b: any) => b.type === 'text')
     .map((b: any) => b.text)
@@ -138,7 +138,7 @@ async function callOpenAICompatible(
     throw new Error(`${provider} API ${resp.status}: ${text.substring(0, 500)}`);
   }
 
-  const data = await resp.json();
+  const data: any = await resp.json();
   const content = data.choices?.[0]?.message?.content || '';
   const usage = data.usage || {};
   const actualModel = data.model || model;
@@ -185,7 +185,7 @@ async function callGemini(
     throw new Error(`Gemini API ${resp.status}: ${text.substring(0, 500)}`);
   }
 
-  const data = await resp.json();
+  const data: any = await resp.json();
   const content = data.candidates?.[0]?.content?.parts
     ?.map((p: any) => p.text)
     .join('\n') || '';
