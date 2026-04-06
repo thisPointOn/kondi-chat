@@ -1,0 +1,39 @@
+{
+  "name": "kondi-chat",
+  "version": "0.1.0",
+  "description": "Multi-model chat with seamless routing and efficient context management across LLM providers",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "bin": {
+    "kondi-chat": "./src/cli/main.ts"
+  },
+  "scripts": {
+    "chat": "npx tsx src/cli/main.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "tsx": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "ai",
+    "llm",
+    "multi-model",
+    "chat",
+    "context-management",
+    "nvidia-router",
+    "claude",
+    "openai",
+    "deepseek",
+    "gemini",
+    "cli"
+  ],
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "vitest": "^4.1.2"
+  }
+}
