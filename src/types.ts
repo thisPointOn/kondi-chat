@@ -249,4 +249,8 @@ export interface LLMResponse {
   latencyMs: number;
   cached?: boolean;
   toolCalls?: ToolCall[];
+  /** True if this response came from a fallback model, not the originally requested one */
+  wasFallback?: boolean;
+  /** The originally requested model (if different from the responding model) */
+  requestedModel?: string;
 }

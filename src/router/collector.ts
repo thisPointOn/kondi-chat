@@ -43,6 +43,12 @@ export interface RoutingSample {
   // Outcome (labels for the NN)
   succeeded: boolean;
   verificationPassed?: boolean;
+  /** API error — model was unreachable, overloaded, or timed out */
+  apiError?: boolean;
+  /** Error code (429, 500, 529, etc.) */
+  apiErrorCode?: number;
+  /** Was this a fallback call after the primary model failed? */
+  wasFallback?: boolean;
   inputTokens: number;
   outputTokens: number;
   costUsd: number;
@@ -104,19 +110,20 @@ export class RoutingCollector {
   /** Get summary stats for training readiness */
   getStats(): {
     totalSamples: number;
-    byModel: Record<string, { total: number; succeeded: number; avgCost: number }>;
+    byModel: Record<string, { total: number; succeeded: number; apiErrors: number; avgCost: number }>;
     byPhase: Record<string, { total: number; succeeded: number }>;
     readyForTraining: boolean;
   } {
     const samples = this.getAll();
-    const byModel: Record<string, { total: number; succeeded: number; totalCost: number }> = {};
+    const byModel: Record<string, { total: number; succeeded: number; apiErrors: number; totalCost: number }> = {};
     const byPhase: Record<string, { total: number; succeeded: number }> = {};
 
     for (const s of samples) {
       // By model
-      if (!byModel[s.modelId]) byModel[s.modelId] = { total: 0, succeeded: 0, totalCost: 0 };
+      if (!byModel[s.modelId]) byModel[s.modelId] = { total: 0, succeeded: 0, apiErrors: 0, totalCost: 0 };
       byModel[s.modelId].total++;
       if (s.succeeded) byModel[s.modelId].succeeded++;
+      if (s.apiError) byModel[s.modelId].apiErrors++;
       byModel[s.modelId].totalCost += s.costUsd;
 
       // By phase
@@ -125,11 +132,12 @@ export class RoutingCollector {
       if (s.succeeded) byPhase[s.phase].succeeded++;
     }
 
-    const modelStats: Record<string, { total: number; succeeded: number; avgCost: number }> = {};
+    const modelStats: Record<string, { total: number; succeeded: number; apiErrors: number; avgCost: number }> = {};
     for (const [id, data] of Object.entries(byModel)) {
       modelStats[id] = {
         total: data.total,
         succeeded: data.succeeded,
+        apiErrors: data.apiErrors,
         avgCost: data.total > 0 ? data.totalCost / data.total : 0,
       };
     }
@@ -156,7 +164,9 @@ export class RoutingCollector {
 
     for (const [id, data] of Object.entries(stats.byModel)) {
       const rate = data.total > 0 ? (data.succeeded / data.total * 100).toFixed(0) : '0';
-      lines.push(`  ${id.padEnd(35)} ${data.total} calls  ${rate}% success  $${data.avgCost.toFixed(4)}/call`);
+      const reliability = data.total > 0 ? (((data.total - data.apiErrors) / data.total) * 100).toFixed(0) : '100';
+      const errorTag = data.apiErrors > 0 ? `  ${data.apiErrors} API errors (${reliability}% reliable)` : '';
+      lines.push(`  ${id.padEnd(35)} ${data.total} calls  ${rate}% success  $${data.avgCost.toFixed(4)}/call${errorTag}`);
     }
 
     lines.push('', 'By phase:');

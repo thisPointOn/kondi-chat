@@ -347,17 +347,33 @@ async function runAgentLoop(
 
     // Record in ledger and collector (with embedding)
     ledger.record('discuss', response, messages[messages.length - 1]?.content?.slice(0, 200) || '(tool continuation)');
-    // Fire-and-forget embedding — don't block the conversation
+
+    // Record the successful call
     collector.recordWithEmbedding({
       timestamp: new Date().toISOString(),
       phase: 'discuss', promptLength: userMessage.length,
       contextTokens: response.inputTokens, failures: 0, promoted: false,
-      modelId: response.model, provider: decision.model.provider,
-      succeeded: true, inputTokens: response.inputTokens,
+      modelId: response.model, provider: response.provider,
+      succeeded: true, wasFallback: response.wasFallback,
+      inputTokens: response.inputTokens,
       outputTokens: response.outputTokens,
       costUsd: iterCost, latencyMs: response.latencyMs,
       routeReason: decision.reason,
     }, userMessage).catch(() => {});
+
+    // If this was a fallback, also record a failure for the originally requested model
+    // so the NN learns it's unreliable
+    if (response.wasFallback && response.requestedModel) {
+      collector.record({
+        timestamp: new Date().toISOString(),
+        phase: 'discuss', promptLength: userMessage.length,
+        contextTokens: 0, failures: 0, promoted: false,
+        modelId: response.requestedModel, provider: decision.model.provider,
+        succeeded: false, apiError: true,
+        inputTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 0,
+        routeReason: `failed — fell back to ${response.model}`,
+      });
+    }
 
     // If no tool calls, we're done — this is the final response
     if (!response.toolCalls || response.toolCalls.length === 0) {

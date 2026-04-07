@@ -513,7 +513,10 @@ export async function callLLM(req: LLMRequest): Promise<LLMResponse> {
         `  │  [fallback] ${provider}/${model} unavailable → trying ${fb.provider}/${fb.model}\n`
       );
       const fbReq = { ...req, provider: fb.provider, model: fb.model };
-      return await callProvider(fb.provider, fbKey, fb.model, fbReq);
+      const fbResponse = await callProvider(fb.provider, fbKey, fb.model, fbReq);
+      fbResponse.wasFallback = true;
+      fbResponse.requestedModel = model;
+      return fbResponse;
     } catch {
       // Fallback also failed — try next
       continue;
