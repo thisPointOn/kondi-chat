@@ -76,7 +76,7 @@ const DEFAULT_MODELS: ModelEntry[] = [
   {
     id: 'gpt-5.4-mini',
     name: 'GPT-5.4 Mini',
-    alias: 'gpt-mini',
+    alias: 'mini',
     provider: 'openai',
     capabilities: ['general', 'marketing', 'writing', 'fast-coding'],
     inputCostPer1M: 0.75,
@@ -100,7 +100,7 @@ const DEFAULT_MODELS: ModelEntry[] = [
   {
     id: 'deepseek-chat',
     name: 'DeepSeek V3',
-    alias: 'deepseek',
+    alias: 'deep',
     provider: 'deepseek',
     capabilities: ['coding', 'fast-coding', 'refactoring'],
     inputCostPer1M: 0.27,
@@ -134,25 +134,14 @@ const DEFAULT_MODELS: ModelEntry[] = [
   },
   // --- Local models (Ollama) ---
   {
-    id: 'qwen2.5-coder:32b',
-    name: 'Qwen 2.5 Coder 32B',
-    alias: 'qwen-coder',
-    provider: 'ollama',
-    capabilities: ['coding', 'fast-coding', 'refactoring'],
-    inputCostPer1M: 0,
-    outputCostPer1M: 0,
-    contextWindow: 128_000,
-    enabled: true,
-  },
-  {
-    id: 'qwen2.5:14b',
-    name: 'Qwen 2.5 14B',
+    id: 'qwen2.5:3b',
+    name: 'Qwen 2.5 3B',
     alias: 'qwen',
     provider: 'ollama',
-    capabilities: ['general', 'reasoning'],
+    capabilities: ['general', 'fast-coding'],
     inputCostPer1M: 0,
     outputCostPer1M: 0,
-    contextWindow: 128_000,
+    contextWindow: 32_000,
     enabled: true,
   },
 ];
