@@ -15,11 +15,15 @@ import type { LedgerEntry, LedgerPhase, LLMResponse, ProviderId } from '../types
 // ---------------------------------------------------------------------------
 
 const PRICING: Record<string, { input: number; output: number }> = {
+  'claude-opus-4-20250514': { input: 15, output: 75 },
   'claude-sonnet-4-5-20250929': { input: 3, output: 15 },
   'claude-haiku-4-5-20251001': { input: 0.8, output: 4 },
+  'gpt-5.4': { input: 2.5, output: 15 },
+  'gpt-5.4-mini': { input: 0.75, output: 4.5 },
+  'gpt-5.4-nano': { input: 0.20, output: 1.25 },
   'gpt-4o': { input: 2.5, output: 10 },
-  'gpt-4-turbo': { input: 10, output: 30 },
-  'deepseek-chat': { input: 0.14, output: 0.28 },
+  'gpt-4o-mini': { input: 0.15, output: 0.6 },
+  'deepseek-chat': { input: 0.27, output: 1.10 },
   'models/gemini-2.5-flash': { input: 0.15, output: 0.6 },
   'grok-3': { input: 3, output: 15 },
 };

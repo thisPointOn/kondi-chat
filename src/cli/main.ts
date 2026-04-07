@@ -185,6 +185,10 @@ async function main(): Promise<void> {
   console.log(`Embeddings: ${embeddingService.getConfig().backend}/${embeddingService.getConfig().model} (${embeddingService.getConfig().dimension}D)`);
   console.log(`Context budget: ${args.budget.toLocaleString()} tokens | Verify: ${args.autoVerify ? 'on' : 'off'}`);
   console.log(`Tools: ${AGENT_TOOLS.map(t => t.name).join(', ')}`);
+  const aliases = registry.getAliases();
+  if (aliases.length > 0) {
+    console.log(`Mention: ${aliases.map(a => '@' + a).join(', ')}`);
+  }
   if (session.groundingContext) {
     console.log(`Codebase: ${estimateTokens(session.groundingContext).toLocaleString()} tokens`);
   }
@@ -200,6 +204,45 @@ async function main(): Promise<void> {
     // Slash commands
     if (input.startsWith('/')) {
       await handleCommand(input, session, contextManager, ledger, args, workingDir, toolCtx, registry, collector);
+      rl.prompt();
+      return;
+    }
+
+    // Check for @mention — direct a message to a specific model
+    const mentionMatch = input.match(/^@(\S+)\s+([\s\S]+)/);
+    if (mentionMatch) {
+      const alias = mentionMatch[1];
+      const message = mentionMatch[2];
+      const targetModel = registry.getByAlias(alias);
+
+      if (!targetModel) {
+        const available = registry.getAliases().map(a => `@${a}`).join(', ');
+        console.log(`Unknown model: @${alias}. Available: ${available}`);
+        rl.prompt();
+        return;
+      }
+
+      contextManager.addUserMessage(input);
+      const { systemPrompt, userMessage, cacheablePrefix } = contextManager.assemblePrompt();
+
+      try {
+        await runDirectMessage(
+          systemPrompt,
+          userMessage,
+          cacheablePrefix,
+          message,
+          targetModel,
+          session,
+          contextManager,
+          ledger,
+          collector,
+        );
+      } catch (error) {
+        console.error(`\nError: ${(error as Error).message}`);
+      }
+
+      await contextManager.maybeCompress();
+      await contextManager.updateSessionState();
       rl.prompt();
       return;
     }
@@ -323,6 +366,10 @@ async function runAgentLoop(
       toolCalls: response.toolCalls,
     });
 
+    // Truncate older tool results to save tokens on re-send.
+    // The model already saw them — keep just enough for reference.
+    compactOlderToolResults(messages);
+
     // Execute each tool and collect results
     const toolResults = [];
     for (const tc of response.toolCalls) {
@@ -332,9 +379,13 @@ async function runAgentLoop(
       if (result.isError) {
         process.stderr.write(`  │  └─ error: ${result.content.slice(0, 100)}\n`);
       }
+      // Cap individual tool results at 3000 chars to limit token growth
+      const capped = result.content.length > 3000
+        ? result.content.slice(0, 3000) + `\n... (${result.content.length - 3000} chars truncated)`
+        : result.content;
       toolResults.push({
         toolCallId: tc.id,
-        content: result.content,
+        content: capped,
         isError: result.isError,
       });
     }
@@ -371,9 +422,69 @@ async function runAgentLoop(
     latencyMs: 0,
   });
 
+  // Show total cost with iteration count for transparency
+  const iterationCount = messages.filter(m => m.role === 'assistant').length || 1;
   process.stderr.write(
-    `  total: ${totalInputTokens}in/${totalOutputTokens}out $${totalCost.toFixed(4)}\n`
+    `  total: ${totalInputTokens.toLocaleString()}in/${totalOutputTokens.toLocaleString()}out` +
+    ` $${totalCost.toFixed(4)}` +
+    `${iterationCount > 1 ? ` (${iterationCount} iterations)` : ''}\n`
   );
+}
+
+// ---------------------------------------------------------------------------
+// Direct message — @mention sends to a specific model (no tools, just chat)
+// ---------------------------------------------------------------------------
+
+async function runDirectMessage(
+  systemPrompt: string,
+  assembledUserMessage: string,
+  cacheablePrefix: string | undefined,
+  rawMessage: string,
+  targetModel: import('../router/registry.ts').ModelEntry,
+  session: Session,
+  contextManager: ContextManager,
+  ledger: Ledger,
+  collector: RoutingCollector,
+): Promise<void> {
+  process.stderr.write(`  ╭─ @${targetModel.alias || targetModel.id}\n`);
+
+  const response = await callLLM({
+    provider: targetModel.provider,
+    model: targetModel.id,
+    systemPrompt,
+    userMessage: assembledUserMessage,
+    maxOutputTokens: 8192,
+    cacheablePrefix,
+  });
+
+  const cost = estimateCost(response.model, response.inputTokens, response.outputTokens);
+
+  process.stderr.write(
+    `  │  model: ${response.model}  ${response.inputTokens}in/${response.outputTokens}out  $${cost.toFixed(4)}` +
+    `${response.cached ? ' (cached)' : ''}\n`
+  );
+  process.stderr.write(`  ╰─ done\n`);
+
+  console.log(`\n[${targetModel.alias || targetModel.name}]: ${response.content}`);
+
+  // Track
+  session.totalInputTokens += response.inputTokens;
+  session.totalOutputTokens += response.outputTokens;
+  session.totalCostUsd += cost;
+
+  contextManager.addAssistantMessage(response);
+  ledger.record('discuss', response, rawMessage.slice(0, 200));
+
+  collector.recordWithEmbedding({
+    timestamp: new Date().toISOString(),
+    phase: 'discuss', promptLength: rawMessage.length,
+    contextTokens: response.inputTokens, failures: 0, promoted: false,
+    modelId: response.model, provider: targetModel.provider,
+    succeeded: true, inputTokens: response.inputTokens,
+    outputTokens: response.outputTokens,
+    costUsd: cost, latencyMs: response.latencyMs,
+    routeReason: `@mention: ${targetModel.alias}`,
+  }, rawMessage).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -517,20 +628,24 @@ async function handleCommand(
       } else if (subcmd === 'disable' && parts[2]) {
         registry.disable(parts[2]) ? console.log(`Disabled ${parts[2]}`) : console.log('Model not found');
       } else if (subcmd === 'add') {
-        console.log('Usage: /models add <id> <provider> <capability1,capability2> <input_cost> <output_cost>');
-        if (parts.length >= 7) {
-          registry.add({
-            id: parts[2],
-            name: parts[2],
-            provider: parts[3] as ProviderId,
-            capabilities: parts[4].split(','),
-            inputCostPer1M: parseFloat(parts[5]),
-            outputCostPer1M: parseFloat(parts[6]),
-            contextWindow: 128_000,
-            enabled: true,
-          });
-          console.log(`Added ${parts[2]}`);
+        if (parts.length < 7) {
+          console.log('Usage: /models add <id> <provider> <capabilities> <in_cost> <out_cost> [alias]');
+          console.log('Example: /models add gpt-4o openai reasoning,writing 2.5 10 gpt');
+          return;
         }
+        const alias = parts[7];
+        registry.add({
+          id: parts[2],
+          name: parts[2],
+          alias,
+          provider: parts[3] as ProviderId,
+          capabilities: parts[4].split(','),
+          inputCostPer1M: parseFloat(parts[5]),
+          outputCostPer1M: parseFloat(parts[6]),
+          contextWindow: 128_000,
+          enabled: true,
+        });
+        console.log(`Added ${parts[2]}${alias ? ` (@${alias})` : ''}`);
       } else if (subcmd === 'remove' && parts[2]) {
         registry.remove(parts[2]) ? console.log(`Removed ${parts[2]}`) : console.log('Model not found');
       } else {
@@ -561,9 +676,15 @@ Commands:
   /export                      Export session + ledger to JSON
   /quit                        Exit
 
-The assistant has access to these tools and will use them automatically:
+@mentions — direct a message to a specific model:
+  @<alias> <message>    Send to a specific model by its alias
+  Use /models to see available aliases. Set aliases with /models add.
+
+Tools (used automatically by the assistant):
   create_task    Create and execute a coding task (dispatch → execute → verify → reflect)
   read_file      Read a file from the project
+  write_file     Write a file to the project
+  edit_file      Edit a file (search/replace)
   list_files     List directory contents
   search_code    Search for patterns in code
   run_command    Run a shell command
@@ -588,6 +709,26 @@ The assistant has access to these tools and will use them automatically:
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Compact older tool results to reduce tokens on subsequent iterations.
+ * The model already consumed these results — we keep a short summary
+ * so it remembers what it learned, but drop the full content.
+ */
+function compactOlderToolResults(messages: LLMMessage[]): void {
+  // Only compact tool results that are at least 2 messages old
+  // (keep the most recent tool results intact)
+  for (let i = 0; i < messages.length - 2; i++) {
+    const msg = messages[i];
+    if (msg.role === 'tool' && msg.toolResults) {
+      for (const tr of msg.toolResults) {
+        if (tr.content.length > 500) {
+          tr.content = tr.content.slice(0, 200) + `\n... (compacted, was ${tr.content.length} chars)`;
+        }
+      }
+    }
+  }
+}
 
 function formatToolArgs(tc: ToolCall): string {
   const args = tc.arguments;

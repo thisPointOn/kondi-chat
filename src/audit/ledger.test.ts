@@ -18,7 +18,7 @@ describe('estimateCost', () => {
 
   it('uses known pricing for deepseek-chat', () => {
     const cost = estimateCost('deepseek-chat', 1_000_000, 1_000_000);
-    expect(cost).toBeCloseTo(0.14 + 0.28, 4);
+    expect(cost).toBeCloseTo(0.27 + 1.10, 4);
   });
 
   it('falls back to default pricing for unknown models', () => {

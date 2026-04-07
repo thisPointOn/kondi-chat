@@ -27,6 +27,8 @@ export interface ModelEntry {
   id: string;
   /** Human-readable name */
   name: string;
+  /** Short alias for @mentions in chat (e.g., "claude", "gpt", "deepseek") */
+  alias?: string;
   /** Provider for API routing */
   provider: ProviderId;
   /** What this model is good at — ordered by strength */
@@ -50,6 +52,7 @@ const DEFAULT_MODELS: ModelEntry[] = [
   {
     id: 'claude-opus-4-20250514',
     name: 'Claude Opus 4',
+    alias: 'opus',
     provider: 'anthropic',
     capabilities: ['planning', 'reasoning', 'architecture', 'analysis'],
     inputCostPer1M: 15,
@@ -59,34 +62,49 @@ const DEFAULT_MODELS: ModelEntry[] = [
   },
   // --- Open-ended questions & general tasks ---
   {
-    id: 'gpt-4o',
-    name: 'GPT-4o',
+    id: 'gpt-5.4',
+    name: 'GPT-5.4',
+    alias: 'gpt',
     provider: 'openai',
-    capabilities: ['general', 'reasoning', 'marketing', 'writing'],
+    capabilities: ['general', 'reasoning', 'marketing', 'writing', 'coding', 'analysis'],
     inputCostPer1M: 2.5,
-    outputCostPer1M: 10,
-    contextWindow: 128_000,
+    outputCostPer1M: 15,
+    contextWindow: 1_000_000,
     enabled: true,
   },
-  // --- Marketing & creative ---
+  // --- Mid-tier OpenAI ---
   {
-    id: 'gpt-4o-mini',
-    name: 'GPT-4o Mini',
+    id: 'gpt-5.4-mini',
+    name: 'GPT-5.4 Mini',
+    alias: 'gpt-mini',
     provider: 'openai',
-    capabilities: ['marketing', 'writing', 'general', 'fast-coding'],
-    inputCostPer1M: 0.15,
-    outputCostPer1M: 0.6,
-    contextWindow: 128_000,
+    capabilities: ['general', 'marketing', 'writing', 'fast-coding'],
+    inputCostPer1M: 0.75,
+    outputCostPer1M: 4.5,
+    contextWindow: 400_000,
+    enabled: true,
+  },
+  // --- Cheap OpenAI ---
+  {
+    id: 'gpt-5.4-nano',
+    name: 'GPT-5.4 Nano',
+    alias: 'nano',
+    provider: 'openai',
+    capabilities: ['summarization', 'fast-coding', 'general'],
+    inputCostPer1M: 0.20,
+    outputCostPer1M: 1.25,
+    contextWindow: 400_000,
     enabled: true,
   },
   // --- Code generation ---
   {
     id: 'deepseek-chat',
     name: 'DeepSeek V3',
+    alias: 'deepseek',
     provider: 'deepseek',
     capabilities: ['coding', 'fast-coding', 'refactoring'],
-    inputCostPer1M: 0.14,
-    outputCostPer1M: 0.28,
+    inputCostPer1M: 0.27,
+    outputCostPer1M: 1.10,
     contextWindow: 128_000,
     enabled: true,
   },
@@ -94,6 +112,7 @@ const DEFAULT_MODELS: ModelEntry[] = [
   {
     id: 'claude-sonnet-4-5-20250929',
     name: 'Claude Sonnet 4.5',
+    alias: 'claude',
     provider: 'anthropic',
     capabilities: ['code-review', 'analysis', 'reasoning', 'coding'],
     inputCostPer1M: 3,
@@ -105,6 +124,7 @@ const DEFAULT_MODELS: ModelEntry[] = [
   {
     id: 'claude-haiku-4-5-20251001',
     name: 'Claude Haiku 4.5',
+    alias: 'haiku',
     provider: 'anthropic',
     capabilities: ['summarization', 'fast-coding', 'general'],
     inputCostPer1M: 0.8,
@@ -116,6 +136,7 @@ const DEFAULT_MODELS: ModelEntry[] = [
   {
     id: 'qwen2.5-coder:32b',
     name: 'Qwen 2.5 Coder 32B',
+    alias: 'qwen-coder',
     provider: 'ollama',
     capabilities: ['coding', 'fast-coding', 'refactoring'],
     inputCostPer1M: 0,
@@ -126,6 +147,7 @@ const DEFAULT_MODELS: ModelEntry[] = [
   {
     id: 'qwen2.5:14b',
     name: 'Qwen 2.5 14B',
+    alias: 'qwen',
     provider: 'ollama',
     capabilities: ['general', 'reasoning'],
     inputCostPer1M: 0,
@@ -162,6 +184,19 @@ export class ModelRegistry {
 
   getById(id: string): ModelEntry | undefined {
     return this.models.find(m => m.id === id);
+  }
+
+  /** Find a model by its @mention alias (case-insensitive) */
+  getByAlias(alias: string): ModelEntry | undefined {
+    const lower = alias.toLowerCase();
+    return this.models.find(m => m.alias?.toLowerCase() === lower && m.enabled);
+  }
+
+  /** Get all known aliases for display */
+  getAliases(): string[] {
+    return this.getEnabled()
+      .filter(m => m.alias)
+      .map(m => m.alias!);
   }
 
   /** Get models that have a given capability, sorted by cost (cheapest first) */
@@ -259,18 +294,22 @@ export class ModelRegistry {
     if (enabled.length > 0) {
       lines.push('Enabled models:');
       for (const m of enabled) {
-        lines.push(
-          `  ${m.id.padEnd(35)} ${m.provider.padEnd(12)} ` +
-          `$${m.inputCostPer1M.toFixed(2)}/$${m.outputCostPer1M.toFixed(2)} per 1M  ` +
-          `[${m.capabilities.join(', ')}]`
-        );
+        const alias = m.alias ? `@${m.alias}` : '(no alias)';
+        lines.push('');
+        lines.push(`  ${m.name} ${alias}`);
+        lines.push(`    ID:           ${m.id}`);
+        lines.push(`    Provider:     ${m.provider}`);
+        lines.push(`    Capabilities: ${m.capabilities.join(', ')}`);
+        lines.push(`    Cost:         $${m.inputCostPer1M.toFixed(2)} in / $${m.outputCostPer1M.toFixed(2)} out per 1M tokens`);
+        lines.push(`    Context:      ${(m.contextWindow / 1000).toFixed(0)}K tokens`);
       }
     }
 
     if (disabled.length > 0) {
+      lines.push('');
       lines.push('Disabled:');
       for (const m of disabled) {
-        lines.push(`  ${m.id.padEnd(35)} ${m.provider.padEnd(12)} (disabled)`);
+        lines.push(`  ${m.name} — ${m.id} (${m.provider})`);
       }
     }
 

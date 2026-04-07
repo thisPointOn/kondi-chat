@@ -99,6 +99,15 @@ export class ContextManager {
   // Context assembly
   // -------------------------------------------------------------------------
 
+  /**
+   * Assemble the prompt for the current turn.
+   *
+   * Context (session state, repo map, history, grounding) goes into the
+   * system prompt so it's sent once per API call — NOT in the user message.
+   * This prevents re-sending the full context on every tool-use iteration.
+   *
+   * The user message contains only the raw user input.
+   */
   assemblePrompt(): { systemPrompt: string; userMessage: string; cacheablePrefix?: string } {
     const budget = new ContextBudget(this.config.contextBudget);
     const currentMessage = this.session.messages[this.session.messages.length - 1];
@@ -142,17 +151,23 @@ export class ContextManager {
       process.stderr.write(`[context] Budget ${this.config.contextBudget} tokens — ${parts.join('; ')}\n`);
     }
 
-    // Grounding context can be cached (Anthropic)
+    // Build system prompt: base instructions + assembled context
+    // This is sent once per call, not repeated in tool-use iterations
+    const systemParts = [this.config.systemPrompt];
+    if (assembledContext) {
+      systemParts.push(assembledContext);
+    }
+    const fullSystemPrompt = systemParts.join('\n\n---\n\n');
+
+    // Grounding context can be cached (Anthropic prompt caching)
     let cacheablePrefix: string | undefined;
     if (this.session.groundingContext && !dropped.includes('grounding-context')) {
       cacheablePrefix = `## Project Files\n${this.session.groundingContext}`;
     }
 
     return {
-      systemPrompt: this.config.systemPrompt,
-      userMessage: assembledContext
-        ? `${assembledContext}\n\n---\n\n${currentMessage.content}`
-        : currentMessage.content,
+      systemPrompt: fullSystemPrompt,
+      userMessage: currentMessage.content,
       cacheablePrefix,
     };
   }

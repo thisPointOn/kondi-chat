@@ -92,25 +92,29 @@ describe('ContextManager', () => {
     expect(userMessage).toContain('What is 2+2?');
   });
 
-  it('includes session state in assembled prompt when present', () => {
+  it('includes session state in system prompt, not user message', () => {
     const session = createSession('anthropic');
     session.state.goal = 'Build a REST API';
     session.state.decisions = ['Use Express'];
     const cm = new ContextManager(session);
     cm.addUserMessage('Next step?');
-    const { userMessage } = cm.assemblePrompt();
-    expect(userMessage).toContain('Build a REST API');
-    expect(userMessage).toContain('Use Express');
+    const { systemPrompt, userMessage } = cm.assemblePrompt();
+    // Context is in systemPrompt to avoid re-sending on tool iterations
+    expect(systemPrompt).toContain('Build a REST API');
+    expect(systemPrompt).toContain('Use Express');
+    // User message is just the raw input
+    expect(userMessage).toBe('Next step?');
   });
 
-  it('includes grounding context when available', () => {
+  it('includes grounding context in system prompt', () => {
     const session = createSession('anthropic');
     session.groundingContext = '## Files\nindex.ts: main entry';
     const cm = new ContextManager(session, { contextBudget: 50_000 });
     cm.addUserMessage('What does this project do?');
-    const { userMessage, cacheablePrefix } = cm.assemblePrompt();
-    expect(userMessage).toContain('index.ts: main entry');
+    const { systemPrompt, userMessage, cacheablePrefix } = cm.assemblePrompt();
+    expect(systemPrompt).toContain('index.ts: main entry');
     expect(cacheablePrefix).toContain('index.ts: main entry');
+    expect(userMessage).toBe('What does this project do?');
   });
 
   it('respects custom context budget', () => {
