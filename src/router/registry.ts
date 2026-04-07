@@ -144,6 +144,28 @@ const DEFAULT_MODELS: ModelEntry[] = [
     contextWindow: 32_000,
     enabled: true,
   },
+  {
+    id: 'phi3.5',
+    name: 'Phi 3.5',
+    alias: 'phi',
+    provider: 'ollama',
+    capabilities: ['summarization', 'general', 'fast-coding'],
+    inputCostPer1M: 0,
+    outputCostPer1M: 0,
+    contextWindow: 128_000,
+    enabled: true,
+  },
+  {
+    id: 'nemotron-3-nano:4b',
+    name: 'Nemotron 3 Nano 4B',
+    alias: 'nemo',
+    provider: 'ollama',
+    capabilities: ['reasoning', 'general', 'fast-coding'],
+    inputCostPer1M: 0,
+    outputCostPer1M: 0,
+    contextWindow: 256_000,
+    enabled: true,
+  },
 ];
 
 // ---------------------------------------------------------------------------
