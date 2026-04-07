@@ -5,15 +5,19 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "bin": {
-    "kondi-chat": "./src/cli/main.ts"
+    "kondi-chat": "./src/cli/main.tsx"
   },
   "scripts": {
-    "chat": "npx tsx src/cli/main.ts",
+    "chat": "npx tsx src/cli/main.tsx",
+    "chat:repl": "npx tsx src/cli/main-repl.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "ink": "^6.8.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^19.2.4",
     "tsx": "^4.0.0"
   },
   "engines": {
@@ -34,6 +38,7 @@
   ],
   "devDependencies": {
     "@types/node": "^25.5.0",
+    "@types/react": "^19.2.14",
     "typescript": "^6.0.2",
     "vitest": "^4.1.2"
   }

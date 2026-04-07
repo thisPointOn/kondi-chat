@@ -99,6 +99,28 @@ export interface TaskCard {
 }
 
 // ---------------------------------------------------------------------------
+// Creative Generation
+// ---------------------------------------------------------------------------
+
+export interface CreativeGenerationRequest {
+  description: string;
+  images?: string[]; // Base64 encoded images
+  style?: string; // e.g., "technical", "narrative", "visual", etc.
+  constraints?: string[]; // Any specific requirements
+}
+
+export interface CreativeGenerationResponse {
+  content: string; // The generated creative content
+  type: 'text' | 'code' | 'structured' | 'mixed';
+  metadata?: {
+    model: string;
+    tokens?: number;
+    confidence?: number;
+    suggestions?: string[]; // Additional ideas or variations
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Verification
 // ---------------------------------------------------------------------------
 
