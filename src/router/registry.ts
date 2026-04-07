@@ -172,9 +172,13 @@ const DEFAULT_MODELS: ModelEntry[] = [
 // Registry
 // ---------------------------------------------------------------------------
 
+export type ModelStatus = 'unknown' | 'available' | 'unavailable';
+
 export class ModelRegistry {
   private models: ModelEntry[] = [];
   private configPath: string;
+  /** Runtime availability — not persisted, checked on demand */
+  private statusMap: Map<string, { status: ModelStatus; error?: string }> = new Map();
 
   constructor(storageDir: string) {
     this.configPath = join(storageDir, 'models.yml');
@@ -191,6 +195,18 @@ export class ModelRegistry {
 
   getEnabled(): ModelEntry[] {
     return this.models.filter(m => m.enabled);
+  }
+
+  /** Get models that are enabled AND confirmed available */
+  getAvailable(): ModelEntry[] {
+    return this.models.filter(m =>
+      m.enabled && this.getStatus(m.id).status !== 'unavailable'
+    );
+  }
+
+  /** Get the runtime status of a model */
+  getStatus(id: string): { status: ModelStatus; error?: string } {
+    return this.statusMap.get(id) || { status: 'unknown' };
   }
 
   getById(id: string): ModelEntry | undefined {
@@ -210,9 +226,9 @@ export class ModelRegistry {
       .map(m => m.alias!);
   }
 
-  /** Get models that have a given capability, sorted by cost (cheapest first) */
+  /** Get models that have a given capability, sorted by cost (cheapest first). Excludes unavailable models. */
   getByCapability(capability: ModelCapability): ModelEntry[] {
-    return this.getEnabled()
+    return this.getAvailable()
       .filter(m => m.capabilities.includes(capability))
       .sort((a, b) => a.inputCostPer1M - b.inputCostPer1M);
   }
@@ -270,6 +286,111 @@ export class ModelRegistry {
       return true;
     }
     return false;
+  }
+
+  // -------------------------------------------------------------------------
+  // Health checks
+  // -------------------------------------------------------------------------
+
+  /**
+   * Check availability of all enabled models.
+   * - Ollama: check if model is pulled locally
+   * - Cloud providers: check if API key is set
+   */
+  async checkHealth(): Promise<Map<string, { status: ModelStatus; error?: string }>> {
+    const enabled = this.getEnabled();
+
+    // Check Ollama models in one call
+    const ollamaModels = await this.getOllamaModels();
+
+    // Check each model
+    for (const m of enabled) {
+      if (m.provider === 'ollama') {
+        if (ollamaModels === null) {
+          this.statusMap.set(m.id, { status: 'unavailable', error: 'Ollama not running' });
+        } else if (ollamaModels.has(m.id) || ollamaModels.has(m.id.split(':')[0])) {
+          this.statusMap.set(m.id, { status: 'available' });
+        } else {
+          this.statusMap.set(m.id, { status: 'unavailable', error: `Not pulled. Run: ollama pull ${m.id}` });
+        }
+      } else {
+        // Cloud provider — check for API key
+        const key = this.getApiKeyFor(m.provider);
+        if (key) {
+          this.statusMap.set(m.id, { status: 'available' });
+        } else {
+          const envVar = this.getEnvVarFor(m.provider);
+          this.statusMap.set(m.id, { status: 'unavailable', error: `No API key. Set ${envVar}` });
+        }
+      }
+    }
+
+    return this.statusMap;
+  }
+
+  private async getOllamaModels(): Promise<Set<string> | null> {
+    try {
+      const resp = await fetch('http://localhost:11434/api/tags', {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (!resp.ok) return null;
+      const data: any = await resp.json();
+      const names = new Set<string>();
+      for (const m of data.models || []) {
+        names.add(m.name);
+        // Also add without tag (e.g., "phi3.5" from "phi3.5:3.8b")
+        const base = m.name.split(':')[0];
+        names.add(base);
+      }
+      return names;
+    } catch {
+      return null;
+    }
+  }
+
+  private getApiKeyFor(provider: ProviderId): string | undefined {
+    switch (provider) {
+      case 'anthropic': return process.env.ANTHROPIC_API_KEY;
+      case 'openai': return process.env.OPENAI_API_KEY;
+      case 'deepseek': return process.env.DEEPSEEK_API_KEY;
+      case 'xai': return process.env.XAI_API_KEY;
+      case 'google': return process.env.GOOGLE_API_KEY;
+      case 'nvidia-router': return process.env.NVIDIA_API_KEY;
+      default: return undefined;
+    }
+  }
+
+  private getEnvVarFor(provider: ProviderId): string {
+    const vars: Record<string, string> = {
+      anthropic: 'ANTHROPIC_API_KEY',
+      openai: 'OPENAI_API_KEY',
+      deepseek: 'DEEPSEEK_API_KEY',
+      xai: 'XAI_API_KEY',
+      google: 'GOOGLE_API_KEY',
+      'nvidia-router': 'NVIDIA_API_KEY',
+    };
+    return vars[provider] || 'API_KEY';
+  }
+
+  /** Format health check results for display */
+  formatHealth(): string {
+    const lines: string[] = ['Model Health:'];
+    const enabled = this.getEnabled();
+
+    for (const m of enabled) {
+      const s = this.getStatus(m.id);
+      const icon = s.status === 'available' ? 'OK' : s.status === 'unavailable' ? 'FAIL' : '??';
+      const alias = m.alias ? ` @${m.alias}` : '';
+      const error = s.error ? ` — ${s.error}` : '';
+      lines.push(`  [${icon.padEnd(4)}] ${m.name}${alias} (${m.provider})${error}`);
+    }
+
+    const available = enabled.filter(m => this.getStatus(m.id).status === 'available').length;
+    const unavailable = enabled.filter(m => this.getStatus(m.id).status === 'unavailable').length;
+    lines.push('');
+    lines.push(`${available} available, ${unavailable} unavailable, ${enabled.length - available - unavailable} unchecked`);
+
+    return lines.join('\n');
   }
 
   // -------------------------------------------------------------------------

@@ -180,14 +180,24 @@ async function main(): Promise<void> {
 
   const modelLabel = () => args.model || session.activeModel || 'default';
 
+  // Check model availability on startup
+  process.stderr.write('[startup] Checking model availability...\n');
+  await registry.checkHealth();
+  const available = registry.getAvailable();
+  const unavailable = registry.getEnabled().filter(m => registry.getStatus(m.id).status === 'unavailable');
+
   console.log(`\nkondi-chat — ${session.activeProvider}/${modelLabel()}`);
-  console.log(`Models: ${registry.getEnabled().length} enabled | Router: rule-based (collecting training data)`);
-  console.log(`Embeddings: ${embeddingService.getConfig().backend}/${embeddingService.getConfig().model} (${embeddingService.getConfig().dimension}D)`);
+  console.log(`Models: ${available.length} available${unavailable.length > 0 ? `, ${unavailable.length} unavailable` : ''} | Router: rule-based`);
+  if (unavailable.length > 0) {
+    for (const m of unavailable) {
+      const s = registry.getStatus(m.id);
+      console.log(`  ! ${m.name}: ${s.error}`);
+    }
+  }
   console.log(`Context budget: ${args.budget.toLocaleString()} tokens | Verify: ${args.autoVerify ? 'on' : 'off'}`);
-  console.log(`Tools: ${AGENT_TOOLS.map(t => t.name).join(', ')}`);
-  const aliases = registry.getAliases();
+  const aliases = available.filter(m => m.alias).map(m => '@' + m.alias);
   if (aliases.length > 0) {
-    console.log(`Mention: ${aliases.map(a => '@' + a).join(', ')}`);
+    console.log(`Mention: ${aliases.join(', ')}`);
   }
   if (session.groundingContext) {
     console.log(`Codebase: ${estimateTokens(session.groundingContext).toLocaleString()} tokens`);
@@ -654,6 +664,14 @@ async function handleCommand(
       return;
     }
 
+    // -- Health check --
+    case '/health': {
+      process.stderr.write('[health] Checking model availability...\n');
+      await registry.checkHealth();
+      console.log(registry.formatHealth());
+      return;
+    }
+
     // -- Routing stats --
     case '/routing': {
       console.log(collector.formatStats());
@@ -667,7 +685,8 @@ Commands:
   /switch <provider> [model]   Switch fallback provider/model
   /models                      List available models and capabilities
   /models enable|disable <id>  Enable/disable a model
-  /models add <id> <provider> <caps> <in_cost> <out_cost>  Add a model
+  /models add <id> <provider> <caps> <in_cost> <out_cost> [alias]  Add a model
+  /health                      Check which models are available and working
   /routing                     Show routing stats and training data readiness
   /status                      Session stats, cost, and current state
   /tasks                       List all task cards with status
