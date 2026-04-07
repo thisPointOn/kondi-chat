@@ -66,7 +66,7 @@ const DEFAULT_MODELS: ModelEntry[] = [
     name: 'GPT-5.4',
     alias: 'gpt',
     provider: 'openai',
-    capabilities: ['general', 'reasoning', 'marketing', 'writing', 'coding', 'analysis'],
+    capabilities: ['planning', 'general', 'reasoning', 'marketing', 'writing', 'coding', 'analysis'],
     inputCostPer1M: 2.5,
     outputCostPer1M: 15,
     contextWindow: 1_000_000,

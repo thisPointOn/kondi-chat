@@ -438,6 +438,28 @@ function geminiMessages(messages: LLMMessage[]): any[] {
 // Unified router
 // ---------------------------------------------------------------------------
 
+const MAX_RETRIES = 2;
+const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 529]);
+
+/**
+ * Fallback chains: when a model is overloaded (529) or rate-limited (429),
+ * try the next model in the chain before giving up.
+ */
+const FALLBACK_CHAINS: Record<string, { provider: ProviderId; model: string }[]> = {
+  'claude-opus-4-20250514': [
+    { provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' },
+    { provider: 'openai', model: 'gpt-5.4' },
+  ],
+  'claude-sonnet-4-5-20250929': [
+    { provider: 'openai', model: 'gpt-5.4' },
+    { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
+  ],
+  'gpt-5.4': [
+    { provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' },
+    { provider: 'openai', model: 'gpt-5.4-mini' },
+  ],
+};
+
 export async function callLLM(req: LLMRequest): Promise<LLMResponse> {
   const provider = req.provider || 'anthropic';
   const model = req.model || DEFAULT_MODELS[provider] || 'claude-sonnet-4-5-20250929';
@@ -455,6 +477,59 @@ export async function callLLM(req: LLMRequest): Promise<LLMResponse> {
     throw new Error(`No API key for "${provider}". Set ${envVars[provider] || 'API_KEY'} in environment or .env file.`);
   }
 
+  // Try the requested model first
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await callProvider(provider, apiKey, model, req);
+    } catch (error) {
+      lastError = error as Error;
+      const statusMatch = lastError.message.match(/API (\d+):/);
+      const statusCode = statusMatch ? parseInt(statusMatch[1]) : 0;
+
+      if (attempt < MAX_RETRIES && RETRYABLE_STATUS_CODES.has(statusCode)) {
+        const delay = Math.min(1000 * Math.pow(2, attempt), 8_000);
+        process.stderr.write(
+          `  │  [retry] ${provider}/${model} ${statusCode} — waiting ${(delay / 1000).toFixed(0)}s (attempt ${attempt + 1}/${MAX_RETRIES})\n`
+        );
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+
+      // Not retryable — break to fallback
+      break;
+    }
+  }
+
+  // Try fallback models
+  const fallbacks = FALLBACK_CHAINS[model] || [];
+  for (const fb of fallbacks) {
+    const fbKey = getApiKey(fb.provider);
+    if (!fbKey && fb.provider !== 'ollama') continue;
+
+    try {
+      process.stderr.write(
+        `  │  [fallback] ${provider}/${model} unavailable → trying ${fb.provider}/${fb.model}\n`
+      );
+      const fbReq = { ...req, provider: fb.provider, model: fb.model };
+      return await callProvider(fb.provider, fbKey, fb.model, fbReq);
+    } catch {
+      // Fallback also failed — try next
+      continue;
+    }
+  }
+
+  // All retries and fallbacks exhausted
+  throw lastError!;
+}
+
+function callProvider(
+  provider: ProviderId,
+  apiKey: string | undefined,
+  model: string,
+  req: LLMRequest,
+): Promise<LLMResponse> {
   switch (provider) {
     case 'anthropic':
       return callAnthropic(apiKey!, model, req);

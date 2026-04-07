@@ -64,7 +64,7 @@ interface CliArgs {
 function parseArgs(): CliArgs {
   const args = process.argv.slice(2);
   const opts: CliArgs = {
-    provider: 'anthropic',
+    provider: 'openai',
     deep: false,
     budget: 30_000,
     noBootstrap: false,
@@ -317,10 +317,12 @@ async function runAgentLoop(
   let totalOutputTokens = 0;
   let totalCost = 0;
   let finalContent = '';
+  let respondingModel = '';
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     // Route the discuss phase through the router
     const decision = router.select('discuss');
+    respondingModel = decision.model.alias || decision.model.name;
     process.stderr.write(`  ╭─ discuss${iteration > 0 ? ` (iteration ${iteration + 1})` : ''} [${decision.reason}]\n`);
 
     const response = await callLLM({
@@ -412,9 +414,9 @@ async function runAgentLoop(
     }
   }
 
-  // Display final response
+  // Display final response with model label
   if (finalContent) {
-    console.log(`\n${finalContent}`);
+    console.log(`\n[${respondingModel}]: ${finalContent}`);
   }
 
   // Track in session
