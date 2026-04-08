@@ -12,7 +12,12 @@
 import {
   readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync,
 } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
+import { join, resolve, dirname, relative } from 'node:path';
+
+function isPathSafe(base: string, fullPath: string): boolean {
+  const rel = relative(base, fullPath);
+  return !rel.startsWith('..') && !resolve(fullPath).includes('\0');
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -155,7 +160,7 @@ export function applyChanges(
     const fullPath = resolve(join(workingDir, change.path));
 
     // Path traversal check
-    if (!fullPath.startsWith(base + '/') && fullPath !== base) {
+    if (!isPathSafe(base, fullPath)) {
       skipped.push(`${change.path} (path traversal blocked)`);
       continue;
     }

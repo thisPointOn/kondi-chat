@@ -7,7 +7,13 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, copyFileSync } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
+import { join, resolve, dirname, relative } from 'node:path';
+
+/** Safely check if a path is within a base directory */
+function isPathSafe(base: string, fullPath: string): boolean {
+  const rel = relative(base, fullPath);
+  return !rel.startsWith('..') && !resolve(fullPath).includes('\0');
+}
 import { execSync } from 'node:child_process';
 import type { ToolDefinition, Session, TaskKind } from '../types.ts';
 import type { Ledger } from '../audit/ledger.ts';
@@ -261,7 +267,7 @@ function toolReadFile(
   const base = resolve(ctx.workingDir);
   const fullPath = resolve(join(ctx.workingDir, relPath));
 
-  if (!fullPath.startsWith(base)) {
+  if (!isPathSafe(base, fullPath)) {
     return { content: `Path traversal blocked: ${relPath}`, isError: true };
   }
   if (!existsSync(fullPath)) {
@@ -289,7 +295,7 @@ function toolListFiles(
   const base = resolve(ctx.workingDir);
   const fullPath = resolve(join(ctx.workingDir, relPath));
 
-  if (!fullPath.startsWith(base)) {
+  if (!isPathSafe(base, fullPath)) {
     return { content: `Path traversal blocked: ${relPath}`, isError: true };
   }
   if (!existsSync(fullPath)) {
@@ -337,13 +343,15 @@ function toolSearchCode(
   const base = resolve(ctx.workingDir);
   const searchPath = resolve(join(ctx.workingDir, relPath));
 
-  if (!searchPath.startsWith(base)) {
+  if (!isPathSafe(base, searchPath)) {
     return { content: `Path traversal blocked: ${relPath}`, isError: true };
   }
 
   process.stderr.write(`[tool] search_code: "${pattern}" in ${relPath}\n`);
 
-  const globArg = glob ? `--include="${glob}"` : '';
+  // Sanitize glob to prevent command injection
+  const safeGlob = glob ? glob.replace(/[^a-zA-Z0-9.*?_\-\/]/g, '') : '';
+  const globArg = safeGlob ? `--include=${JSON.stringify(safeGlob)}` : '';
   const cmd = `grep -rn ${globArg} --exclude-dir=node_modules --exclude-dir=.git -e ${JSON.stringify(pattern)} ${JSON.stringify(searchPath)} | head -50`;
 
   try {
@@ -420,7 +428,7 @@ function toolWriteFile(
   const base = resolve(ctx.workingDir);
   const fullPath = resolve(join(ctx.workingDir, relPath));
 
-  if (!fullPath.startsWith(base + '/') && fullPath !== base) {
+  if (!isPathSafe(base, fullPath)) {
     return { content: `Path traversal blocked: ${relPath}`, isError: true };
   }
 
@@ -452,7 +460,7 @@ function toolEditFile(
   const base = resolve(ctx.workingDir);
   const fullPath = resolve(join(ctx.workingDir, relPath));
 
-  if (!fullPath.startsWith(base + '/') && fullPath !== base) {
+  if (!isPathSafe(base, fullPath)) {
     return { content: `Path traversal blocked: ${relPath}`, isError: true };
   }
   if (!existsSync(fullPath)) {

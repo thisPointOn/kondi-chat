@@ -84,8 +84,8 @@ function parseArgs(): CliArgs {
       case '--no-bootstrap': opts.noBootstrap = true; break;
       case '--no-verify': opts.autoVerify = false; break;
       case '--repl':
-        // Fall back to old REPL mode
-        import('./main-repl.ts');
+        // Fall back to old REPL mode — handled in main()
+        opts.provider = 'repl' as ProviderId;
         return opts;
       case '--help': case '-h':
         console.log(`
@@ -302,7 +302,9 @@ async function handleInput(
       inputTokens: response.inputTokens, outputTokens: response.outputTokens,
       costUsd: iterCost, latencyMs: response.latencyMs,
       routeReason: decision.reason,
-    }, userMessage).catch(() => {});
+    }, userMessage).catch(e => {
+      process.stderr.write(`[embedding] ${(e as Error).message}\n`);
+    });
 
     if (response.wasFallback && response.requestedModel) {
       collector.record({
@@ -695,6 +697,13 @@ function formatToolArgs(tc: ToolCall): string {
 async function main(): Promise<void> {
   loadEnv();
   const args = parseArgs();
+
+  // --repl flag: delegate to old REPL and exit
+  if (args.provider === ('repl' as ProviderId)) {
+    await import('./main-repl.ts');
+    return;
+  }
+
   const workingDir = args.dir ? resolve(args.dir) : process.cwd();
   const storageDir = resolve(workingDir, '.kondi-chat');
   mkdirSync(storageDir, { recursive: true });

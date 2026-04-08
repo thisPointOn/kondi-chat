@@ -71,7 +71,14 @@ Output the task card as JSON:`,
 
   ledger.record('dispatch', response, `Task card creation for: ${userIntent.slice(0, 200)}`);
 
-  const parsed = JSON.parse(response.content);
+  let parsed: any = {};
+  try {
+    // Extract JSON from response — model may wrap it in markdown code blocks
+    const jsonMatch = response.content.match(/\{[\s\S]*\}/);
+    parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+  } catch {
+    process.stderr.write(`[dispatch] Failed to parse task card JSON, using defaults\n`);
+  }
 
   const card: TaskCard = {
     id: parsed.id || `task-${Date.now().toString(36)}`,

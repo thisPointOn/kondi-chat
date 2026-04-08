@@ -700,7 +700,7 @@ export async function callLLM(req: LLMRequest): Promise<LLMResponse> {
   }
 
   // All retries and fallbacks exhausted
-  throw lastError!;
+  throw lastError ?? new Error('All retry attempts and fallbacks exhausted');
 }
 
 function callProvider(
