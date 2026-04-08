@@ -55,11 +55,8 @@ function MessageBubble({
 }) {
   if (message.role === 'user') {
     return (
-      <Box marginY={0} flexDirection="column">
-        <Text bold color="cyan">You: </Text>
-        <Box marginLeft={2}>
-          <Text>{message.content}</Text>
-        </Box>
+      <Box marginY={0}>
+        <Text bold color="blue">{message.content}</Text>
       </Box>
     );
   }
