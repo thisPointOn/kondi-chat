@@ -1,10 +1,11 @@
 /**
- * InputBar — multi-line text input at the bottom of the screen.
+ * InputBar — text input at the bottom of the screen.
  *
- * Enter adds a newline. Ctrl+Enter submits.
+ * Enter sends the message. Ctrl+N adds a newline for multi-line input.
+ * Escape clears. Tab is ignored.
  */
 
-import React, { useState } from 'react';
+import React from 'react';
 import { Box, Text, useInput } from 'ink';
 
 interface InputBarProps {
@@ -19,14 +20,16 @@ export function InputBar({ value, onChange, onSubmit, isProcessing, aliases }: I
   useInput((input, key) => {
     if (isProcessing) return;
 
-    // Ctrl+Enter to submit
-    if (key.return && key.ctrl) {
-      onSubmit(value);
+    // Enter sends the message
+    if (key.return) {
+      if (value.trim()) {
+        onSubmit(value);
+      }
       return;
     }
 
-    // Regular Enter adds newline
-    if (key.return && !key.ctrl) {
+    // Ctrl+N adds a newline (for multi-line input)
+    if (input === 'n' && key.ctrl) {
       onChange(value + '\n');
       return;
     }
@@ -40,7 +43,7 @@ export function InputBar({ value, onChange, onSubmit, isProcessing, aliases }: I
     // Tab — ignore
     if (key.tab) return;
 
-    // Arrow keys — ignore for now (basic input)
+    // Arrow keys — ignore for now
     if (key.upArrow || key.downArrow || key.leftArrow || key.rightArrow) return;
 
     // Escape — clear input
@@ -79,7 +82,7 @@ export function InputBar({ value, onChange, onSubmit, isProcessing, aliases }: I
             </Text>
           ))}
           {value === '' && (
-            <Text dimColor>{'> Type a message... (Ctrl+Enter to send)'}</Text>
+            <Text dimColor>{'> Type a message... (Enter to send, ^N for newline)'}</Text>
           )}
         </>
       )}

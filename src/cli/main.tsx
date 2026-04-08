@@ -102,8 +102,8 @@ Options:
   --repl              Use old readline REPL instead of TUI
 
 Keyboard:
-  Ctrl+Enter    Send message
-  Enter         New line
+  Enter         Send message
+  Ctrl+N        New line (multi-line input)
   Ctrl+O        Toggle tool output (collapsed by default)
   Ctrl+T        Toggle token/cost stats
   Ctrl+C        Exit
