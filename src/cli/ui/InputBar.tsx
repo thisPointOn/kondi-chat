@@ -27,6 +27,12 @@ const COMMANDS = [
   { cmd: '/export', desc: 'export session to JSON' },
   { cmd: '/help', desc: 'show all commands' },
   { cmd: '/quit', desc: 'exit' },
+  // Mode & Loop
+  { cmd: '/mode', desc: 'show/set cost mode (quality, balanced, cheap)' },
+  { cmd: '/mode quality', desc: 'frontier models, thorough review' },
+  { cmd: '/mode balanced', desc: 'default — good cost/quality tradeoff' },
+  { cmd: '/mode cheap', desc: 'cheapest models, tight limits' },
+  { cmd: '/loop', desc: '[mode] <task> — autonomous loop with cost guards' },
   // MCP
   { cmd: '/mcp', desc: 'list MCP servers and tools' },
   { cmd: '/mcp add', desc: '<name> <cmd> [args] — add local server' },

@@ -21,6 +21,8 @@ import { ModelRegistry } from '../router/registry.ts';
 import { RuleRouter } from '../router/rules.ts';
 import { RoutingCollector } from '../router/collector.ts';
 import { EmbeddingService } from '../router/embeddings.ts';
+import { ProfileManager, type ProfileName } from '../router/profiles.ts';
+import { LoopGuard } from '../engine/loop-guard.ts';
 import { McpClientManager } from '../mcp/client.ts';
 import { loadMcpConfig, saveMcpServer, removeMcpServer } from '../mcp/config.ts';
 import { ToolManager } from '../mcp/tool-manager.ts';
@@ -155,12 +157,13 @@ async function handleInput(
   toolManager: ToolManager,
   mcpClient: McpClientManager,
   workingDir: string,
+  profiles: ProfileManager,
 ): Promise<void> {
   const ui = getUI();
 
   // Slash commands
   if (input.startsWith('/')) {
-    const output = await handleCommand(input, session, contextManager, ledger, registry, collector, toolCtx, mcpClient, toolManager, workingDir);
+    const output = await handleCommand(input, session, contextManager, ledger, registry, collector, toolCtx, mcpClient, toolManager, workingDir, profiles, router);
     ui.addMessage({
       id: `msg-${Date.now()}`,
       role: 'system',
@@ -461,6 +464,8 @@ async function handleCommand(
   mcpClient: McpClientManager,
   toolManager: ToolManager,
   workingDir: string,
+  profiles: ProfileManager,
+  router: RuleRouter,
 ): Promise<string> {
   const parts = input.split(/\s+/);
   const cmd = parts[0];
@@ -570,6 +575,136 @@ async function handleCommand(
       return `Exported to ${filename}`;
     }
 
+    case '/mode': {
+      const mode = parts[1] as ProfileName | undefined;
+      if (!mode) return profiles.format();
+      try {
+        profiles.setProfile(mode);
+        router.setProfile(profiles.getActive());
+        const p = profiles.getActive();
+        return `Mode: ${p.name} — ${p.description}\nContext: ${p.contextBudget.toLocaleString()} | Loop: ${p.loopIterationCap} iters, $${p.loopCostCap.toFixed(2)} cap | Local: ${p.preferLocal ? 'yes' : 'no'}`;
+      } catch (e) {
+        return (e as Error).message;
+      }
+    }
+
+    case '/loop': {
+      // /loop [mode] "task description"
+      let loopMode: ProfileName = profiles.getActive().name;
+      let taskDesc = parts.slice(1).join(' ');
+
+      // Check if first arg is a mode name
+      if (['quality', 'balanced', 'cheap'].includes(parts[1])) {
+        loopMode = parts[1] as ProfileName;
+        taskDesc = parts.slice(2).join(' ');
+      }
+
+      if (!taskDesc) {
+        return 'Usage: /loop [mode] <task description>\nModes: quality, balanced, cheap';
+      }
+
+      const loopProfile = profiles.getProfile(loopMode);
+      const guard = new LoopGuard(loopProfile);
+
+      // Save current profile, switch to loop profile
+      const savedProfile = profiles.getActive().name;
+      profiles.setProfile(loopMode);
+      router.setProfile(profiles.getActive());
+
+      const ui = getUI();
+      ui.addMessage({
+        id: `msg-${Date.now()}`,
+        role: 'system',
+        content: `Starting loop (${loopMode}): ${taskDesc}\nLimits: ${loopProfile.loopIterationCap} iterations, $${loopProfile.loopCostCap.toFixed(2)} cost cap`,
+        timestamp: new Date().toISOString(),
+      });
+
+      let lastResult = '';
+      while (true) {
+        const status = guard.check();
+        if (status.shouldStop) {
+          ui.addMessage({
+            id: `msg-${Date.now()}`,
+            role: 'system',
+            content: `Loop stopped: ${status.stopReason}\n${guard.getSummary()}\n\nLast result:\n${lastResult.slice(0, 500)}`,
+            timestamp: new Date().toISOString(),
+          });
+          break;
+        }
+
+        ui.setStatus(`loop ${status.iteration + 1}/${status.maxIterations} ($${status.costUsd.toFixed(4)})`);
+
+        const iterStart = session.totalCostUsd;
+        try {
+          // Run one iteration of the agent
+          contextManager.addUserMessage(
+            status.iteration === 0
+              ? taskDesc
+              : `Continue working on: ${taskDesc}\n\nPrevious result: ${lastResult.slice(0, 1000)}\nIteration ${status.iteration + 1}. Fix any remaining issues.`
+          );
+          const { systemPrompt, userMessage, cacheablePrefix } = contextManager.assemblePrompt();
+
+          const decision = router.select('discuss');
+          const response = await callLLM({
+            provider: decision.model.provider,
+            model: decision.model.id,
+            systemPrompt,
+            userMessage,
+            tools: toolManager.getTools('discuss'),
+            maxOutputTokens: loopProfile.maxOutputTokens,
+            cacheablePrefix,
+            stream: true,
+            onToken: (token) => {
+              lastResult += token;
+              ui.updateLastAssistant({ content: lastResult.slice(-2000) });
+            },
+          });
+
+          lastResult = response.content;
+          const iterCost = session.totalCostUsd - iterStart;
+
+          contextManager.addAssistantMessage(response);
+          ledger.record('discuss', response, taskDesc.slice(0, 200));
+
+          // Check for errors in the response
+          const hasError = response.content.toLowerCase().includes('error') ||
+                          response.content.toLowerCase().includes('failed');
+          guard.recordIteration(iterCost, hasError ? response.content.slice(0, 200) : undefined);
+
+          ui.addMessage({
+            id: `msg-${Date.now()}`,
+            role: 'assistant',
+            content: response.content,
+            modelLabel: decision.model.alias || decision.model.name,
+            timestamp: new Date().toISOString(),
+            stats: {
+              inputTokens: response.inputTokens,
+              outputTokens: response.outputTokens,
+              costUsd: iterCost,
+              iterations: 1,
+              models: [response.model],
+            },
+          });
+
+          await contextManager.maybeCompact();
+        } catch (error) {
+          guard.recordIteration(session.totalCostUsd - iterStart, (error as Error).message);
+          ui.addMessage({
+            id: `msg-${Date.now()}`,
+            role: 'system',
+            content: `Loop iteration error: ${(error as Error).message}`,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+
+      // Restore previous profile
+      profiles.setProfile(savedProfile);
+      router.setProfile(profiles.getActive());
+
+      return `Loop complete. ${guard.getSummary()}`;
+    }
+
     case '/mcp': {
       const subcmd = parts[1];
       if (!subcmd || subcmd === 'list') {
@@ -634,6 +769,8 @@ async function handleCommand(
         '  /tasks                       List task cards',
         '  /ledger [phase]              Audit ledger',
         '  /cost                        Cost breakdown',
+        '  /mode [quality|balanced|cheap]  Set cost/quality mode',
+        '  /loop [mode] <task>          Run autonomous loop with guards',
         '  /mcp                         List MCP servers and tools',
         '  /mcp add <name> <cmd> [args]  Add local MCP server',
         '  /mcp add <name> http <url>    Add remote MCP server',
@@ -712,6 +849,8 @@ async function main(): Promise<void> {
   const ledger = new Ledger(session.id, storageDir);
   const registry = new ModelRegistry(storageDir);
   const router = new RuleRouter(registry);
+  const profiles = new ProfileManager('balanced');
+  router.setProfile(profiles.getActive());
   const embeddingService = new EmbeddingService(storageDir);
   const collector = new RoutingCollector(storageDir, embeddingService);
 
@@ -763,11 +902,11 @@ async function main(): Promise<void> {
   const available = registry.getAvailable();
   const aliases = available.filter(m => m.alias).map(m => m.alias!);
 
-  const initialStatus = `${available.length} models available | /help for commands`;
+  const initialStatus = `${available.length} models | mode: ${profiles.getActive().name} | /help for commands`;
 
   // Render Ink app
   const onSubmit = async (input: string) => {
-    await handleInput(input, session, contextManager, ledger, router, collector, registry, toolCtx, toolManager, mcpClient, workingDir);
+    await handleInput(input, session, contextManager, ledger, router, collector, registry, toolCtx, toolManager, mcpClient, workingDir, profiles);
   };
 
   render(<App onSubmit={onSubmit} initialStatus={initialStatus} aliases={aliases} />);

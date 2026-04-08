@@ -15,6 +15,7 @@
 
 import type { LedgerPhase, TaskKind } from '../types.ts';
 import { ModelRegistry, type ModelCapability, type ModelEntry } from './registry.ts';
+import type { BudgetProfile } from './profiles.ts';
 
 // ---------------------------------------------------------------------------
 // Route decision
@@ -33,9 +34,15 @@ export interface RouteDecision {
 
 export class RuleRouter {
   private registry: ModelRegistry;
+  private profile?: BudgetProfile;
 
   constructor(registry: ModelRegistry) {
     this.registry = registry;
+  }
+
+  /** Set the active budget profile — changes model selection priorities */
+  setProfile(profile: BudgetProfile): void {
+    this.profile = profile;
   }
 
   /**
@@ -86,7 +93,19 @@ export class RuleRouter {
   // -------------------------------------------------------------------------
 
   private selectForReasoning(): RouteDecision {
-    // Planning/architecture → best planning model, then reasoning
+    // Use profile preferences if available
+    if (this.profile) {
+      const prefs = this.profile.planningPreference;
+      const selector = this.profile.preferLocal
+        ? (cap: string) => this.registry.getCheapest(cap)
+        : (cap: string) => this.registry.getBest(cap);
+      for (const cap of prefs) {
+        const model = selector(cap);
+        if (model) return { model, reason: `${this.profile.name}: ${cap}`, promoted: false };
+      }
+    }
+
+    // Default: best planning model
     const model = this.registry.getBest('planning')
       || this.registry.getBest('reasoning')
       || this.registry.getBest('coding')
@@ -95,9 +114,27 @@ export class RuleRouter {
   }
 
   private selectForExecution(taskKind?: TaskKind): RouteDecision {
-    // Try to match task kind directly to a capability first.
-    // This is how custom domains work: add a model with capability "aerospace"
-    // and create tasks with kind "aerospace" — they match automatically.
+    // Use profile preferences if available
+    if (this.profile) {
+      // Try direct task kind match first
+      if (taskKind) {
+        const directMatch = this.profile.preferLocal
+          ? this.registry.getCheapest(taskKind)
+          : this.registry.getByCapability(taskKind)[0];
+        if (directMatch) {
+          return { model: directMatch, reason: `${this.profile.name}: ${taskKind} match`, promoted: false };
+        }
+      }
+
+      // Then profile's execution preferences
+      const prefs = this.profile.executionPreference;
+      for (const cap of prefs) {
+        const model = this.registry.getCheapest(cap);
+        if (model) return { model, reason: `${this.profile.name}: ${cap}`, promoted: false };
+      }
+    }
+
+    // Default: try to match task kind directly to a capability
     if (taskKind) {
       const directMatch = this.registry.getCheapest(taskKind);
       if (directMatch) {
