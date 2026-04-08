@@ -43,6 +43,8 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
   });
 
   const [inputValue, setInputValue] = useState('');
+  /** Scroll offset: 0 = bottom (newest), positive = scrolled up */
+  const [scrollOffset, setScrollOffset] = useState(0);
 
   // Keyboard shortcuts
   useInput((input, key) => {
@@ -59,6 +61,16 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
     // Ctrl+T to toggle token stats
     if (input === 't' && key.ctrl) {
       setState(s => ({ ...s, showTokenStats: !s.showTokenStats }));
+      return;
+    }
+    // Page Up / Arrow Up to scroll up (only when not typing)
+    if (key.upArrow || (input === 'u' && key.ctrl)) {
+      setScrollOffset(s => Math.min(s + 3, Math.max(state.messages.length - 1, 0)));
+      return;
+    }
+    // Page Down / Arrow Down to scroll down
+    if (key.downArrow || (input === 'd' && key.ctrl)) {
+      setScrollOffset(s => Math.max(s - 3, 0));
       return;
     }
   });
@@ -98,6 +110,7 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
   // Exposed methods for the agent loop to call
   const addMessage = useCallback((msg: ChatMessage) => {
     setState(s => ({ ...s, messages: [...s.messages, msg] }));
+    setScrollOffset(0); // Auto-scroll to bottom on new message
   }, []);
 
   const setStatus = useCallback((text: string) => {
@@ -139,6 +152,7 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
           showToolOutput={state.showToolOutput}
           showTokenStats={state.showTokenStats}
           maxHeight={chatHeight}
+          scrollOffset={scrollOffset}
         />
       </Box>
 

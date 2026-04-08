@@ -15,6 +15,8 @@ interface ChatViewProps {
   showToolOutput: boolean;
   showTokenStats: boolean;
   maxHeight: number;
+  /** 0 = bottom (newest), positive = scrolled up by N messages */
+  scrollOffset: number;
 }
 
 /** Estimate how many terminal lines a message will take */
@@ -61,23 +63,26 @@ function estimateMessageHeight(
   return lines;
 }
 
-export function ChatView({ messages, showToolOutput, showTokenStats, maxHeight }: ChatViewProps) {
+export function ChatView({ messages, showToolOutput, showTokenStats, maxHeight, scrollOffset }: ChatViewProps) {
   if (messages.length === 0) {
     return (
       <Box flexDirection="column" paddingX={1}>
         <Text dimColor>No messages yet. Type a message and press Enter to send.</Text>
-        <Text dimColor>^O: toggle tool output | ^T: toggle token stats</Text>
+        <Text dimColor>^O: toggle tool output | ^T: toggle token stats | arrows: scroll</Text>
       </Box>
     );
   }
 
-  // Pick which messages to show — work backwards from the newest
+  // Pick which messages to show — work backwards from the scroll position
   const termWidth = process.stdout.columns || 80;
   const visibleMessages = useMemo(() => {
     const result: ChatMessage[] = [];
     let usedHeight = 0;
 
-    for (let i = messages.length - 1; i >= 0; i--) {
+    // Start from the end minus the scroll offset
+    const endIdx = Math.max(messages.length - scrollOffset, 1);
+
+    for (let i = endIdx - 1; i >= 0; i--) {
       const h = estimateMessageHeight(messages[i], showToolOutput, showTokenStats, termWidth);
       if (usedHeight + h > maxHeight && result.length > 0) break;
       result.unshift(messages[i]);
@@ -85,14 +90,17 @@ export function ChatView({ messages, showToolOutput, showTokenStats, maxHeight }
     }
 
     return result;
-  }, [messages, showToolOutput, showTokenStats, maxHeight, termWidth]);
+  }, [messages, showToolOutput, showTokenStats, maxHeight, termWidth, scrollOffset]);
 
-  const truncated = visibleMessages.length < messages.length;
+  const firstVisibleIdx = messages.indexOf(visibleMessages[0]);
+  const lastVisibleIdx = messages.indexOf(visibleMessages[visibleMessages.length - 1]);
+  const hasEarlier = firstVisibleIdx > 0;
+  const hasLater = lastVisibleIdx < messages.length - 1;
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      {truncated && (
-        <Text dimColor>--- {messages.length - visibleMessages.length} earlier messages ---</Text>
+      {hasEarlier && (
+        <Text dimColor>--- {firstVisibleIdx} earlier messages (arrow up to scroll) ---</Text>
       )}
       {visibleMessages.map((msg) => (
         <MessageBubble
@@ -102,6 +110,9 @@ export function ChatView({ messages, showToolOutput, showTokenStats, maxHeight }
           showTokenStats={showTokenStats}
         />
       ))}
+      {hasLater && (
+        <Text dimColor>--- {messages.length - 1 - lastVisibleIdx} newer messages (arrow down to scroll) ---</Text>
+      )}
     </Box>
   );
 }
