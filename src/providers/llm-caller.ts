@@ -13,6 +13,59 @@ import type {
 } from '../types.ts';
 
 // ---------------------------------------------------------------------------
+// SSE stream parser
+// ---------------------------------------------------------------------------
+
+async function* parseSSE(resp: Response): AsyncGenerator<{ type?: string; data?: any }> {
+  const reader = resp.body?.getReader();
+  if (!reader) return;
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      let eventType: string | undefined;
+      let eventData: string | undefined;
+
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim();
+        } else if (line.startsWith('data: ')) {
+          const raw = line.slice(6);
+          if (raw === '[DONE]') continue;
+          try {
+            eventData = JSON.parse(raw);
+          } catch {
+            eventData = raw;
+          }
+        } else if (line === '' && eventData !== undefined) {
+          yield { type: eventType, data: eventData };
+          eventType = undefined;
+          eventData = undefined;
+        }
+      }
+
+      // If we have data accumulated without a blank line separator, yield it
+      if (eventData !== undefined) {
+        yield { type: eventType, data: eventData };
+        eventType = undefined;
+        eventData = undefined;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Default models per provider
 // ---------------------------------------------------------------------------
 
@@ -53,7 +106,6 @@ async function callAnthropic(
 ): Promise<LLMResponse> {
   const start = Date.now();
 
-  // System content
   const systemContent: Array<{ type: string; text: string; cache_control?: { type: string } }> = [];
   if (req.cacheablePrefix) {
     systemContent.push({
@@ -64,7 +116,6 @@ async function callAnthropic(
   }
   systemContent.push({ type: 'text', text: req.systemPrompt });
 
-  // Messages — multi-turn or single-turn
   let messages: any[];
   if (req.messages) {
     messages = anthropicMessages(req.messages);
@@ -72,7 +123,6 @@ async function callAnthropic(
     messages = [{ role: 'user', content: req.userMessage || '' }];
   }
 
-  // Tools
   const tools = req.tools?.map(t => ({
     name: t.name,
     description: t.description,
@@ -86,6 +136,7 @@ async function callAnthropic(
     messages,
     ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
     ...(tools ? { tools } : {}),
+    ...(req.stream ? { stream: true } : {}),
   };
 
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -104,10 +155,74 @@ async function callAnthropic(
     throw new Error(`Anthropic API ${resp.status}: ${text.substring(0, 500)}`);
   }
 
+  // Streaming path
+  if (req.stream && req.onToken) {
+    let content = '';
+    const toolCalls: ToolCall[] = [];
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cached = false;
+
+    // Track tool_use blocks being built
+    let currentToolId = '';
+    let currentToolName = '';
+    let currentToolJson = '';
+
+    for await (const event of parseSSE(resp)) {
+      if (event.type === 'message_start') {
+        const usage = event.data?.message?.usage;
+        if (usage) {
+          inputTokens = usage.input_tokens || 0;
+          cached = (usage.cache_read_input_tokens || 0) > 0;
+        }
+      } else if (event.type === 'content_block_start') {
+        const block = event.data?.content_block;
+        if (block?.type === 'tool_use') {
+          currentToolId = block.id;
+          currentToolName = block.name;
+          currentToolJson = '';
+        }
+      } else if (event.type === 'content_block_delta') {
+        const delta = event.data?.delta;
+        if (delta?.type === 'text_delta' && delta.text) {
+          content += delta.text;
+          req.onToken(delta.text);
+        } else if (delta?.type === 'input_json_delta' && delta.partial_json) {
+          currentToolJson += delta.partial_json;
+        }
+      } else if (event.type === 'content_block_stop') {
+        if (currentToolId) {
+          try {
+            toolCalls.push({
+              id: currentToolId,
+              name: currentToolName,
+              arguments: currentToolJson ? JSON.parse(currentToolJson) : {},
+            });
+          } catch {
+            toolCalls.push({ id: currentToolId, name: currentToolName, arguments: {} });
+          }
+          currentToolId = '';
+          currentToolName = '';
+          currentToolJson = '';
+        }
+      } else if (event.type === 'message_delta') {
+        const usage = event.data?.usage;
+        if (usage) outputTokens = usage.output_tokens || 0;
+      }
+    }
+
+    return {
+      content, model, provider: 'anthropic',
+      inputTokens, outputTokens,
+      latencyMs: Date.now() - start, cached,
+      ...(toolCalls.length > 0 ? { toolCalls } : {}),
+    };
+  }
+
+  // Non-streaming path
   const data: any = await resp.json();
   const usage = data.usage || {};
 
-  // Parse response — may contain text and/or tool_use blocks
   let content = '';
   const toolCalls: ToolCall[] = [];
 
@@ -124,9 +239,7 @@ async function callAnthropic(
   }
 
   return {
-    content,
-    model,
-    provider: 'anthropic',
+    content, model, provider: 'anthropic',
     inputTokens: usage.input_tokens || 0,
     outputTokens: usage.output_tokens || 0,
     latencyMs: Date.now() - start,
@@ -226,6 +339,7 @@ async function callOpenAICompatible(
     max_tokens: req.maxOutputTokens ?? 8192,
     ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
     ...(tools ? { tools } : {}),
+    ...(req.stream ? { stream: true } : {}),
   };
 
   const resp = await fetch(`${baseUrl}/chat/completions`, {
@@ -242,12 +356,74 @@ async function callOpenAICompatible(
     throw new Error(`${provider} API ${resp.status}: ${text.substring(0, 500)}`);
   }
 
+  // Streaming path
+  if (req.stream && req.onToken) {
+    let content = '';
+    const toolCalls: ToolCall[] = [];
+    const toolJsonBuffers: Map<number, { id: string; name: string; json: string }> = new Map();
+    let actualModel = model;
+    let inputTokens = 0;
+    let outputTokens = 0;
+
+    for await (const event of parseSSE(resp)) {
+      if (!event.data || event.data === '[DONE]') continue;
+
+      const chunk = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+      if (chunk.model) actualModel = chunk.model;
+
+      const delta = chunk.choices?.[0]?.delta;
+      if (!delta) continue;
+
+      // Text content
+      if (delta.content) {
+        content += delta.content;
+        req.onToken(delta.content);
+      }
+
+      // Tool calls (streamed incrementally)
+      if (delta.tool_calls) {
+        for (const tc of delta.tool_calls) {
+          const idx = tc.index ?? 0;
+          if (tc.id) {
+            toolJsonBuffers.set(idx, { id: tc.id, name: tc.function?.name || '', json: '' });
+          }
+          const buf = toolJsonBuffers.get(idx);
+          if (buf && tc.function?.arguments) {
+            buf.json += tc.function.arguments;
+          }
+        }
+      }
+
+      // Usage (some providers send this in the final chunk)
+      if (chunk.usage) {
+        inputTokens = chunk.usage.prompt_tokens || 0;
+        outputTokens = chunk.usage.completion_tokens || 0;
+      }
+    }
+
+    // Finalize tool calls
+    for (const buf of toolJsonBuffers.values()) {
+      try {
+        toolCalls.push({ id: buf.id, name: buf.name, arguments: buf.json ? JSON.parse(buf.json) : {} });
+      } catch {
+        toolCalls.push({ id: buf.id, name: buf.name, arguments: {} });
+      }
+    }
+
+    return {
+      content, model: actualModel, provider,
+      inputTokens, outputTokens,
+      latencyMs: Date.now() - start,
+      ...(toolCalls.length > 0 ? { toolCalls } : {}),
+    };
+  }
+
+  // Non-streaming path
   const data: any = await resp.json();
   const choice = data.choices?.[0]?.message || {};
   const usage = data.usage || {};
   const actualModel = data.model || model;
 
-  // Parse tool calls
   const toolCalls: ToolCall[] = [];
   if (choice.tool_calls) {
     for (const tc of choice.tool_calls) {

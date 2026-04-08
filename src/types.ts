@@ -260,6 +260,10 @@ export interface LLMRequest {
   maxOutputTokens?: number;
   temperature?: number;
   cacheablePrefix?: string;
+  /** Stream the response token by token */
+  stream?: boolean;
+  /** Callback for each streamed token chunk */
+  onToken?: (token: string) => void;
 }
 
 export interface LLMResponse {

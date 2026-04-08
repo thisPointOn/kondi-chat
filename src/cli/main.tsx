@@ -247,6 +247,23 @@ async function handleInput(
       timestamp: new Date().toISOString(),
     });
 
+    // Add a streaming placeholder message
+    const streamMsgId = `msg-stream-${Date.now()}`;
+    let streamContent = '';
+
+    // Only stream the first text response (not tool-use iterations where we need the full response)
+    const shouldStream = iteration === 0;
+
+    if (shouldStream) {
+      ui.addMessage({
+        id: streamMsgId,
+        role: 'assistant',
+        content: '',
+        modelLabel: respondingModel,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     const response = await callLLM({
       provider: decision.model.provider,
       model: decision.model.id,
@@ -255,6 +272,11 @@ async function handleInput(
       tools: AGENT_TOOLS,
       maxOutputTokens: 8192,
       cacheablePrefix,
+      stream: true,
+      onToken: shouldStream ? (token: string) => {
+        streamContent += token;
+        ui.updateLastAssistant({ content: streamContent });
+      } : undefined,
     });
 
     const iterCost = estimateCost(response.model, response.inputTokens, response.outputTokens);
@@ -288,10 +310,30 @@ async function handleInput(
       });
     }
 
-    // No tool calls — final response
+    // No tool calls — final response (streaming message already shows it)
     if (!response.toolCalls || response.toolCalls.length === 0) {
       finalContent = response.content;
+      // Update the streaming message with final stats
+      if (shouldStream) {
+        ui.updateLastAssistant({
+          content: finalContent,
+          toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+          stats: {
+            inputTokens: totalInputTokens,
+            outputTokens: totalOutputTokens,
+            costUsd: totalCost,
+            iterations: messages.filter(m => m.role === 'assistant').length || 1,
+            models: [...modelsUsed],
+          },
+        });
+      }
       break;
+    }
+
+    // Tool calls — remove the streaming placeholder (model isn't done yet)
+    if (shouldStream) {
+      // Replace streaming message content with what we have so far
+      ui.updateLastAssistant({ content: response.content || '(using tools...)' });
     }
 
     // Tool calls
@@ -348,7 +390,7 @@ async function handleInput(
     }
   }
 
-  // Add final message to UI
+  // Track in session
   session.totalInputTokens += totalInputTokens;
   session.totalOutputTokens += totalOutputTokens;
   session.totalCostUsd += totalCost;
@@ -356,29 +398,41 @@ async function handleInput(
   contextManager.addAssistantMessage({
     content: finalContent,
     model: respondingModel,
-    provider: 'anthropic' as ProviderId, // placeholder
+    provider: 'openai' as ProviderId,
     inputTokens: totalInputTokens,
     outputTokens: totalOutputTokens,
     latencyMs: 0,
   });
 
   const iterationCount = messages.filter(m => m.role === 'assistant').length || 1;
+  const finalStats = {
+    inputTokens: totalInputTokens,
+    outputTokens: totalOutputTokens,
+    costUsd: totalCost,
+    iterations: iterationCount,
+    models: [...modelsUsed],
+  };
 
-  ui.addMessage({
-    id: `msg-${Date.now()}`,
-    role: 'assistant',
-    content: finalContent,
-    modelLabel: respondingModel,
-    timestamp: new Date().toISOString(),
-    toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
-    stats: {
-      inputTokens: totalInputTokens,
-      outputTokens: totalOutputTokens,
-      costUsd: totalCost,
-      iterations: iterationCount,
-      models: [...modelsUsed],
-    },
-  });
+  // If we didn't stream (multi-iteration with tools), add the final message now
+  // If we did stream, the message was already added and updated above
+  if (iterationCount > 1) {
+    // Multi-iteration: add a fresh final message with everything
+    ui.addMessage({
+      id: `msg-${Date.now()}`,
+      role: 'assistant',
+      content: finalContent,
+      modelLabel: respondingModel,
+      timestamp: new Date().toISOString(),
+      toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+      stats: finalStats,
+    });
+  } else {
+    // Single iteration: streaming message already exists, just update stats
+    ui.updateLastAssistant({
+      stats: finalStats,
+      toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+    });
+  }
 
   await contextManager.maybeCompress();
   await contextManager.updateSessionState();
