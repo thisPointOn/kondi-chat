@@ -1,31 +1,23 @@
 /**
  * Main App component — the root of the Ink TUI.
  *
- * Layout:
- *   ┌──────────────────────────────┐
- *   │  Chat messages (scrollable)  │
- *   │  ...                         │
- *   │  [opus]: Here's my plan...   │
- *   ├──────────────────────────────┤
- *   │  Status bar                  │
- *   ├──────────────────────────────┤
- *   │  Input (multi-line)          │
- *   └──────────────────────────────┘
+ * Two modes:
+ *   - Chat mode: scrollable messages + input bar at bottom
+ *   - Detail mode (tools/stats): full-screen view of a message's
+ *     tool calls or token stats. Escape returns to chat.
  */
 
 import React, { useState, useCallback, useEffect } from 'react';
 import { Box, Text, useInput, useApp, useStdout } from 'ink';
 import { ChatView } from './ChatView.js';
+import { DetailView } from './DetailView.js';
 import { InputBar } from './InputBar.js';
 import { StatusBar } from './StatusBar.js';
-import type { ChatMessage, AppState, MessageStats, ToolCallDisplay } from './types.js';
+import type { ChatMessage, AppState, ViewMode } from './types.js';
 
 export interface AppProps {
-  /** Called when user submits a message */
   onSubmit: (input: string) => Promise<void>;
-  /** Initial status text */
   initialStatus: string;
-  /** Available @mention aliases */
   aliases: string[];
 }
 
@@ -37,40 +29,75 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
   const [state, setState] = useState<AppState>({
     messages: [],
     isProcessing: false,
-    showToolOutput: false,
-    showTokenStats: false,
+    viewMode: 'chat',
     statusText: initialStatus,
   });
 
   const [inputValue, setInputValue] = useState('');
-  /** Scroll offset: 0 = bottom (newest), positive = scrolled up */
   const [scrollOffset, setScrollOffset] = useState(0);
+  /** Scroll offset within detail view */
+  const [detailScroll, setDetailScroll] = useState(0);
 
-  // Keyboard shortcuts
+  // Find the last assistant message (for detail views)
+  const lastAssistantMsg = [...state.messages].reverse().find(m => m.role === 'assistant');
+
   useInput((input, key) => {
     // Ctrl+C to exit
     if (input === 'c' && key.ctrl) {
       exit();
       return;
     }
-    // Ctrl+O to toggle tool output
+
+    // Escape — return to chat from detail view, or clear input in chat
+    if (key.escape) {
+      if (state.viewMode !== 'chat') {
+        setState(s => ({ ...s, viewMode: 'chat' }));
+        setDetailScroll(0);
+        return;
+      }
+      // In chat mode, escape clears input (handled by InputBar)
+      return;
+    }
+
+    // Ctrl+O — open/close tools detail view
     if (input === 'o' && key.ctrl) {
-      setState(s => ({ ...s, showToolOutput: !s.showToolOutput }));
+      if (state.viewMode === 'tools') {
+        setState(s => ({ ...s, viewMode: 'chat' }));
+        setDetailScroll(0);
+      } else {
+        setState(s => ({ ...s, viewMode: 'tools' }));
+        setDetailScroll(0);
+      }
       return;
     }
-    // Ctrl+T to toggle token stats
+
+    // Ctrl+T — open/close stats detail view
     if (input === 't' && key.ctrl) {
-      setState(s => ({ ...s, showTokenStats: !s.showTokenStats }));
+      if (state.viewMode === 'stats') {
+        setState(s => ({ ...s, viewMode: 'chat' }));
+        setDetailScroll(0);
+      } else {
+        setState(s => ({ ...s, viewMode: 'stats' }));
+        setDetailScroll(0);
+      }
       return;
     }
-    // Page Up / Arrow Up to scroll up (only when not typing)
+
+    // Arrow keys — scroll
     if (key.upArrow || (input === 'u' && key.ctrl)) {
-      setScrollOffset(s => Math.min(s + 3, Math.max(state.messages.length - 1, 0)));
+      if (state.viewMode !== 'chat') {
+        setDetailScroll(s => s + 3);
+      } else {
+        setScrollOffset(s => Math.min(s + 3, Math.max(state.messages.length - 1, 0)));
+      }
       return;
     }
-    // Page Down / Arrow Down to scroll down
     if (key.downArrow || (input === 'd' && key.ctrl)) {
-      setScrollOffset(s => Math.max(s - 3, 0));
+      if (state.viewMode !== 'chat') {
+        setDetailScroll(s => Math.max(s - 3, 0));
+      } else {
+        setScrollOffset(s => Math.max(s - 3, 0));
+      }
       return;
     }
   });
@@ -89,9 +116,11 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
       ...s,
       messages: [...s.messages, userMsg],
       isProcessing: true,
+      viewMode: 'chat',
       statusText: 'thinking...',
     }));
     setInputValue('');
+    setScrollOffset(0);
 
     try {
       await onSubmit(text.trim());
@@ -107,10 +136,9 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
     setState(s => ({ ...s, isProcessing: false, statusText: '' }));
   }, [state.isProcessing, onSubmit]);
 
-  // Exposed methods for the agent loop to call
   const addMessage = useCallback((msg: ChatMessage) => {
     setState(s => ({ ...s, messages: [...s.messages, msg] }));
-    setScrollOffset(0); // Auto-scroll to bottom on new message
+    setScrollOffset(0);
   }, []);
 
   const setStatus = useCallback((text: string) => {
@@ -130,7 +158,6 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
     });
   }, []);
 
-  // Expose methods globally for the agent loop to use
   useEffect(() => {
     (globalThis as any).__kondiUI = {
       addMessage,
@@ -140,31 +167,41 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
     };
   }, [addMessage, setStatus, updateLastAssistant, state]);
 
-  // Calculate visible height for chat area
-  const chatHeight = Math.max(rows - 6, 5); // Leave room for status + input
+  const chatHeight = Math.max(rows - 6, 5);
 
+  // Detail view — full screen overlay
+  if (state.viewMode !== 'chat') {
+    return (
+      <Box flexDirection="column" height={rows}>
+        <DetailView
+          messages={state.messages}
+          mode={state.viewMode}
+          maxHeight={rows - 2}
+          scrollOffset={detailScroll}
+        />
+        <Box paddingX={1}>
+          <Text dimColor>
+            Esc:back to chat ↑↓:scroll {state.viewMode === 'tools' ? '^T:switch to stats' : '^O:switch to tools'}
+          </Text>
+        </Box>
+      </Box>
+    );
+  }
+
+  // Chat view — normal mode
   return (
     <Box flexDirection="column" height={rows}>
-      {/* Chat area */}
       <Box flexDirection="column" flexGrow={1} height={chatHeight}>
         <ChatView
           messages={state.messages}
-          showToolOutput={state.showToolOutput}
-          showTokenStats={state.showTokenStats}
           maxHeight={chatHeight}
           scrollOffset={scrollOffset}
         />
       </Box>
-
-      {/* Status bar */}
       <StatusBar
         status={state.statusText}
         isProcessing={state.isProcessing}
-        showToolOutput={state.showToolOutput}
-        showTokenStats={state.showTokenStats}
       />
-
-      {/* Input bar */}
       <InputBar
         value={inputValue}
         onChange={setInputValue}

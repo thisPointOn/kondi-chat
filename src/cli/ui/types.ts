@@ -32,10 +32,11 @@ export interface MessageStats {
   models: string[];
 }
 
+export type ViewMode = 'chat' | 'tools' | 'stats';
+
 export interface AppState {
   messages: ChatMessage[];
   isProcessing: boolean;
-  showToolOutput: boolean;
-  showTokenStats: boolean;
+  viewMode: ViewMode;
   statusText: string;
 }

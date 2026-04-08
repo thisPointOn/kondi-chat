@@ -8,11 +8,9 @@ import { Box, Text } from 'ink';
 interface StatusBarProps {
   status: string;
   isProcessing: boolean;
-  showToolOutput: boolean;
-  showTokenStats: boolean;
 }
 
-export function StatusBar({ status, isProcessing, showToolOutput, showTokenStats }: StatusBarProps) {
+export function StatusBar({ status, isProcessing }: StatusBarProps) {
   return (
     <Box paddingX={1} justifyContent="space-between">
       <Box>
@@ -24,7 +22,7 @@ export function StatusBar({ status, isProcessing, showToolOutput, showTokenStats
       </Box>
       <Box gap={2}>
         <Text dimColor>
-          Enter:send ^N:newline ^O:{showToolOutput ? 'hide' : 'show'} tools ^T:{showTokenStats ? 'hide' : 'show'} stats ↑↓:scroll ^C:exit
+          Enter:send ^N:newline ^O:tools ^T:stats ↑↓:scroll ^C:exit
         </Text>
       </Box>
     </Box>
