@@ -225,7 +225,7 @@ async function handleInput(
       },
     });
 
-    await contextManager.maybeCompress();
+    await contextManager.maybeCompact();
     await contextManager.updateSessionState();
     return;
   }
@@ -440,7 +440,7 @@ async function handleInput(
     });
   }
 
-  await contextManager.maybeCompress();
+  await contextManager.maybeCompact();
   await contextManager.updateSessionState();
 }
 
@@ -509,12 +509,15 @@ async function handleCommand(
 
     case '/status': {
       const turns = session.messages.filter(m => m.role === 'user').length;
+      const budget = contextManager.getBudgetStatus();
       const lines = [
         `Session: ${session.id.slice(0, 8)}`,
         `Provider: ${session.activeProvider}/${session.activeModel || 'default'}`,
         `Turns: ${turns} | Messages: ${session.messages.length} | Tasks: ${session.tasks.length}`,
         `Tokens: ${session.totalInputTokens.toLocaleString()}in / ${session.totalOutputTokens.toLocaleString()}out`,
         `Cost: $${session.totalCostUsd.toFixed(4)}`,
+        `Context: ${budget.currentContextSize.toLocaleString()}/${budget.modelContextWindow.toLocaleString()} tokens (${(budget.contextUtilization * 100).toFixed(0)}%)`,
+        `Compactions: ${budget.compactionCount} | Cache hit rate: ${(budget.cacheHitRate * 100).toFixed(0)}%`,
       ];
       if (session.state.goal) lines.push(`Goal: ${session.state.goal}`);
       if (session.state.currentPlan.length > 0) lines.push(`Plan: ${session.state.currentPlan.join(' > ')}`);

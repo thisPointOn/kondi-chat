@@ -89,7 +89,7 @@ describe('ContextManager', () => {
     cm.addUserMessage('What is 2+2?');
     const { systemPrompt, userMessage } = cm.assemblePrompt();
     expect(systemPrompt).toBe('You are helpful.');
-    expect(userMessage).toContain('What is 2+2?');
+    expect(userMessage).toBe('What is 2+2?');
   });
 
   it('includes session state in system prompt, not user message', () => {
@@ -99,10 +99,8 @@ describe('ContextManager', () => {
     const cm = new ContextManager(session);
     cm.addUserMessage('Next step?');
     const { systemPrompt, userMessage } = cm.assemblePrompt();
-    // Context is in systemPrompt to avoid re-sending on tool iterations
     expect(systemPrompt).toContain('Build a REST API');
     expect(systemPrompt).toContain('Use Express');
-    // User message is just the raw input
     expect(userMessage).toBe('Next step?');
   });
 
@@ -111,15 +109,82 @@ describe('ContextManager', () => {
     session.groundingContext = '## Files\nindex.ts: main entry';
     const cm = new ContextManager(session, { contextBudget: 50_000 });
     cm.addUserMessage('What does this project do?');
-    const { systemPrompt, userMessage, cacheablePrefix } = cm.assemblePrompt();
+    const { systemPrompt, cacheablePrefix } = cm.assemblePrompt();
     expect(systemPrompt).toContain('index.ts: main entry');
     expect(cacheablePrefix).toContain('index.ts: main entry');
-    expect(userMessage).toBe('What does this project do?');
   });
 
-  it('respects custom context budget', () => {
+  it('estimates context size', () => {
     const session = createSession('anthropic');
-    const cm = new ContextManager(session, { contextBudget: 500 });
-    expect(cm.getConfig().contextBudget).toBe(500);
+    const cm = new ContextManager(session);
+    cm.addUserMessage('Hello');
+    cm.addAssistantMessage(fakeResponse('Hi there'));
+    const size = cm.estimateCurrentContextSize();
+    expect(size).toBeGreaterThan(0);
+  });
+
+  it('tracks budget status', () => {
+    const session = createSession('anthropic');
+    const cm = new ContextManager(session, { modelContextWindow: 100_000 });
+    cm.addUserMessage('Hello');
+    cm.addAssistantMessage(fakeResponse('Hi'));
+    const status = cm.getBudgetStatus();
+    expect(status.modelContextWindow).toBe(100_000);
+    expect(status.contextUtilization).toBeGreaterThan(0);
+    expect(status.contextUtilization).toBeLessThan(1);
+    expect(status.compactionCount).toBe(0);
+  });
+
+  it('normalizes messages: merges consecutive user messages', () => {
+    const session = createSession('anthropic');
+    const cm = new ContextManager(session);
+    session.messages.push(
+      { role: 'user', content: 'Hello', timestamp: '' },
+      { role: 'user', content: 'World', timestamp: '' },
+      { role: 'assistant', content: 'Hi', timestamp: '' },
+    );
+    const normalized = cm.normalizeForAPI(session.messages);
+    expect(normalized).toHaveLength(2);
+    expect(normalized[0].content).toContain('Hello');
+    expect(normalized[0].content).toContain('World');
+    expect(normalized[1].role).toBe('assistant');
+  });
+
+  it('normalizes messages: strips compact boundaries', () => {
+    const session = createSession('anthropic');
+    const cm = new ContextManager(session);
+    session.messages.push(
+      { role: 'system', content: '[COMPACT_BOUNDARY]\nSummary here', timestamp: '' },
+      { role: 'user', content: 'Hello', timestamp: '' },
+      { role: 'assistant', content: 'Hi', timestamp: '' },
+    );
+    const normalized = cm.normalizeForAPI(session.messages);
+    expect(normalized).toHaveLength(2);
+    expect(normalized[0].role).toBe('user');
+  });
+
+  it('normalizes messages: truncates extremely long messages', () => {
+    const session = createSession('anthropic');
+    const cm = new ContextManager(session);
+    const longContent = 'x'.repeat(100_000);
+    session.messages.push(
+      { role: 'user', content: longContent, timestamp: '', tokenCount: 25_000 },
+    );
+    const normalized = cm.normalizeForAPI(session.messages);
+    expect(normalized[0].content.length).toBeLessThan(longContent.length);
+    expect(normalized[0].content).toContain('[... message truncated ...]');
+  });
+
+  it('assembles prompt using messages after compact boundary', () => {
+    const session = createSession('anthropic');
+    const cm = new ContextManager(session);
+    // Simulate a compacted session
+    session.messages.push(
+      { role: 'system', content: '[COMPACT_BOUNDARY]\nEarlier we discussed X', timestamp: '' },
+      { role: 'user', content: 'Continue with Y', timestamp: '' },
+    );
+    const { systemPrompt, userMessage } = cm.assemblePrompt();
+    expect(systemPrompt).toContain('Earlier we discussed X');
+    expect(userMessage).toBe('Continue with Y');
   });
 });

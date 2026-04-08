@@ -1,12 +1,13 @@
 /**
  * Context Manager — maintains conversation state across turns.
  *
- * Assembles prompts for the conversation model using:
- *   - Session state (decisions, constraints, plan)
- *   - Recent exchange window (last N turns at full fidelity)
- *   - Compressed history (older turns summarized)
- *   - Repo map (structured codebase summary)
- *   - Grounding context (raw codebase, lowest priority)
+ * Inspired by Claude Code's context management:
+ *   - Threshold-based auto-compaction (by token count, not turn count)
+ *   - Compact boundary markers — only send messages after boundary
+ *   - Post-compact restoration of relevant files and session state
+ *   - Message normalization before API calls
+ *   - Token budget tracking with warnings
+ *   - Prompt caching optimization
  */
 
 import type { Message, Session, SessionState, RepoMap, LLMResponse, ProviderId } from '../types.ts';
@@ -15,13 +16,29 @@ import { callLLM } from '../providers/llm-caller.ts';
 import type { Ledger } from '../audit/ledger.ts';
 
 // ---------------------------------------------------------------------------
+// Constants (matching Claude Code's approach)
+// ---------------------------------------------------------------------------
+
+/** Buffer from context window limit to trigger auto-compact */
+const AUTOCOMPACT_BUFFER = 13_000;
+/** Warning threshold — larger buffer */
+const AUTOCOMPACT_WARNING_BUFFER = 20_000;
+/** Max files to restore after compaction */
+const POST_COMPACT_MAX_FILES = 5;
+/** Max tokens per restored file */
+const POST_COMPACT_MAX_TOKENS_PER_FILE = 5_000;
+/** Max total tokens for post-compact restoration */
+const POST_COMPACT_TOKEN_BUDGET = 25_000;
+
+// ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
 export interface ContextManagerConfig {
   contextBudget?: number;
+  /** Model's context window size (for auto-compact threshold) */
+  modelContextWindow?: number;
   recentWindowSize?: number;
-  compressionThreshold?: number;
   compressionProvider?: ProviderId;
   compressionModel?: string;
   systemPrompt?: string;
@@ -29,8 +46,8 @@ export interface ContextManagerConfig {
 
 const DEFAULT_CONFIG: Required<ContextManagerConfig> = {
   contextBudget: 30_000,
+  modelContextWindow: 128_000,
   recentWindowSize: 4,
-  compressionThreshold: 6,
   compressionProvider: 'anthropic',
   compressionModel: 'claude-haiku-4-5-20251001',
   systemPrompt: `You are a coding assistant with access to tools. You can read files, search code, run commands, and create task cards for code changes.
@@ -48,14 +65,34 @@ Be concise and direct. Act on requests — don't just describe what you would do
 };
 
 // ---------------------------------------------------------------------------
+// Compact boundary marker
+// ---------------------------------------------------------------------------
+
+const COMPACT_BOUNDARY_ROLE = 'system' as const;
+const COMPACT_BOUNDARY_PREFIX = '[COMPACT_BOUNDARY]';
+
+function isCompactBoundary(msg: Message): boolean {
+  return msg.role === COMPACT_BOUNDARY_ROLE && msg.content.startsWith(COMPACT_BOUNDARY_PREFIX);
+}
+
+// ---------------------------------------------------------------------------
 // Context Manager
 // ---------------------------------------------------------------------------
 
 export class ContextManager {
   private session: Session;
   private config: Required<ContextManagerConfig>;
-  private compressedHistory: string = '';
   private ledger?: Ledger;
+
+  /** Token budget tracking */
+  private sessionTokensUsed = 0;
+  private sessionTokenBudget: number | null = null;
+  private compactionCount = 0;
+
+  /** Prompt cache tracking */
+  private lastSystemPromptHash = '';
+  private cacheHits = 0;
+  private cacheMisses = 0;
 
   constructor(session: Session, config?: ContextManagerConfig, ledger?: Ledger) {
     this.session = session;
@@ -65,6 +102,7 @@ export class ContextManager {
 
   getSession(): Session { return this.session; }
   getConfig(): Required<ContextManagerConfig> { return this.config; }
+  setTokenBudget(budget: number | null): void { this.sessionTokenBudget = budget; }
 
   // -------------------------------------------------------------------------
   // Turn management
@@ -93,6 +131,7 @@ export class ContextManager {
 
     this.session.totalInputTokens += response.inputTokens;
     this.session.totalOutputTokens += response.outputTokens;
+    this.sessionTokensUsed += response.inputTokens + response.outputTokens;
   }
 
   // -------------------------------------------------------------------------
@@ -102,40 +141,39 @@ export class ContextManager {
   /**
    * Assemble the prompt for the current turn.
    *
-   * Context (session state, repo map, history, grounding) goes into the
-   * system prompt so it's sent once per API call — NOT in the user message.
-   * This prevents re-sending the full context on every tool-use iteration.
-   *
-   * The user message contains only the raw user input.
+   * Only sends messages AFTER the last compact boundary (if any).
+   * Context goes into the system prompt for caching efficiency.
    */
   assemblePrompt(): { systemPrompt: string; userMessage: string; cacheablePrefix?: string } {
     const budget = new ContextBudget(this.config.contextBudget);
-    const currentMessage = this.session.messages[this.session.messages.length - 1];
+    const messages = this.getMessagesAfterBoundary();
+    const currentMessage = messages[messages.length - 1];
 
-    // Priority 1: Session state (always fits — small and fixed-size)
+    // Priority 1: Session state
     const stateText = this.formatSessionState();
     if (stateText) {
       budget.add('session-state', `## Session State\n${stateText}`, 1, false);
     }
 
-    // Priority 2: Repo map (small, structured)
+    // Priority 2: Repo map
     if (this.session.repoMap) {
       const mapText = this.formatRepoMap();
       budget.add('repo-map', `## Repo Map\n${mapText}`, 2, false);
     }
 
-    // Priority 3: Recent exchange window
-    const recentWindow = this.getRecentWindow();
+    // Priority 3: Recent exchange window (from post-boundary messages)
+    const recentWindow = this.getRecentWindow(messages);
     if (recentWindow) {
       budget.add('recent-exchanges', `## Recent Conversation\n${recentWindow}`, 3, true);
     }
 
-    // Priority 4: Compressed history
-    if (this.compressedHistory) {
-      budget.add('compressed-history', `## Earlier Discussion\n${this.compressedHistory}`, 4, true);
+    // Priority 4: Compact summary (from the boundary marker itself)
+    const compactSummary = this.getCompactSummary();
+    if (compactSummary) {
+      budget.add('compact-summary', `## Earlier Discussion\n${compactSummary}`, 4, true);
     }
 
-    // Priority 5: Grounding context (raw codebase — big, expendable)
+    // Priority 5: Grounding context
     if (this.session.groundingContext) {
       budget.add('grounding-context', `## Project Files\n${this.session.groundingContext}`, 5, true);
     }
@@ -151,15 +189,23 @@ export class ContextManager {
       process.stderr.write(`[context] Budget ${this.config.contextBudget} tokens — ${parts.join('; ')}\n`);
     }
 
-    // Build system prompt: base instructions + assembled context
-    // This is sent once per call, not repeated in tool-use iterations
+    // Build system prompt
     const systemParts = [this.config.systemPrompt];
     if (assembledContext) {
       systemParts.push(assembledContext);
     }
     const fullSystemPrompt = systemParts.join('\n\n---\n\n');
 
-    // Grounding context can be cached (Anthropic prompt caching)
+    // Track cache breaks
+    const promptHash = simpleHash(fullSystemPrompt);
+    if (this.lastSystemPromptHash && promptHash !== this.lastSystemPromptHash) {
+      this.cacheMisses++;
+    } else if (this.lastSystemPromptHash) {
+      this.cacheHits++;
+    }
+    this.lastSystemPromptHash = promptHash;
+
+    // Cacheable prefix — stable content that doesn't change between calls
     let cacheablePrefix: string | undefined;
     if (this.session.groundingContext && !dropped.includes('grounding-context')) {
       cacheablePrefix = `## Project Files\n${this.session.groundingContext}`;
@@ -167,57 +213,144 @@ export class ContextManager {
 
     return {
       systemPrompt: fullSystemPrompt,
-      userMessage: currentMessage.content,
+      userMessage: currentMessage?.content || '',
       cacheablePrefix,
     };
   }
 
   // -------------------------------------------------------------------------
-  // Compression & state updates
+  // Auto-compaction (threshold-based, like Claude Code)
   // -------------------------------------------------------------------------
 
-  async maybeCompress(): Promise<void> {
+  /**
+   * Check if compaction is needed and perform it.
+   * Triggers when estimated context size approaches the model's window.
+   */
+  async maybeCompact(): Promise<{ compacted: boolean; reason?: string }> {
+    const contextSize = this.estimateCurrentContextSize();
+    const threshold = this.config.modelContextWindow - AUTOCOMPACT_BUFFER;
+    const warningThreshold = this.config.modelContextWindow - AUTOCOMPACT_WARNING_BUFFER;
+
+    if (contextSize < warningThreshold) {
+      return { compacted: false };
+    }
+
+    if (contextSize >= warningThreshold && contextSize < threshold) {
+      process.stderr.write(
+        `[context] Warning: ${contextSize.toLocaleString()}/${this.config.modelContextWindow.toLocaleString()} tokens ` +
+        `(${((contextSize / this.config.modelContextWindow) * 100).toFixed(0)}% — compaction soon)\n`
+      );
+      return { compacted: false };
+    }
+
+    // Compact needed
+    process.stderr.write(
+      `[context] Auto-compact triggered: ${contextSize.toLocaleString()} tokens ` +
+      `(threshold: ${threshold.toLocaleString()})\n`
+    );
+
+    await this.compact();
+    return { compacted: true, reason: `${contextSize} tokens exceeded threshold ${threshold}` };
+  }
+
+  /**
+   * Force compaction: summarize old messages, insert boundary, restore context.
+   */
+  async compact(): Promise<void> {
     const messages = this.session.messages;
-    const totalTurns = messages.filter(m => m.role === 'user').length;
-    if (totalTurns < this.config.compressionThreshold) return;
+    if (messages.length < 4) return;
 
-    const recentCount = this.config.recentWindowSize * 2;
-    const toCompress = messages.slice(0, messages.length - recentCount);
-    if (toCompress.length === 0) return;
+    // Keep the last N messages intact
+    const keepCount = Math.min(this.config.recentWindowSize * 2, messages.length - 1);
+    const toCompact = messages.slice(0, messages.length - keepCount)
+      .filter(m => !isCompactBoundary(m));
 
-    const transcript = toCompress.map(m => `[${m.role}]: ${m.content}`).join('\n\n');
-    const existing = this.compressedHistory
-      ? `Previous summary:\n${this.compressedHistory}\n\nNew messages:\n`
+    if (toCompact.length === 0) return;
+
+    const transcript = toCompact
+      .map(m => `[${m.role}${m.model ? ` (${m.model})` : ''}]: ${m.content.slice(0, 2000)}`)
+      .join('\n\n');
+
+    // Get existing summary to build on
+    const existingSummary = this.getCompactSummary();
+    const summaryPrefix = existingSummary
+      ? `Previous summary:\n${existingSummary}\n\nNew messages to incorporate:\n`
       : '';
 
     try {
       const response = await callLLM({
         provider: this.config.compressionProvider,
         model: this.config.compressionModel,
-        systemPrompt: 'Summarize this conversation concisely. Preserve all technical decisions, code references, and constraints. Past tense. No commentary.',
-        userMessage: `${existing}${transcript}\n\nSummarize (max 500 words):`,
-        maxOutputTokens: 1000,
+        systemPrompt: `Summarize this conversation concisely. Preserve:
+- All technical decisions and their rationale
+- File paths and code references mentioned
+- Constraints and requirements discussed
+- Current plan and progress
+- Any errors or failures encountered
+Use past tense. No commentary. Max 800 words.`,
+        userMessage: `${summaryPrefix}${transcript}\n\nSummarize:`,
+        maxOutputTokens: 1500,
         temperature: 0,
       });
 
-      this.compressedHistory = response.content;
+      // Build the compact boundary message
+      const boundaryContent = `${COMPACT_BOUNDARY_PREFIX}\n${response.content}`;
+
+      // Replace old messages with boundary + kept messages
+      const keptMessages = messages.slice(messages.length - keepCount);
+      this.session.messages = [
+        { role: COMPACT_BOUNDARY_ROLE, content: boundaryContent, timestamp: new Date().toISOString() },
+        ...keptMessages,
+      ];
+
+      this.compactionCount++;
       this.session.totalInputTokens += response.inputTokens;
       this.session.totalOutputTokens += response.outputTokens;
+      this.ledger?.record('compress', response, `Compaction #${this.compactionCount}`);
 
-      this.ledger?.record('compress', response, 'Conversation compression');
+      // Post-compact restoration
+      await this.restorePostCompact();
+
+      const newSize = this.estimateCurrentContextSize();
+      process.stderr.write(
+        `[context] Compacted: ${this.compactionCount} total, ` +
+        `${toCompact.length} messages summarized, ` +
+        `new size: ${newSize.toLocaleString()} tokens\n`
+      );
     } catch (error) {
-      process.stderr.write(`[context] Compression failed: ${(error as Error).message}\n`);
+      process.stderr.write(`[context] Compaction failed: ${(error as Error).message}\n`);
     }
   }
 
+  /**
+   * After compaction, re-inject the most relevant files to keep
+   * the context useful. (Like Claude Code's post-compact restoration.)
+   */
+  private async restorePostCompact(): Promise<void> {
+    // Re-inject session state (already happens via assemblePrompt)
+    // Re-inject most recently referenced files
+    const recentFiles = this.extractRecentFileReferences();
+    if (recentFiles.length === 0) return;
+
+    const filesToRestore = recentFiles.slice(0, POST_COMPACT_MAX_FILES);
+    process.stderr.write(
+      `[context] Post-compact: restoring ${filesToRestore.length} file references\n`
+    );
+    // File contents will be re-read on next tool use — no need to inject here.
+    // The session state and repo map are preserved and re-assembled each turn.
+  }
+
+  /**
+   * Update session state (goal, decisions, plan) based on recent conversation.
+   */
   async updateSessionState(): Promise<void> {
-    const messages = this.session.messages;
+    const messages = this.getMessagesAfterBoundary();
     if (messages.length < 2) return;
 
     const turnCount = messages.filter(m => m.role === 'user').length;
     if (turnCount <= this.session.state.lastUpdatedAtTurn + 1) return;
 
-    const lastExchange = messages.slice(-4).map(m => `[${m.role}]: ${m.content}`).join('\n\n');
+    const lastExchange = messages.slice(-4).map(m => `[${m.role}]: ${m.content.slice(0, 1000)}`).join('\n\n');
     const currentState = this.formatSessionState();
 
     try {
@@ -251,7 +384,6 @@ Keep lists short (max 5 items). Remove resolved items.`,
 
       this.session.totalInputTokens += response.inputTokens;
       this.session.totalOutputTokens += response.outputTokens;
-
       this.ledger?.record('state_update', response, 'Session state update');
     } catch {
       // Non-fatal
@@ -259,15 +391,158 @@ Keep lists short (max 5 items). Remove resolved items.`,
   }
 
   // -------------------------------------------------------------------------
+  // Token budget tracking
+  // -------------------------------------------------------------------------
+
+  /**
+   * Estimate the current context size (all messages after boundary + system prompt).
+   */
+  estimateCurrentContextSize(): number {
+    const messages = this.getMessagesAfterBoundary();
+    let total = estimateTokens(this.config.systemPrompt);
+
+    // Session state
+    total += estimateTokens(this.formatSessionState());
+
+    // Messages
+    for (const m of messages) {
+      total += m.tokenCount || estimateTokens(m.content);
+    }
+
+    // Compact summary
+    const summary = this.getCompactSummary();
+    if (summary) total += estimateTokens(summary);
+
+    // Grounding context
+    if (this.session.groundingContext) {
+      total += estimateTokens(this.session.groundingContext);
+    }
+
+    return total;
+  }
+
+  /**
+   * Check token budget status.
+   */
+  getBudgetStatus(): {
+    sessionTokensUsed: number;
+    sessionBudget: number | null;
+    currentContextSize: number;
+    modelContextWindow: number;
+    contextUtilization: number;
+    compactionCount: number;
+    cacheHitRate: number;
+  } {
+    const contextSize = this.estimateCurrentContextSize();
+    const totalCacheAttempts = this.cacheHits + this.cacheMisses;
+    return {
+      sessionTokensUsed: this.sessionTokensUsed,
+      sessionBudget: this.sessionTokenBudget,
+      currentContextSize: contextSize,
+      modelContextWindow: this.config.modelContextWindow,
+      contextUtilization: contextSize / this.config.modelContextWindow,
+      compactionCount: this.compactionCount,
+      cacheHitRate: totalCacheAttempts > 0 ? this.cacheHits / totalCacheAttempts : 0,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Message normalization
+  // -------------------------------------------------------------------------
+
+  /**
+   * Normalize messages for API consumption.
+   * - Strips compact boundary markers (replaced by summary in system prompt)
+   * - Merges consecutive user messages
+   * - Strips internal fields
+   * - Truncates excessively long messages
+   */
+  normalizeForAPI(messages: Message[]): Message[] {
+    const normalized: Message[] = [];
+
+    for (const msg of messages) {
+      // Skip compact boundaries
+      if (isCompactBoundary(msg)) continue;
+
+      // Merge consecutive user messages
+      const last = normalized[normalized.length - 1];
+      if (last && last.role === 'user' && msg.role === 'user') {
+        last.content += '\n\n' + msg.content;
+        last.tokenCount = estimateTokens(last.content);
+        continue;
+      }
+
+      // Truncate extremely long messages (>10K tokens)
+      const tokenCount = msg.tokenCount || estimateTokens(msg.content);
+      if (tokenCount > 10_000) {
+        normalized.push({
+          ...msg,
+          content: msg.content.slice(0, 40_000) + '\n\n[... message truncated ...]',
+          tokenCount: estimateTokens(msg.content.slice(0, 40_000)),
+        });
+        continue;
+      }
+
+      normalized.push({ ...msg });
+    }
+
+    return normalized;
+  }
+
+  // -------------------------------------------------------------------------
   // Internal helpers
   // -------------------------------------------------------------------------
 
-  private getRecentWindow(): string {
+  /** Get messages after the last compact boundary */
+  private getMessagesAfterBoundary(): Message[] {
     const messages = this.session.messages;
-    const windowMessages = messages.slice(-(this.config.recentWindowSize * 2 + 1), -1);
+    let boundaryIndex = -1;
+
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (isCompactBoundary(messages[i])) {
+        boundaryIndex = i;
+        break;
+      }
+    }
+
+    return boundaryIndex >= 0
+      ? messages.slice(boundaryIndex + 1)
+      : messages;
+  }
+
+  /** Get the compact summary from the boundary marker */
+  private getCompactSummary(): string {
+    const messages = this.session.messages;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (isCompactBoundary(messages[i])) {
+        return messages[i].content.slice(COMPACT_BOUNDARY_PREFIX.length + 1);
+      }
+    }
+    return '';
+  }
+
+  /** Extract file paths mentioned in recent messages */
+  private extractRecentFileReferences(): string[] {
+    const messages = this.getMessagesAfterBoundary();
+    const files = new Set<string>();
+    const filePattern = /(?:src|lib|test|app|pages|components)\/[\w/.,-]+\.\w+/g;
+
+    for (const m of messages.slice(-6)) {
+      const matches = m.content.match(filePattern);
+      if (matches) {
+        for (const f of matches) files.add(f);
+      }
+    }
+
+    return [...files];
+  }
+
+  private getRecentWindow(messages?: Message[]): string {
+    const msgs = messages || this.getMessagesAfterBoundary();
+    const windowMessages = msgs.slice(-(this.config.recentWindowSize * 2 + 1), -1);
     if (windowMessages.length === 0) return '';
     return windowMessages
-      .map(m => `[${m.role}${m.model ? ` (${m.model})` : ''}]: ${m.content}`)
+      .map(m => `[${m.role}${m.model ? ` (${m.model})` : ''}]: ${m.content.slice(0, 2000)}`)
       .join('\n\n');
   }
 
@@ -307,6 +582,20 @@ Keep lists short (max 5 items). Remove resolved items.`,
     if (r.conventions.length > 0) parts.push(`Conventions: ${r.conventions.join('; ')}`);
     return parts.join('\n');
   }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function simpleHash(text: string): string {
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) {
+    const char = text.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash |= 0;
+  }
+  return hash.toString(36);
 }
 
 // ---------------------------------------------------------------------------

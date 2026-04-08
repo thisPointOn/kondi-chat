@@ -251,7 +251,7 @@ async function main(): Promise<void> {
         console.error(`\nError: ${(error as Error).message}`);
       }
 
-      await contextManager.maybeCompress();
+      await contextManager.maybeCompact();
       await contextManager.updateSessionState();
       rl.prompt();
       return;
@@ -278,7 +278,7 @@ async function main(): Promise<void> {
     }
 
     // Background maintenance
-    await contextManager.maybeCompress();
+    await contextManager.maybeCompact();
     await contextManager.updateSessionState();
 
     rl.prompt();
