@@ -128,6 +128,8 @@ interface UIBridge {
   addMessage: (msg: ChatMessage) => void;
   setStatus: (text: string) => void;
   updateLastAssistant: (update: Partial<ChatMessage>) => void;
+  addActivity: (entry: import('./ui/types.js').ActivityEntry) => void;
+  clearActivity: () => void;
 }
 
 function getUI(): UIBridge {
@@ -239,6 +241,11 @@ async function handleInput(
     const decision = router.select('discuss');
     respondingModel = decision.model.alias || decision.model.name;
     ui.setStatus(`${respondingModel} thinking${iteration > 0 ? ` (step ${iteration + 1})` : ''}...`);
+    ui.addActivity({
+      text: `${respondingModel} — ${decision.reason}`,
+      type: 'step',
+      timestamp: new Date().toISOString(),
+    });
 
     const response = await callLLM({
       provider: decision.model.provider,
@@ -301,11 +308,24 @@ async function handleInput(
     for (const tc of response.toolCalls) {
       const toolArgs = formatToolArgs(tc);
       ui.setStatus(`${respondingModel} > ${tc.name}(${toolArgs.slice(0, 40)})`);
+      ui.addActivity({
+        text: `${tc.name}(${toolArgs})`,
+        type: 'tool',
+        timestamp: new Date().toISOString(),
+      });
 
       const result = await executeTool(tc.name, tc.arguments, toolCtx);
       const capped = result.content.length > 3000
         ? result.content.slice(0, 3000) + `\n... (${result.content.length - 3000} chars truncated)`
         : result.content;
+
+      ui.addActivity({
+        text: result.isError
+          ? `${tc.name} failed: ${result.content.slice(0, 80)}`
+          : `${tc.name} → ${result.content.slice(0, 80).replace(/\n/g, ' ')}`,
+        type: result.isError ? 'error' : 'result',
+        timestamp: new Date().toISOString(),
+      });
 
       allToolCalls.push({
         name: tc.name,

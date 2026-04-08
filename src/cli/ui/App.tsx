@@ -13,7 +13,7 @@ import { ChatView } from './ChatView.js';
 import { DetailView } from './DetailView.js';
 import { InputBar } from './InputBar.js';
 import { StatusBar } from './StatusBar.js';
-import type { ChatMessage, AppState, ViewMode } from './types.js';
+import type { ChatMessage, AppState, ViewMode, ActivityEntry } from './types.js';
 
 export interface AppProps {
   onSubmit: (input: string) => Promise<void>;
@@ -31,6 +31,8 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
     isProcessing: false,
     viewMode: 'chat',
     statusText: initialStatus,
+    activity: [],
+    showActivity: false,
   });
 
   const [inputValue, setInputValue] = useState('');
@@ -83,6 +85,12 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
       return;
     }
 
+    // Ctrl+A — toggle expanded activity log
+    if (input === 'a' && key.ctrl) {
+      setState(s => ({ ...s, showActivity: !s.showActivity }));
+      return;
+    }
+
     // Arrow keys — scroll
     if (key.upArrow || (input === 'u' && key.ctrl)) {
       if (state.viewMode !== 'chat') {
@@ -118,6 +126,8 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
       isProcessing: true,
       viewMode: 'chat',
       statusText: 'thinking...',
+      activity: [],
+      showActivity: false,
     }));
     setInputValue('');
     setScrollOffset(0);
@@ -158,14 +168,24 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
     });
   }, []);
 
+  const addActivity = useCallback((entry: ActivityEntry) => {
+    setState(s => ({ ...s, activity: [...s.activity, entry] }));
+  }, []);
+
+  const clearActivity = useCallback(() => {
+    setState(s => ({ ...s, activity: [] }));
+  }, []);
+
   useEffect(() => {
     (globalThis as any).__kondiUI = {
       addMessage,
       setStatus,
       updateLastAssistant,
+      addActivity,
+      clearActivity,
       getState: () => state,
     };
-  }, [addMessage, setStatus, updateLastAssistant, state]);
+  }, [addMessage, setStatus, updateLastAssistant, addActivity, clearActivity, state]);
 
   const chatHeight = Math.max(rows - 6, 5);
 
@@ -188,16 +208,43 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
     );
   }
 
+  // Activity log height
+  const activityLines = state.showActivity
+    ? Math.min(state.activity.length, 12)
+    : (state.isProcessing && state.activity.length > 0 ? 1 : 0);
+  const adjustedChatHeight = Math.max(chatHeight - activityLines, 3);
+
   // Chat view — normal mode
   return (
     <Box flexDirection="column" height={rows}>
-      <Box flexDirection="column" flexGrow={1} height={chatHeight}>
+      <Box flexDirection="column" flexGrow={1} height={adjustedChatHeight}>
         <ChatView
           messages={state.messages}
-          maxHeight={chatHeight}
+          maxHeight={adjustedChatHeight}
           scrollOffset={scrollOffset}
         />
       </Box>
+
+      {/* Activity log — between chat and status */}
+      {activityLines > 0 && (
+        <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor="gray">
+          {state.showActivity ? (
+            // Expanded: show last N entries
+            state.activity.slice(-12).map((entry, i) => (
+              <Text key={i} color={entry.type === 'error' ? 'red' : entry.type === 'tool' ? 'cyan' : entry.type === 'result' ? 'gray' : 'yellow'} dimColor={entry.type === 'result'}>
+                {entry.type === 'step' ? '>' : entry.type === 'tool' ? '  >' : entry.type === 'result' ? '    ' : '  !'} {entry.text}
+              </Text>
+            ))
+          ) : (
+            // Collapsed: show just the latest entry
+            <Text color="yellow" dimColor>
+              {state.activity[state.activity.length - 1]?.text || ''}
+              {state.activity.length > 1 ? <Text dimColor> ({state.activity.length} steps — ^A to expand)</Text> : ''}
+            </Text>
+          )}
+        </Box>
+      )}
+
       <StatusBar
         status={state.statusText}
         isProcessing={state.isProcessing}

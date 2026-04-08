@@ -22,7 +22,7 @@ export function StatusBar({ status, isProcessing }: StatusBarProps) {
       </Box>
       <Box gap={2}>
         <Text dimColor>
-          Enter:send ^N:newline ^O:tools ^T:stats ↑↓:scroll ^C:exit
+          Enter:send ^N:newline ^A:activity ^O:tools ^T:stats ↑↓:scroll ^C:exit
         </Text>
       </Box>
     </Box>

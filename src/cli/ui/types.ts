@@ -34,9 +34,19 @@ export interface MessageStats {
 
 export type ViewMode = 'chat' | 'tools' | 'stats';
 
+export interface ActivityEntry {
+  text: string;
+  type: 'step' | 'tool' | 'result' | 'error';
+  timestamp: string;
+}
+
 export interface AppState {
   messages: ChatMessage[];
   isProcessing: boolean;
   viewMode: ViewMode;
   statusText: string;
+  /** Live activity log for the current turn */
+  activity: ActivityEntry[];
+  /** Show expanded activity log */
+  showActivity: boolean;
 }
