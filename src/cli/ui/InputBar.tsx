@@ -12,6 +12,7 @@ import React from 'react';
 import { Box, Text, useInput } from 'ink';
 
 const COMMANDS = [
+  // Slash commands (you run these)
   { cmd: '/switch', desc: '<provider> [model] — switch provider' },
   { cmd: '/models', desc: 'list models and aliases' },
   { cmd: '/models enable', desc: '<id> — enable a model' },
@@ -26,6 +27,19 @@ const COMMANDS = [
   { cmd: '/export', desc: 'export session to JSON' },
   { cmd: '/help', desc: 'show all commands' },
   { cmd: '/quit', desc: 'exit' },
+  // Agent tools (the LLM uses these automatically)
+  { cmd: '/tools', desc: '— list agent tools below' },
+];
+
+const AGENT_TOOL_LIST = [
+  { cmd: 'read_file', desc: 'read a file from the project' },
+  { cmd: 'write_file', desc: 'create or overwrite a file' },
+  { cmd: 'edit_file', desc: 'search/replace edit in a file' },
+  { cmd: 'list_files', desc: 'list directory contents' },
+  { cmd: 'search_code', desc: 'grep for patterns in code' },
+  { cmd: 'run_command', desc: 'run a shell command' },
+  { cmd: 'create_task', desc: 'dispatch a coding task (execute → verify → reflect)' },
+  { cmd: 'update_plan', desc: 'update session goal, plan, decisions' },
 ];
 
 interface InputBarProps {
@@ -145,12 +159,17 @@ function getSuggestions(input: string, aliases: string[]): Suggestion[] {
   const firstLine = input.split('\n')[0];
   if (!firstLine) return [];
 
+  // /tools — show agent tools
+  if (firstLine.toLowerCase() === '/tools') {
+    return AGENT_TOOL_LIST.map(t => ({ value: t.cmd, desc: t.desc }));
+  }
+
   // / commands
   if (firstLine.startsWith('/')) {
     const typed = firstLine.toLowerCase();
     return COMMANDS
       .filter(c => c.cmd.toLowerCase().startsWith(typed))
-      .slice(0, 8)
+      .slice(0, 16)
       .map(c => ({ value: c.cmd, desc: c.desc }));
   }
 
