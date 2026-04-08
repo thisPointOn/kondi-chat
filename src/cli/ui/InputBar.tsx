@@ -27,6 +27,12 @@ const COMMANDS = [
   { cmd: '/export', desc: 'export session to JSON' },
   { cmd: '/help', desc: 'show all commands' },
   { cmd: '/quit', desc: 'exit' },
+  // MCP
+  { cmd: '/mcp', desc: 'list MCP servers and tools' },
+  { cmd: '/mcp add', desc: '<name> <cmd> [args] — add local server' },
+  { cmd: '/mcp add', desc: '<name> http <url> — add remote server' },
+  { cmd: '/mcp remove', desc: '<name> — remove a server' },
+  { cmd: '/mcp reconnect', desc: 'reconnect all servers' },
   // Agent tools (the LLM uses these automatically)
   { cmd: '/tools', desc: '— list agent tools below' },
 ];

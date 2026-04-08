@@ -16,11 +16,14 @@ import { ContextManager, createSession } from '../context/manager.ts';
 import { bootstrapDirectory, type BootstrapDepth } from '../context/bootstrap.ts';
 import { estimateTokens } from '../context/budget.ts';
 import { Ledger, estimateCost } from '../audit/ledger.ts';
-import { AGENT_TOOLS, executeTool, type ToolContext } from '../engine/tools.ts';
+import { AGENT_TOOLS, type ToolContext } from '../engine/tools.ts';
 import { ModelRegistry } from '../router/registry.ts';
 import { RuleRouter } from '../router/rules.ts';
 import { RoutingCollector } from '../router/collector.ts';
 import { EmbeddingService } from '../router/embeddings.ts';
+import { McpClientManager } from '../mcp/client.ts';
+import { loadMcpConfig, saveMcpServer, removeMcpServer } from '../mcp/config.ts';
+import { ToolManager } from '../mcp/tool-manager.ts';
 import { App } from './ui/App.js';
 import type { ChatMessage, ToolCallDisplay, MessageStats } from './ui/types.js';
 
@@ -149,12 +152,15 @@ async function handleInput(
   collector: RoutingCollector,
   registry: ModelRegistry,
   toolCtx: ToolContext,
+  toolManager: ToolManager,
+  mcpClient: McpClientManager,
+  workingDir: string,
 ): Promise<void> {
   const ui = getUI();
 
   // Slash commands
   if (input.startsWith('/')) {
-    const output = await handleCommand(input, session, contextManager, ledger, registry, collector, toolCtx);
+    const output = await handleCommand(input, session, contextManager, ledger, registry, collector, toolCtx, mcpClient, toolManager, workingDir);
     ui.addMessage({
       id: `msg-${Date.now()}`,
       role: 'system',
@@ -269,7 +275,7 @@ async function handleInput(
       model: decision.model.id,
       systemPrompt,
       messages,
-      tools: AGENT_TOOLS,
+      tools: toolManager.getTools('discuss'),
       maxOutputTokens: 8192,
       cacheablePrefix,
       stream: true,
@@ -356,7 +362,7 @@ async function handleInput(
         timestamp: new Date().toISOString(),
       });
 
-      const result = await executeTool(tc.name, tc.arguments, toolCtx);
+      const result = await toolManager.execute(tc.name, tc.arguments, toolCtx);
       const capped = result.content.length > 3000
         ? result.content.slice(0, 3000) + `\n... (${result.content.length - 3000} chars truncated)`
         : result.content;
@@ -450,6 +456,9 @@ async function handleCommand(
   registry: ModelRegistry,
   collector: RoutingCollector,
   toolCtx: ToolContext,
+  mcpClient: McpClientManager,
+  toolManager: ToolManager,
+  workingDir: string,
 ): Promise<string> {
   const parts = input.split(/\s+/);
   const cmd = parts[0];
@@ -556,6 +565,59 @@ async function handleCommand(
       return `Exported to ${filename}`;
     }
 
+    case '/mcp': {
+      const subcmd = parts[1];
+      if (!subcmd || subcmd === 'list') {
+        const summary = toolManager.getSummary();
+        return [
+          mcpClient.format(),
+          '',
+          `Tools: ${summary.builtIn} built-in + ${summary.mcp} MCP = ${summary.builtIn + summary.mcp} total`,
+        ].join('\n');
+      }
+      if (subcmd === 'add' && parts[2]) {
+        const name = parts[2];
+        if (parts[3] === 'http' && parts[4]) {
+          // Remote: /mcp add name http https://url
+          const cfg = { type: 'http' as const, url: parts[4] };
+          saveMcpServer(workingDir, name, cfg);
+          const state = await mcpClient.connect(name, { ...cfg, scope: 'project' as const });
+          return state.status === 'connected'
+            ? `Added remote server ${name} (${state.tools.length} tools)`
+            : `Added ${name} but connection failed: ${state.error}`;
+        }
+        if (parts[3]) {
+          // Local: /mcp add name command [args...]
+          const cfg = { command: parts[3], args: parts.slice(4) };
+          saveMcpServer(workingDir, name, cfg);
+          const state = await mcpClient.connect(name, { ...cfg, scope: 'project' as const });
+          return state.status === 'connected'
+            ? `Added local server ${name} (${state.tools.length} tools)`
+            : `Added ${name} but connection failed: ${state.error}`;
+        }
+        return 'Usage: /mcp add <name> <command> [args...] or /mcp add <name> http <url>';
+      }
+      if (subcmd === 'remove' && parts[2]) {
+        await mcpClient.disconnect(parts[2]);
+        removeMcpServer(workingDir, parts[2]);
+        return `Removed ${parts[2]}`;
+      }
+      if (subcmd === 'reconnect') {
+        const configs = loadMcpConfig(workingDir);
+        await mcpClient.disconnectAll();
+        await mcpClient.connectAll(configs);
+        return mcpClient.format();
+      }
+      return [
+        'Usage:',
+        '  /mcp                        List servers and tools',
+        '  /mcp add <name> <cmd> [args]  Add local stdio server',
+        '  /mcp add <name> http <url>    Add remote HTTP server',
+        '  /mcp remove <name>            Remove a server',
+        '  /mcp reconnect                Reconnect all servers',
+      ].join('\n');
+    }
+
     case '/help':
       return [
         'Commands:',
@@ -567,19 +629,24 @@ async function handleCommand(
         '  /tasks                       List task cards',
         '  /ledger [phase]              Audit ledger',
         '  /cost                        Cost breakdown',
+        '  /mcp                         List MCP servers and tools',
+        '  /mcp add <name> <cmd> [args]  Add local MCP server',
+        '  /mcp add <name> http <url>    Add remote MCP server',
+        '  /mcp remove <name>            Remove an MCP server',
         '  /export                      Export session to JSON',
         '',
         '@mentions:',
         '  @<alias> <message>           Send to a specific model',
         '',
         'Keyboard:',
-        '  Ctrl+Enter  Send  |  Ctrl+O  Toggle tools  |  Ctrl+T  Toggle stats  |  Ctrl+C  Exit',
+        '  Enter:send  ^N:newline  ^O:tools  ^T:stats  ^M:message  ^A:activity  ^C:exit',
       ].join('\n');
 
     case '/quit':
     case '/exit': {
       const sessionPath = resolve(toolCtx.workingDir, '.kondi-chat', `${session.id}-session.json`);
       writeFileSync(sessionPath, JSON.stringify(session, null, 2));
+      await mcpClient.disconnectAll();
       process.exit(0);
     }
 
@@ -636,6 +703,15 @@ async function main(): Promise<void> {
   const embeddingService = new EmbeddingService(storageDir);
   const collector = new RoutingCollector(storageDir, embeddingService);
 
+  // MCP servers
+  const mcpClient = new McpClientManager();
+  const mcpConfigs = loadMcpConfig(workingDir);
+  if (mcpConfigs.size > 0) {
+    process.stderr.write(`[mcp] Connecting to ${mcpConfigs.size} server(s)...\n`);
+    await mcpClient.connectAll(mcpConfigs);
+  }
+  const toolManager = new ToolManager(mcpClient);
+
   // Bootstrap
   if (!args.noBootstrap) {
     const depth: BootstrapDepth = args.deep ? 'deep' : 'light';
@@ -679,7 +755,7 @@ async function main(): Promise<void> {
 
   // Render Ink app
   const onSubmit = async (input: string) => {
-    await handleInput(input, session, contextManager, ledger, router, collector, registry, toolCtx);
+    await handleInput(input, session, contextManager, ledger, router, collector, registry, toolCtx, toolManager, mcpClient, workingDir);
   };
 
   render(<App onSubmit={onSubmit} initialStatus={initialStatus} aliases={aliases} />);
