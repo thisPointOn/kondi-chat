@@ -24,7 +24,7 @@ export function StatusBar({ status, isProcessing, showToolOutput, showTokenStats
       </Box>
       <Box gap={2}>
         <Text dimColor>
-          Enter:send ^N:newline ^O:tools{showToolOutput ? '(on)' : ''} ^T:stats{showTokenStats ? '(on)' : ''} ^C:exit
+          Enter:send ^N:newline ^O:{showToolOutput ? 'hide' : 'show'} tools ^T:{showTokenStats ? 'hide' : 'show'} stats ^C:exit
         </Text>
       </Box>
     </Box>

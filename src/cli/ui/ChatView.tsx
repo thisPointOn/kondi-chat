@@ -1,12 +1,12 @@
 /**
  * ChatView — scrollable message display.
  *
- * Shows the last N messages that fit in the viewport.
- * User messages are highlighted, assistant messages show the model label.
- * Tool output and token stats are collapsible.
+ * Renders messages bottom-up: always shows the most recent messages
+ * that fit in the viewport. When stats/tools expand, older messages
+ * scroll off the top rather than clipping the bottom.
  */
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Box, Text } from 'ink';
 import type { ChatMessage } from './types.js';
 
@@ -17,29 +17,91 @@ interface ChatViewProps {
   maxHeight: number;
 }
 
+/** Estimate how many terminal lines a message will take */
+function estimateMessageHeight(
+  msg: ChatMessage,
+  showToolOutput: boolean,
+  showTokenStats: boolean,
+  termWidth: number,
+): number {
+  let lines = 0;
+
+  if (msg.role === 'user') {
+    // Bold blue text — estimate wrap
+    lines += Math.ceil(msg.content.length / Math.max(termWidth - 4, 40));
+    lines += 1; // spacing
+    return lines;
+  }
+
+  if (msg.role === 'system') {
+    lines += Math.ceil(msg.content.length / Math.max(termWidth - 4, 40));
+    lines += 1;
+    return lines;
+  }
+
+  // Assistant: label + content + optional tool calls + optional stats
+  lines += 1; // [model]:
+  const contentLines = msg.content.split('\n');
+  for (const cl of contentLines) {
+    lines += Math.max(1, Math.ceil(cl.length / Math.max(termWidth - 6, 40)));
+  }
+
+  if (showToolOutput && msg.toolCalls) {
+    for (const tc of msg.toolCalls) {
+      lines += 1; // tool name
+      if (tc.result) lines += 1; // result preview
+    }
+  }
+
+  if (showTokenStats && msg.stats) {
+    lines += 1;
+  }
+
+  lines += 1; // spacing
+  return lines;
+}
+
 export function ChatView({ messages, showToolOutput, showTokenStats, maxHeight }: ChatViewProps) {
   if (messages.length === 0) {
     return (
       <Box flexDirection="column" paddingX={1}>
-        <Text dimColor>No messages yet. Type a message and press Ctrl+Enter to send.</Text>
-        <Text dimColor>Ctrl+O: toggle tool output | Ctrl+T: toggle token stats</Text>
+        <Text dimColor>No messages yet. Type a message and press Enter to send.</Text>
+        <Text dimColor>^O: toggle tool output | ^T: toggle token stats</Text>
       </Box>
     );
   }
 
-  // Render messages from the bottom — show as many as fit
-  const rendered = messages.map((msg, i) => (
-    <MessageBubble
-      key={msg.id}
-      message={msg}
-      showToolOutput={showToolOutput}
-      showTokenStats={showTokenStats}
-    />
-  ));
+  // Pick which messages to show — work backwards from the newest
+  const termWidth = process.stdout.columns || 80;
+  const visibleMessages = useMemo(() => {
+    const result: ChatMessage[] = [];
+    let usedHeight = 0;
+
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const h = estimateMessageHeight(messages[i], showToolOutput, showTokenStats, termWidth);
+      if (usedHeight + h > maxHeight && result.length > 0) break;
+      result.unshift(messages[i]);
+      usedHeight += h;
+    }
+
+    return result;
+  }, [messages, showToolOutput, showTokenStats, maxHeight, termWidth]);
+
+  const truncated = visibleMessages.length < messages.length;
 
   return (
-    <Box flexDirection="column" paddingX={1} overflow="hidden">
-      {rendered}
+    <Box flexDirection="column" paddingX={1}>
+      {truncated && (
+        <Text dimColor>--- {messages.length - visibleMessages.length} earlier messages ---</Text>
+      )}
+      {visibleMessages.map((msg) => (
+        <MessageBubble
+          key={msg.id}
+          message={msg}
+          showToolOutput={showToolOutput}
+          showTokenStats={showTokenStats}
+        />
+      ))}
     </Box>
   );
 }
@@ -64,7 +126,7 @@ function MessageBubble({
   if (message.role === 'system') {
     return (
       <Box marginY={0}>
-        <Text color="red">{message.content}</Text>
+        <Text color="yellow">{message.content}</Text>
       </Box>
     );
   }
@@ -76,11 +138,11 @@ function MessageBubble({
     <Box marginY={0} flexDirection="column">
       <Text bold color="green">[{label}]: </Text>
       <Box marginLeft={2} flexDirection="column">
-        <Text>{message.content}</Text>
+        <Text wrap="wrap">{message.content}</Text>
 
         {/* Tool calls — collapsible */}
         {showToolOutput && message.toolCalls && message.toolCalls.length > 0 && (
-          <Box flexDirection="column" marginTop={0} marginLeft={1}>
+          <Box flexDirection="column" marginLeft={1}>
             {message.toolCalls.map((tc, i) => (
               <Box key={i} flexDirection="column">
                 <Text dimColor>  {tc.isError ? '!' : '>'} {tc.name}({tc.args})</Text>
@@ -94,9 +156,9 @@ function MessageBubble({
 
         {/* Token stats — collapsible */}
         {showTokenStats && message.stats && (
-          <Box marginTop={0}>
+          <Box>
             <Text dimColor>
-              [{message.stats.models.join(', ')}] {message.stats.inputTokens.toLocaleString()}in/{message.stats.outputTokens.toLocaleString()}out ${message.stats.costUsd.toFixed(4)}{message.stats.iterations > 1 ? ` (${message.stats.iterations} iterations)` : ''}
+              [{message.stats.models.join(', ')}] {message.stats.inputTokens.toLocaleString()}in/{message.stats.outputTokens.toLocaleString()}out ${message.stats.costUsd.toFixed(4)}{message.stats.iterations > 1 ? ` (${message.stats.iterations} iters)` : ''}
             </Text>
           </Box>
         )}
