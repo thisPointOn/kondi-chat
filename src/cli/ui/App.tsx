@@ -1,15 +1,17 @@
 /**
  * Main App component — the root of the Ink TUI.
  *
- * Two modes:
- *   - Chat mode: scrollable messages + input bar at bottom
- *   - Detail mode (tools/stats): full-screen view of a message's
- *     tool calls or token stats. Escape returns to chat.
+ * Uses Ink's Static component for committed messages (never re-render)
+ * and a dynamic area for the active/streaming message + input.
+ * This prevents long chat histories from causing render overflow.
+ *
+ * Modes:
+ *   - chat: scrollable messages + input bar
+ *   - tools/stats/message: full-screen detail view, Escape returns
  */
 
 import React, { useState, useCallback, useEffect } from 'react';
-import { Box, Text, useInput, useApp, useStdout } from 'ink';
-import { ChatView } from './ChatView.js';
+import { Box, Text, Static, useInput, useApp, useStdout } from 'ink';
 import { DetailView } from './DetailView.js';
 import { InputBar } from './InputBar.js';
 import { StatusBar } from './StatusBar.js';
@@ -19,6 +21,19 @@ export interface AppProps {
   onSubmit: (input: string) => Promise<void>;
   initialStatus: string;
   aliases: string[];
+}
+
+/** Max lines for the active streaming message before truncation */
+const MAX_ACTIVE_LINES = 20;
+
+function truncate(text: string, maxLines: number): { display: string; full: string; truncated: boolean } {
+  const lines = text.split('\n');
+  if (lines.length <= maxLines) return { display: text, full: text, truncated: false };
+  return {
+    display: lines.slice(-maxLines).join('\n'),
+    full: text,
+    truncated: true,
+  };
 }
 
 export function App({ onSubmit, initialStatus, aliases }: AppProps) {
@@ -36,89 +51,48 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
   });
 
   const [inputValue, setInputValue] = useState('');
-  const [scrollOffset, setScrollOffset] = useState(0);
-  /** Scroll offset within detail view */
   const [detailScroll, setDetailScroll] = useState(0);
 
-  // Find the last assistant message (for detail views)
-  const lastAssistantMsg = [...state.messages].reverse().find(m => m.role === 'assistant');
+  // Committed messages (rendered via Static — never re-render)
+  const [committed, setCommitted] = useState<ChatMessage[]>([]);
+  // Active message being streamed (rendered dynamically)
+  const [activeMessage, setActiveMessage] = useState<ChatMessage | null>(null);
 
   useInput((input, key) => {
-    // Ctrl+C to exit
-    if (input === 'c' && key.ctrl) {
-      exit();
-      return;
-    }
+    if (input === 'c' && key.ctrl) { exit(); return; }
 
-    // Escape — return to chat from detail view, or clear input in chat
     if (key.escape) {
       if (state.viewMode !== 'chat') {
         setState(s => ({ ...s, viewMode: 'chat' }));
         setDetailScroll(0);
-        return;
       }
-      // In chat mode, escape clears input (handled by InputBar)
       return;
     }
 
-    // Ctrl+O — open/close tools detail view
     if (input === 'o' && key.ctrl) {
-      if (state.viewMode === 'tools') {
-        setState(s => ({ ...s, viewMode: 'chat' }));
-        setDetailScroll(0);
-      } else {
-        setState(s => ({ ...s, viewMode: 'tools' }));
-        setDetailScroll(0);
-      }
+      setState(s => ({ ...s, viewMode: s.viewMode === 'tools' ? 'chat' : 'tools' }));
+      setDetailScroll(0);
       return;
     }
-
-    // Ctrl+T — open/close stats detail view
     if (input === 't' && key.ctrl) {
-      if (state.viewMode === 'stats') {
-        setState(s => ({ ...s, viewMode: 'chat' }));
-        setDetailScroll(0);
-      } else {
-        setState(s => ({ ...s, viewMode: 'stats' }));
-        setDetailScroll(0);
-      }
+      setState(s => ({ ...s, viewMode: s.viewMode === 'stats' ? 'chat' : 'stats' }));
+      setDetailScroll(0);
       return;
     }
-
-    // Ctrl+A — toggle expanded activity log
+    if (input === 'm' && key.ctrl) {
+      setState(s => ({ ...s, viewMode: s.viewMode === 'message' ? 'chat' : 'message' }));
+      setDetailScroll(0);
+      return;
+    }
     if (input === 'a' && key.ctrl) {
       setState(s => ({ ...s, showActivity: !s.showActivity }));
       return;
     }
 
-    // Ctrl+M — open full message view (last assistant message)
-    if (input === 'm' && key.ctrl) {
-      if (state.viewMode === 'message') {
-        setState(s => ({ ...s, viewMode: 'chat' }));
-        setDetailScroll(0);
-      } else {
-        setState(s => ({ ...s, viewMode: 'message' }));
-        setDetailScroll(0);
-      }
-      return;
-    }
-
-    // Arrow keys — scroll
-    if (key.upArrow || (input === 'u' && key.ctrl)) {
-      if (state.viewMode !== 'chat') {
-        setDetailScroll(s => s + 3);
-      } else {
-        setScrollOffset(s => Math.min(s + 3, Math.max(state.messages.length - 1, 0)));
-      }
-      return;
-    }
-    if (key.downArrow || (input === 'd' && key.ctrl)) {
-      if (state.viewMode !== 'chat') {
-        setDetailScroll(s => Math.max(s - 3, 0));
-      } else {
-        setScrollOffset(s => Math.max(s - 3, 0));
-      }
-      return;
+    // Scroll in detail views
+    if (state.viewMode !== 'chat') {
+      if (key.upArrow) { setDetailScroll(s => s + 3); return; }
+      if (key.downArrow) { setDetailScroll(s => Math.max(s - 3, 0)); return; }
     }
   });
 
@@ -132,6 +106,10 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
       timestamp: new Date().toISOString(),
     };
 
+    // Commit the user message immediately
+    setCommitted(c => [...c, userMsg]);
+    setActiveMessage(null);
+
     setState(s => ({
       ...s,
       messages: [...s.messages, userMsg],
@@ -142,25 +120,33 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
       showActivity: false,
     }));
     setInputValue('');
-    setScrollOffset(0);
 
     try {
       await onSubmit(text.trim());
     } catch (error) {
-      addMessage({
+      const errMsg: ChatMessage = {
         id: `msg-${Date.now()}`,
         role: 'system',
         content: `Error: ${(error as Error).message}`,
         timestamp: new Date().toISOString(),
-      });
+      };
+      setCommitted(c => [...c, errMsg]);
+      setState(s => ({ ...s, messages: [...s.messages, errMsg] }));
     }
 
     setState(s => ({ ...s, isProcessing: false, statusText: '' }));
   }, [state.isProcessing, onSubmit]);
 
+  // UI bridge methods
   const addMessage = useCallback((msg: ChatMessage) => {
     setState(s => ({ ...s, messages: [...s.messages, msg] }));
-    setScrollOffset(0);
+    // If it's an assistant message, set it as active (for streaming)
+    if (msg.role === 'assistant') {
+      setActiveMessage(msg);
+    } else {
+      // System messages go straight to committed
+      setCommitted(c => [...c, msg]);
+    }
   }, []);
 
   const setStatus = useCallback((text: string) => {
@@ -168,6 +154,7 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
   }, []);
 
   const updateLastAssistant = useCallback((update: Partial<ChatMessage>) => {
+    setActiveMessage(prev => prev ? { ...prev, ...update } : prev);
     setState(s => {
       const msgs = [...s.messages];
       for (let i = msgs.length - 1; i >= 0; i--) {
@@ -188,20 +175,23 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
     setState(s => ({ ...s, activity: [] }));
   }, []);
 
+  // Commit the active message when processing finishes
+  useEffect(() => {
+    if (!state.isProcessing && activeMessage) {
+      setCommitted(c => [...c, activeMessage]);
+      setActiveMessage(null);
+    }
+  }, [state.isProcessing, activeMessage]);
+
   useEffect(() => {
     (globalThis as any).__kondiUI = {
-      addMessage,
-      setStatus,
-      updateLastAssistant,
-      addActivity,
-      clearActivity,
+      addMessage, setStatus, updateLastAssistant,
+      addActivity, clearActivity,
       getState: () => state,
     };
   }, [addMessage, setStatus, updateLastAssistant, addActivity, clearActivity, state]);
 
-  const chatHeight = Math.max(rows - 6, 5);
-
-  // Detail view — full screen overlay
+  // Detail views — full screen overlay
   if (state.viewMode !== 'chat') {
     return (
       <Box flexDirection="column" height={rows}>
@@ -213,54 +203,88 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
         />
         <Box paddingX={1}>
           <Text dimColor>
-            Esc:back to chat ↑↓:scroll {state.viewMode === 'tools' ? '^T:switch to stats' : '^O:switch to tools'}
+            Esc:back ↑↓:scroll
+            {state.viewMode === 'tools' ? ' ^T:stats ^M:message' :
+             state.viewMode === 'stats' ? ' ^O:tools ^M:message' :
+             ' ^O:tools ^T:stats'}
           </Text>
         </Box>
       </Box>
     );
   }
 
-  // Activity log height
+  // Chat view
   const activityLines = state.showActivity
-    ? Math.min(state.activity.length, 12)
+    ? Math.min(state.activity.length, 10)
     : (state.isProcessing && state.activity.length > 0 ? 1 : 0);
-  const adjustedChatHeight = Math.max(chatHeight - activityLines, 3);
 
-  // Chat view — normal mode
+  // Active message display (streaming)
+  const activeDisplay = activeMessage ? truncate(activeMessage.content, MAX_ACTIVE_LINES) : null;
+
   return (
-    <Box flexDirection="column" height={rows}>
-      <Box flexDirection="column" flexGrow={1} height={adjustedChatHeight}>
-        <ChatView
-          messages={state.messages}
-          maxHeight={adjustedChatHeight}
-          scrollOffset={scrollOffset}
-        />
-      </Box>
+    <Box flexDirection="column">
+      {/* Committed messages — Static never re-renders these */}
+      <Static items={committed}>
+        {(msg) => (
+          <Box key={msg.id} paddingX={1}>
+            {msg.role === 'user' ? (
+              <Text bold color="blue">{msg.content}</Text>
+            ) : msg.role === 'system' ? (
+              <Text color="yellow">{msg.content}</Text>
+            ) : (
+              <Box flexDirection="column">
+                <Box>
+                  <Text bold color="green">[{msg.modelLabel || 'assistant'}]</Text>
+                  {msg.stats && <Text dimColor> (${msg.stats.costUsd.toFixed(4)})</Text>}
+                  {msg.toolCalls && msg.toolCalls.length > 0 && (
+                    <Text dimColor> ({msg.toolCalls.length} tools)</Text>
+                  )}
+                </Box>
+                <Box marginLeft={2}>
+                  <Text wrap="wrap">{msg.content}</Text>
+                </Box>
+              </Box>
+            )}
+          </Box>
+        )}
+      </Static>
 
-      {/* Activity log — between chat and status */}
+      {/* Active streaming message */}
+      {activeMessage && activeDisplay && (
+        <Box paddingX={1} flexDirection="column">
+          <Box>
+            <Text bold color="green">[{activeMessage.modelLabel || '...'}]</Text>
+            {state.isProcessing && <Text color="yellow"> streaming...</Text>}
+          </Box>
+          <Box marginLeft={2}>
+            {activeDisplay.truncated && (
+              <Text dimColor>... ({activeDisplay.full.split('\n').length - MAX_ACTIVE_LINES} lines above — ^M for full)\n</Text>
+            )}
+            <Text wrap="wrap">{activeDisplay.display}</Text>
+          </Box>
+        </Box>
+      )}
+
+      {/* Activity log */}
       {activityLines > 0 && (
         <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor="gray">
           {state.showActivity ? (
-            // Expanded: show last N entries
-            state.activity.slice(-12).map((entry, i) => (
+            state.activity.slice(-10).map((entry, i) => (
               <Text key={i} color={entry.type === 'error' ? 'red' : entry.type === 'tool' ? 'cyan' : entry.type === 'result' ? 'gray' : 'yellow'} dimColor={entry.type === 'result'}>
                 {entry.type === 'step' ? '>' : entry.type === 'tool' ? '  >' : entry.type === 'result' ? '    ' : '  !'} {entry.text}
               </Text>
             ))
           ) : (
-            // Collapsed: show just the latest entry
             <Text color="yellow" dimColor>
               {state.activity[state.activity.length - 1]?.text || ''}
-              {state.activity.length > 1 ? <Text dimColor> ({state.activity.length} steps — ^A to expand)</Text> : ''}
+              {state.activity.length > 1 && <Text dimColor> ({state.activity.length} steps — ^A expand)</Text>}
             </Text>
           )}
         </Box>
       )}
 
-      <StatusBar
-        status={state.statusText}
-        isProcessing={state.isProcessing}
-      />
+      {/* Status + Input */}
+      <StatusBar status={state.statusText} isProcessing={state.isProcessing} />
       <InputBar
         value={inputValue}
         onChange={setInputValue}
