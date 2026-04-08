@@ -32,7 +32,7 @@ export interface MessageStats {
   models: string[];
 }
 
-export type ViewMode = 'chat' | 'tools' | 'stats';
+export type ViewMode = 'chat' | 'tools' | 'stats' | 'message';
 
 export interface ActivityEntry {
   text: string;

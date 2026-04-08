@@ -91,6 +91,18 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
       return;
     }
 
+    // Ctrl+M — open full message view (last assistant message)
+    if (input === 'm' && key.ctrl) {
+      if (state.viewMode === 'message') {
+        setState(s => ({ ...s, viewMode: 'chat' }));
+        setDetailScroll(0);
+      } else {
+        setState(s => ({ ...s, viewMode: 'message' }));
+        setDetailScroll(0);
+      }
+      return;
+    }
+
     // Arrow keys — scroll
     if (key.upArrow || (input === 'u' && key.ctrl)) {
       if (state.viewMode !== 'chat') {

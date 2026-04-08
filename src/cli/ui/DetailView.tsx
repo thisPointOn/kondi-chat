@@ -17,7 +17,8 @@ interface DetailViewProps {
 }
 
 export function DetailView({ messages, mode, maxHeight, scrollOffset }: DetailViewProps) {
-  const title = mode === 'tools' ? 'Tool Calls' : 'Token Stats';
+  const titles: Record<string, string> = { tools: 'Tool Calls', stats: 'Token Stats', message: 'Full Message' };
+  const title = titles[mode] || mode;
 
   // Build all lines for the detail view
   const allLines = useMemo(() => {
@@ -25,6 +26,22 @@ export function DetailView({ messages, mode, maxHeight, scrollOffset }: DetailVi
 
     lines.push({ text: `═══ ${title} ═══`, bold: true });
     lines.push({ text: '' });
+
+    // Message mode — show full content of last assistant/system message
+    if (mode === 'message') {
+      const lastMsg = [...messages].reverse().find(m => m.role === 'assistant' || m.role === 'system');
+      if (lastMsg) {
+        if (lastMsg.modelLabel) {
+          lines.push({ text: `[${lastMsg.modelLabel}]`, color: 'green', bold: true });
+        }
+        for (const line of lastMsg.content.split('\n')) {
+          lines.push({ text: line });
+        }
+      } else {
+        lines.push({ text: 'No messages to show.', dim: true });
+      }
+      return lines;
+    }
 
     for (const msg of messages) {
       if (msg.role === 'user') {

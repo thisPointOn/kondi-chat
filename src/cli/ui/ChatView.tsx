@@ -1,15 +1,17 @@
 /**
  * ChatView — scrollable message display (chat mode).
  *
- * Shows messages in a clean chat format. Tool output and stats
- * are viewed in separate full-screen detail views (Ctrl+O / Ctrl+T).
- *
- * Small inline indicators show when a message has tools/stats available.
+ * Messages are truncated to fit the viewport. Long responses show
+ * a preview with a hint to press Ctrl+M to read the full message.
+ * Tool output and stats are in separate detail views (Ctrl+O / Ctrl+T).
  */
 
 import React, { useMemo } from 'react';
 import { Box, Text } from 'ink';
 import type { ChatMessage } from './types.js';
+
+/** Max lines per message in chat view before truncation */
+const MAX_MESSAGE_LINES = 15;
 
 interface ChatViewProps {
   messages: ChatMessage[];
@@ -17,30 +19,42 @@ interface ChatViewProps {
   scrollOffset: number;
 }
 
+function truncateContent(content: string, maxLines: number): { text: string; truncated: boolean } {
+  const lines = content.split('\n');
+  if (lines.length <= maxLines) {
+    return { text: content, truncated: false };
+  }
+  return {
+    text: lines.slice(0, maxLines).join('\n'),
+    truncated: true,
+  };
+}
+
 function estimateMessageHeight(msg: ChatMessage, termWidth: number): number {
-  let lines = 0;
+  const maxW = Math.max(termWidth - 6, 40);
 
   if (msg.role === 'user') {
-    lines += Math.ceil(msg.content.length / Math.max(termWidth - 4, 40));
-    lines += 1;
-    return Math.max(lines, 1);
+    const lines = msg.content.split('\n');
+    let h = 0;
+    for (const l of lines) h += Math.max(1, Math.ceil(l.length / maxW));
+    return Math.min(h, MAX_MESSAGE_LINES) + 1;
   }
 
   if (msg.role === 'system') {
-    lines += Math.ceil(msg.content.length / Math.max(termWidth - 4, 40));
-    lines += 1;
-    return Math.max(lines, 1);
+    const lines = msg.content.split('\n');
+    let h = 0;
+    for (const l of lines) h += Math.max(1, Math.ceil(l.length / maxW));
+    return Math.min(h, MAX_MESSAGE_LINES) + 1;
   }
 
-  // Assistant: label line + content lines + indicator line
-  lines += 1; // [model]:
-  const contentLines = msg.content.split('\n');
-  for (const cl of contentLines) {
-    lines += Math.max(1, Math.ceil((cl.length + 4) / Math.max(termWidth - 4, 40)));
-  }
-  if (msg.toolCalls || msg.stats) lines += 1; // indicator line
-  lines += 1; // spacing
-  return lines;
+  // Assistant: label + truncated content + optional indicator
+  let h = 1; // label line
+  const { text } = truncateContent(msg.content, MAX_MESSAGE_LINES);
+  const lines = text.split('\n');
+  for (const l of lines) h += Math.max(1, Math.ceil(l.length / maxW));
+  if (msg.toolCalls || msg.stats) h += 1; // indicator
+  h += 1; // spacing
+  return h;
 }
 
 export function ChatView({ messages, maxHeight, scrollOffset }: ChatViewProps) {
@@ -48,7 +62,7 @@ export function ChatView({ messages, maxHeight, scrollOffset }: ChatViewProps) {
     return (
       <Box flexDirection="column" paddingX={1}>
         <Text dimColor>No messages yet. Type a message and press Enter to send.</Text>
-        <Text dimColor>^O: view tool calls | ^T: view stats | ↑↓: scroll</Text>
+        <Text dimColor>^O: tools | ^T: stats | ^M: full message | ↑↓: scroll</Text>
       </Box>
     );
   }
@@ -70,18 +84,16 @@ export function ChatView({ messages, maxHeight, scrollOffset }: ChatViewProps) {
 
   const firstVisibleIdx = messages.indexOf(visibleMessages[0]);
   const lastVisibleIdx = messages.indexOf(visibleMessages[visibleMessages.length - 1]);
-  const hasEarlier = firstVisibleIdx > 0;
-  const hasLater = lastVisibleIdx < messages.length - 1;
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      {hasEarlier && (
+      {firstVisibleIdx > 0 && (
         <Text dimColor>--- {firstVisibleIdx} earlier messages ---</Text>
       )}
       {visibleMessages.map((msg) => (
         <MessageBubble key={msg.id} message={msg} />
       ))}
-      {hasLater && (
+      {lastVisibleIdx < messages.length - 1 && (
         <Text dimColor>--- {messages.length - 1 - lastVisibleIdx} newer messages ---</Text>
       )}
     </Box>
@@ -90,24 +102,28 @@ export function ChatView({ messages, maxHeight, scrollOffset }: ChatViewProps) {
 
 function MessageBubble({ message }: { message: ChatMessage }) {
   if (message.role === 'user') {
+    const { text, truncated } = truncateContent(message.content, MAX_MESSAGE_LINES);
     return (
-      <Box marginY={0}>
-        <Text bold color="blue">{message.content}</Text>
+      <Box marginY={0} flexDirection="column">
+        <Text bold color="blue">{text}</Text>
+        {truncated && <Text dimColor>... (message truncated)</Text>}
       </Box>
     );
   }
 
   if (message.role === 'system') {
+    const { text, truncated } = truncateContent(message.content, MAX_MESSAGE_LINES);
     return (
-      <Box marginY={0}>
-        <Text color="yellow">{message.content}</Text>
+      <Box marginY={0} flexDirection="column">
+        <Text color="yellow">{text}</Text>
+        {truncated && <Text dimColor>... (^M to see full output)</Text>}
       </Box>
     );
   }
 
   const label = message.modelLabel || 'assistant';
+  const { text, truncated } = truncateContent(message.content, MAX_MESSAGE_LINES);
 
-  // Build small inline indicators
   const indicators: string[] = [];
   if (message.toolCalls && message.toolCalls.length > 0) {
     indicators.push(`${message.toolCalls.length} tools`);
@@ -124,8 +140,9 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           <Text dimColor> ({indicators.join(' | ')})</Text>
         )}
       </Box>
-      <Box marginLeft={2}>
-        <Text wrap="wrap">{message.content}</Text>
+      <Box marginLeft={2} flexDirection="column">
+        <Text wrap="wrap">{text}</Text>
+        {truncated && <Text dimColor>... (^M to read full response)</Text>}
       </Box>
     </Box>
   );
