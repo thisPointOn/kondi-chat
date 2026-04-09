@@ -13,6 +13,10 @@ import { AGENT_TOOLS, executeTool, type ToolContext } from '../engine/tools.ts';
 import { McpClientManager } from './client.ts';
 import type { McpToolInfo } from './types.ts';
 
+/** Extra tools registered at runtime (e.g., council) */
+let extraTools: ToolDefinition[] = [];
+let extraExecutors: Map<string, (args: Record<string, unknown>, ctx: ToolContext) => Promise<{ content: string; isError?: boolean }>> = new Map();
+
 // ---------------------------------------------------------------------------
 // Tool categories for filtering
 // ---------------------------------------------------------------------------
@@ -50,6 +54,15 @@ export class ToolManager {
     this.mcpClient = mcpClient;
   }
 
+  /** Register an extra tool (e.g., council) */
+  registerTool(
+    tool: ToolDefinition,
+    executor: (args: Record<string, unknown>, ctx: ToolContext) => Promise<{ content: string; isError?: boolean }>,
+  ): void {
+    extraTools.push(tool);
+    extraExecutors.set(tool.name, executor);
+  }
+
   /**
    * Get all available tool definitions (built-in + MCP).
    * Optionally filter by phase for token efficiency.
@@ -57,7 +70,7 @@ export class ToolManager {
   getTools(phase?: string): ToolDefinition[] {
     const builtIn = AGENT_TOOLS;
     const mcpTools = this.mcpClient.getAllTools().map(mcpToToolDef);
-    const all = [...builtIn, ...mcpTools];
+    const all = [...builtIn, ...extraTools, ...mcpTools];
 
     if (!phase) return all;
 
@@ -85,6 +98,12 @@ export class ToolManager {
     args: Record<string, unknown>,
     toolCtx: ToolContext,
   ): Promise<{ content: string; isError?: boolean }> {
+    // Check extra tools first (e.g., council)
+    const extraExec = extraExecutors.get(name);
+    if (extraExec) {
+      return extraExec(args, toolCtx);
+    }
+
     // Check if it's an MCP tool (contains __ separator)
     if (name.includes('__')) {
       return this.mcpClient.callTool(name, args);

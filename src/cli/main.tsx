@@ -26,6 +26,8 @@ import { LoopGuard } from '../engine/loop-guard.ts';
 import { McpClientManager } from '../mcp/client.ts';
 import { loadMcpConfig, saveMcpServer, removeMcpServer } from '../mcp/config.ts';
 import { ToolManager } from '../mcp/tool-manager.ts';
+import { CouncilProfileManager } from '../council/profiles.ts';
+import { COUNCIL_TOOL, executeCouncil } from '../council/tool.ts';
 import { App } from './ui/App.js';
 import type { ChatMessage, ToolCallDisplay, MessageStats } from './ui/types.js';
 
@@ -158,6 +160,8 @@ async function handleInput(
   mcpClient: McpClientManager,
   workingDir: string,
   profiles: ProfileManager,
+  councilProfiles: CouncilProfileManager,
+  councilPath: string,
 ): Promise<void> {
   const ui = getUI();
 
@@ -204,7 +208,7 @@ async function handleInput(
 
   // Slash commands
   if (input.startsWith('/')) {
-    const output = await handleCommand(input, session, contextManager, ledger, registry, collector, toolCtx, mcpClient, toolManager, workingDir, profiles, router);
+    const output = await handleCommand(input, session, contextManager, ledger, registry, collector, toolCtx, mcpClient, toolManager, workingDir, profiles, router, councilProfiles, councilPath);
     ui.addMessage({
       id: `msg-${Date.now()}`,
       role: 'system',
@@ -515,6 +519,8 @@ async function handleCommand(
   workingDir: string,
   profiles: ProfileManager,
   router: RuleRouter,
+  councilProfiles: CouncilProfileManager,
+  councilPath: string,
 ): Promise<string> {
   const parts = input.split(/\s+/);
   const cmd = parts[0];
@@ -754,6 +760,34 @@ async function handleCommand(
       return `Loop complete. ${guard.getSummary()}`;
     }
 
+    case '/council': {
+      const subcmd = parts[1];
+      if (!subcmd || subcmd === 'list') {
+        return councilProfiles.format();
+      }
+      if (subcmd === 'run' && parts[2]) {
+        const profileName = parts[2];
+        const brief = parts.slice(3).join(' ');
+        if (!brief) return 'Usage: /council run <profile> <brief>';
+        const result = await executeCouncil(profileName, brief, [], workingDir, councilPath, councilProfiles);
+        return result.content;
+      }
+      if (subcmd === 'delete' && parts[2]) {
+        return councilProfiles.delete(parts[2])
+          ? `Deleted profile: ${parts[2]}`
+          : `Profile not found: ${parts[2]}`;
+      }
+      return [
+        'Usage:',
+        '  /council                          List all council profiles',
+        '  /council run <profile> <brief>    Run a council deliberation',
+        '  /council delete <name>            Delete a profile',
+        '',
+        'The agent can also call run_council as a tool automatically.',
+        'Profiles are stored in .kondi-chat/councils/',
+      ].join('\n');
+    }
+
     case '/mcp': {
       const subcmd = parts[1];
       if (!subcmd || subcmd === 'list') {
@@ -820,6 +854,8 @@ async function handleCommand(
         '  /cost                        Cost breakdown',
         '  /mode [quality|balanced|cheap]  Set cost/quality mode',
         '  /loop [mode] <task>          Run autonomous loop with guards',
+        '  /council                     List council profiles',
+        '  /council run <profile> <brief>  Run a deliberation',
         '  /mcp                         List MCP servers and tools',
         '  /mcp add <name> <cmd> [args]  Add local MCP server',
         '  /mcp add <name> http <url>    Add remote MCP server',
@@ -927,6 +963,20 @@ async function main(): Promise<void> {
     await mcpClient.connectAll(mcpConfigs);
   }
   const toolManager = new ToolManager(mcpClient);
+  const councilProfiles = new CouncilProfileManager(storageDir);
+  const councilPath = resolve(workingDir, '../kondi-council'); // Sibling project
+
+  // Register council as a tool
+  toolManager.registerTool(COUNCIL_TOOL, async (args) => {
+    return executeCouncil(
+      args.profile as string,
+      args.brief as string,
+      (args.files as string[]) || [],
+      workingDir,
+      councilPath,
+      councilProfiles,
+    );
+  });
 
   // Bootstrap
   if (!args.noBootstrap) {
@@ -971,7 +1021,7 @@ async function main(): Promise<void> {
 
   // Render Ink app
   const onSubmit = async (input: string) => {
-    await handleInput(input, session, contextManager, ledger, router, collector, registry, toolCtx, toolManager, mcpClient, workingDir, profiles);
+    await handleInput(input, session, contextManager, ledger, router, collector, registry, toolCtx, toolManager, mcpClient, workingDir, profiles, councilProfiles, councilPath);
   };
 
   render(<App onSubmit={onSubmit} initialStatus={initialStatus} aliases={aliases} />);

@@ -27,6 +27,9 @@ const COMMANDS = [
   { cmd: '/export', desc: 'export session to JSON' },
   { cmd: '/help', desc: 'show all commands' },
   { cmd: '/quit', desc: 'exit' },
+  // Council
+  { cmd: '/council', desc: 'list council profiles' },
+  { cmd: '/council run', desc: '<profile> <brief> — run a deliberation' },
   // Mode & Loop
   { cmd: '/mode', desc: 'show/set cost mode (quality, balanced, cheap)' },
   { cmd: '/mode quality', desc: 'frontier models, thorough review' },
@@ -52,6 +55,7 @@ const AGENT_TOOL_LIST = [
   { cmd: 'run_command', desc: 'run a shell command' },
   { cmd: 'create_task', desc: 'dispatch a coding task (execute → verify → reflect)' },
   { cmd: 'update_plan', desc: 'update session goal, plan, decisions' },
+  { cmd: 'run_council', desc: 'run a multi-model deliberation (expensive, intentional)' },
 ];
 
 interface InputBarProps {
