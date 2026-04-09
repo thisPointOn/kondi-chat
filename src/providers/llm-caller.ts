@@ -35,13 +35,8 @@ async function* parseSSE(resp: Response): AsyncGenerator<{ type?: string; data?:
       buffer = lines.pop() || '';
 
       for (const line of lines) {
-        if (line.startsWith('event:')) {
-          eventType = line.slice(6).trim();
-        } else if (line.startsWith('data:')) {
-          const raw = line.slice(5).trim();
-          if (raw === '[DONE]') continue;
-          dataLines.push(raw);
-        } else if (line.trim() === '') {
+        const trimmed = line.trimEnd(); // Handle trailing whitespace from Anthropic
+        if (trimmed === '') {
           // Blank line = end of SSE event
           if (dataLines.length > 0) {
             const joined = dataLines.join('\n');
@@ -49,12 +44,19 @@ async function* parseSSE(resp: Response): AsyncGenerator<{ type?: string; data?:
             try {
               parsed = JSON.parse(joined);
             } catch {
+              // Not JSON — keep as string (shouldn't happen with valid SSE)
               parsed = joined;
             }
             yield { type: eventType, data: parsed };
           }
           eventType = undefined;
           dataLines = [];
+        } else if (trimmed.startsWith('event:')) {
+          eventType = trimmed.slice(6).trim();
+        } else if (trimmed.startsWith('data:')) {
+          const raw = trimmed.slice(5).trim();
+          if (raw === '[DONE]') continue;
+          dataLines.push(raw);
         }
         // Ignore other lines (comments starting with :, etc.)
       }
@@ -344,14 +346,20 @@ async function callOpenAICompatible(
     },
   }));
 
+  const max = req.maxOutputTokens ?? 8192;
   const body: any = {
     model,
     messages,
-    max_tokens: req.maxOutputTokens ?? 8192,
     ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
     ...(tools ? { tools } : {}),
     ...(req.stream ? { stream: true } : {}),
   };
+
+  if (provider === 'openai') {
+    body.max_completion_tokens = max; // new OpenAI param
+  } else {
+    body.max_tokens = max; // legacy / compatible providers
+  }
 
   const resp = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -379,7 +387,18 @@ async function callOpenAICompatible(
     for await (const event of parseSSE(resp)) {
       if (!event.data || event.data === '[DONE]') continue;
 
-      const chunk = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+      let chunk: any;
+      try {
+        if (typeof event.data === 'string') {
+          const raw = event.data.trim();
+          const clean = raw.startsWith('data:') ? raw.slice(5).trim() : raw;
+          chunk = JSON.parse(clean);
+        } else {
+          chunk = event.data;
+        }
+      } catch {
+        continue; // Skip unparseable chunks
+      }
       if (chunk.model) actualModel = chunk.model;
 
       const delta = chunk.choices?.[0]?.delta;

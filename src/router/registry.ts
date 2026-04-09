@@ -58,7 +58,7 @@ const DEFAULT_MODELS: ModelEntry[] = [
     inputCostPer1M: 15,
     outputCostPer1M: 75,
     contextWindow: 200_000,
-    enabled: true,
+    enabled: false, // disabled by default; enable with /models enable opus if desired
   },
   // --- Open-ended questions & general tasks ---
   {

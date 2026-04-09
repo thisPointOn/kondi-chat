@@ -20,10 +20,9 @@ import { bootstrapDirectory, type BootstrapDepth } from '../context/bootstrap.ts
 import { estimateTokens } from '../context/budget.ts';
 import { Ledger, estimateCost } from '../audit/ledger.ts';
 import { AGENT_TOOLS, executeTool, type ToolContext } from '../engine/tools.ts';
-import { ModelRegistry } from '../router/registry.ts';
-import { RuleRouter } from '../router/rules.ts';
+import { Router as UnifiedRouter } from '../router/index.ts';
 import { RoutingCollector } from '../router/collector.ts';
-import { EmbeddingService } from '../router/embeddings.ts';
+import type { ModelRegistry } from '../router/registry.ts';
 
 const MAX_TOOL_ITERATIONS = 20;
 
@@ -130,10 +129,9 @@ async function main(): Promise<void> {
   // Create session
   const session = createSession(args.provider, args.model, workingDir);
   const ledger = new Ledger(session.id, storageDir);
-  const registry = new ModelRegistry(storageDir);
-  const router = new RuleRouter(registry);
-  const embeddingService = new EmbeddingService(storageDir);
-  const collector = new RoutingCollector(storageDir, embeddingService);
+  const router = new UnifiedRouter(storageDir, { useIntent: true });
+  const registry = router.registry;
+  const collector = router.collector;
 
   // Bootstrap directory context
   if (!args.noBootstrap) {
@@ -187,7 +185,7 @@ async function main(): Promise<void> {
   const unavailable = registry.getEnabled().filter(m => registry.getStatus(m.id).status === 'unavailable');
 
   console.log(`\nkondi-chat — ${session.activeProvider}/${modelLabel()}`);
-  console.log(`Models: ${available.length} available${unavailable.length > 0 ? `, ${unavailable.length} unavailable` : ''} | Router: rule-based`);
+  console.log(`Models: ${available.length} available${unavailable.length > 0 ? `, ${unavailable.length} unavailable` : ''} | Router: unified (nn → intent → rules)`);
   if (unavailable.length > 0) {
     for (const m of unavailable) {
       const s = registry.getStatus(m.id);
@@ -305,7 +303,7 @@ async function runAgentLoop(
   contextManager: ContextManager,
   ledger: Ledger,
   toolCtx: ToolContext,
-  router: RuleRouter,
+  router: UnifiedRouter,
   collector: RoutingCollector,
 ): Promise<void> {
   // Build the conversation messages for this agent turn
@@ -321,7 +319,7 @@ async function runAgentLoop(
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     // Route the discuss phase through the router
-    const decision = router.select('discuss');
+    const decision = await router.select('discuss', userMessage, undefined, iteration);
     respondingModel = decision.model.alias || decision.model.name;
     process.stderr.write(`  ╭─ discuss${iteration > 0 ? ` (iteration ${iteration + 1})` : ''} [${decision.reason}]\n`);
 

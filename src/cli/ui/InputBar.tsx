@@ -66,12 +66,11 @@ interface InputBarProps {
   onSubmit: (value: string) => void;
   isProcessing: boolean;
   aliases: string[];
+  queuedCount?: number;
 }
 
-export function InputBar({ value, onChange, onSubmit, isProcessing, aliases }: InputBarProps) {
+export function InputBar({ value, onChange, onSubmit, isProcessing, aliases, queuedCount = 0 }: InputBarProps) {
   useInput((input, key) => {
-    if (isProcessing) return;
-
     // Tab — autocomplete from suggestions
     if (key.tab) {
       const suggestions = getSuggestions(value, aliases);
@@ -81,7 +80,7 @@ export function InputBar({ value, onChange, onSubmit, isProcessing, aliases }: I
       return;
     }
 
-    // Enter sends the message
+    // Enter sends the message (or queues if processing)
     if (key.return) {
       if (value.trim()) {
         onSubmit(value);
@@ -127,7 +126,7 @@ export function InputBar({ value, onChange, onSubmit, isProcessing, aliases }: I
       {suggestions.length > 0 && (
         <Box flexDirection="column" paddingX={2}>
           {suggestions.map((s, i) => (
-            <Text key={i} dimColor>
+            <Text key={`sug-${s.value}-${i}`} dimColor>
               {s.value}  <Text color="gray">{s.desc}</Text>
             </Text>
           ))}
@@ -141,23 +140,27 @@ export function InputBar({ value, onChange, onSubmit, isProcessing, aliases }: I
         borderColor={isProcessing ? 'gray' : 'blue'}
         paddingX={1}
       >
-        {isProcessing ? (
-          <Text dimColor>Processing...</Text>
-        ) : (
-          <>
-            {hasMore && <Text dimColor>... ({lines.length - 3} more lines)</Text>}
-            {displayLines.map((line, i) => (
-              <Text key={i}>
-                {i === 0 && !hasMore ? '> ' : '  '}
-                {line}
-                {i === displayLines.length - 1 ? <Text color="blue">|</Text> : ''}
-              </Text>
-            ))}
-            {value === '' && (
-              <Text dimColor>{'> Type a message... (Enter to send, ^N for newline)'}</Text>
-            )}
-          </>
-        )}
+        <>
+          {isProcessing && (
+            <Text dimColor>
+              Processing... {queuedCount > 0 ? `(queued ${queuedCount}) ` : ''}you can keep typing.
+            </Text>
+          )}
+          {value === '' ? (
+            <Text dimColor>{'> Type a message... (Enter to send, ^N for newline)'}</Text>
+          ) : (
+            <>
+              {hasMore && <Text dimColor>... ({lines.length - 3} more lines)</Text>}
+              {displayLines.map((line, i) => (
+                <Text key={`line-${i}`}>
+                  {i === 0 && !hasMore ? '> ' : '  '}
+                  {line}
+                  {i === displayLines.length - 1 ? <Text color="blue">|</Text> : ''}
+                </Text>
+              ))}
+            </>
+          )}
+        </>
       </Box>
     </Box>
   );

@@ -58,6 +58,8 @@ export class EmbeddingService {
   private cache: Map<string, number[]> = new Map();
   private cacheDir: string;
   private cacheFile: string;
+  private backendReady = false;
+  private attemptedFallback = false;
 
   constructor(storageDir: string, config?: Partial<EmbeddingConfig>) {
     // Default to Ollama with nomic-embed-text
@@ -85,6 +87,8 @@ export class EmbeddingService {
    * Results are cached by content hash.
    */
   async embed(text: string): Promise<number[]> {
+    await this.ensureBackend();
+
     // Truncate very long texts — embedding models have limits
     const truncated = text.slice(0, 8192);
     const hash = this.hash(truncated);
@@ -107,6 +111,8 @@ export class EmbeddingService {
    * Embed multiple texts in a batch. More efficient than individual calls.
    */
   async embedBatch(texts: string[]): Promise<number[][]> {
+    await this.ensureBackend();
+
     const truncated = texts.map(t => t.slice(0, 8192));
     const results: number[][] = [];
     const uncached: { index: number; text: string }[] = [];
@@ -160,6 +166,23 @@ export class EmbeddingService {
   // -------------------------------------------------------------------------
   // API calls
   // -------------------------------------------------------------------------
+
+  private async ensureBackend(): Promise<void> {
+    if (this.backendReady) return;
+    try {
+      await this.callApi('health-check');
+      this.backendReady = true;
+      return;
+    } catch (error) {
+      if (this.config.backend === 'ollama' && process.env.OPENAI_API_KEY && !this.attemptedFallback) {
+        // Fallback to OpenAI embeddings when local Ollama is unavailable
+        this.attemptedFallback = true;
+        this.config = { ...DEFAULT_CONFIGS.openai, apiKey: process.env.OPENAI_API_KEY };
+        return this.ensureBackend();
+      }
+      throw error;
+    }
+  }
 
   private async callApi(text: string): Promise<number[]> {
     const results = await this.callApiBatch([text]);

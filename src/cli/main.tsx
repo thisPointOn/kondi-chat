@@ -10,6 +10,7 @@ import React from 'react';
 import { render } from 'ink';
 import { resolve } from 'node:path';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import type { ProviderId, Session, LLMMessage, ToolCall } from '../types.ts';
 import { callLLM } from '../providers/llm-caller.ts';
 import { ContextManager, createSession } from '../context/manager.ts';
@@ -17,10 +18,9 @@ import { bootstrapDirectory, type BootstrapDepth } from '../context/bootstrap.ts
 import { estimateTokens } from '../context/budget.ts';
 import { Ledger, estimateCost } from '../audit/ledger.ts';
 import { AGENT_TOOLS, type ToolContext } from '../engine/tools.ts';
-import { ModelRegistry } from '../router/registry.ts';
-import { RuleRouter } from '../router/rules.ts';
+import { Router as UnifiedRouter } from '../router/index.ts';
 import { RoutingCollector } from '../router/collector.ts';
-import { EmbeddingService } from '../router/embeddings.ts';
+import type { ModelRegistry } from '../router/registry.ts';
 import { ProfileManager, type ProfileName } from '../router/profiles.ts';
 import { LoopGuard } from '../engine/loop-guard.ts';
 import { McpClientManager } from '../mcp/client.ts';
@@ -152,7 +152,7 @@ async function handleInput(
   session: Session,
   contextManager: ContextManager,
   ledger: Ledger,
-  router: RuleRouter,
+  router: UnifiedRouter,
   collector: RoutingCollector,
   registry: ModelRegistry,
   toolCtx: ToolContext,
@@ -292,7 +292,7 @@ async function handleInput(
   const modelsUsed = new Set<string>();
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
-    const decision = router.select('discuss');
+    const decision = await router.select('discuss', userMessage, undefined, iteration);
     respondingModel = decision.model.alias || decision.model.name;
     ui.setStatus(`${respondingModel} thinking${iteration > 0 ? ` (step ${iteration + 1})` : ''}...`);
     ui.addActivity({
@@ -518,7 +518,7 @@ async function handleCommand(
   toolManager: ToolManager,
   workingDir: string,
   profiles: ProfileManager,
-  router: RuleRouter,
+  router: UnifiedRouter,
   councilProfiles: CouncilProfileManager,
   councilPath: string,
 ): Promise<string> {
@@ -529,21 +529,21 @@ async function handleCommand(
     case '/use': {
       const alias = parts[1];
       if (!alias) {
-        const current = router.getOverride();
+        const current = router.rules.getOverride();
         if (current) {
           return `Currently using: ${current.alias || current.id} (${current.provider})\n/use auto — let the router decide`;
         }
         return `Router is choosing models automatically.\n/use <alias> — force a specific model\nAliases: ${registry.getAliases().join(', ')}`;
       }
       if (alias === 'auto' || alias === 'router') {
-        router.setOverride(undefined);
+        router.rules.setOverride(undefined);
         return 'Router will choose models automatically.';
       }
       const model = registry.getByAlias(alias);
       if (!model) {
         return `Unknown alias: ${alias}. Available: ${registry.getAliases().join(', ')}`;
       }
-      router.setOverride(model);
+      router.rules.setOverride(model);
       return `All messages will now use ${model.name} (@${model.alias}). /use auto to restore router.`;
     }
 
@@ -644,6 +644,31 @@ async function handleCommand(
       return lines.join('\n');
     }
 
+    case '/train': {
+      const stats = collector.getStats();
+      const ready = stats.readyForTraining;
+      const preface = ready
+        ? `Training on ${stats.totalSamples} samples...`
+        : `Not enough data yet (${stats.totalSamples} samples). Needs >=100 and multiple models. Running anyway.`;
+
+      const result = spawnSync('python3', ['src/router/train.py'], {
+        cwd: workingDir,
+        encoding: 'utf-8',
+        timeout: 120_000,
+      });
+
+      if (result.error) {
+        return `${preface}\ntrain.py error: ${result.error.message}`;
+      }
+      if (result.status !== 0) {
+        return `${preface}\ntrain.py failed (code ${result.status}):\n${result.stdout || ''}\n${result.stderr || ''}`;
+      }
+
+      // Reload NN router
+      router.nn.reload();
+      return `${preface}\ntrain.py complete. NN router reloaded.\nstdout:\n${(result.stdout || '').slice(0, 1000)}\n${result.stderr ? `stderr:\n${result.stderr.slice(0, 400)}` : ''}`;
+    }
+
     case '/export': {
       const exportData = { session, ledger: ledger.getAll(), exportedAt: new Date().toISOString() };
       const filename = `kondi-chat-${session.id.slice(0, 8)}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
@@ -656,7 +681,7 @@ async function handleCommand(
       if (!mode) return profiles.format();
       try {
         profiles.setProfile(mode);
-        router.setProfile(profiles.getActive());
+        router.rules.setProfile(profiles.getActive());
         const p = profiles.getActive();
         return `Mode: ${p.name} — ${p.description}\nContext: ${p.contextBudget.toLocaleString()} | Loop: ${p.loopIterationCap} iters, $${p.loopCostCap.toFixed(2)} cap | Local: ${p.preferLocal ? 'yes' : 'no'}`;
       } catch (e) {
@@ -685,7 +710,7 @@ async function handleCommand(
       // Save current profile, switch to loop profile
       const savedProfile = profiles.getActive().name;
       profiles.setProfile(loopMode);
-      router.setProfile(profiles.getActive());
+      router.rules.setProfile(profiles.getActive());
 
       const ui = getUI();
       ui.addMessage({
@@ -720,7 +745,7 @@ async function handleCommand(
           );
           const { systemPrompt, userMessage, cacheablePrefix } = contextManager.assemblePrompt();
 
-          const decision = router.select('discuss');
+          const decision = await router.select('discuss', userMessage, undefined, status.iteration);
           const response = await callLLM({
             provider: decision.model.provider,
             model: decision.model.id,
@@ -776,7 +801,7 @@ async function handleCommand(
 
       // Restore previous profile
       profiles.setProfile(savedProfile);
-      router.setProfile(profiles.getActive());
+      router.rules.setProfile(profiles.getActive());
 
       return `Loop complete. ${guard.getSummary()}`;
     }
@@ -971,12 +996,11 @@ async function main(): Promise<void> {
 
   const session = createSession(args.provider, args.model, workingDir);
   const ledger = new Ledger(session.id, storageDir);
-  const registry = new ModelRegistry(storageDir);
-  const router = new RuleRouter(registry);
+  const router = new UnifiedRouter(storageDir, { useIntent: true });
+  const registry = router.registry;
   const profiles = new ProfileManager('balanced');
-  router.setProfile(profiles.getActive());
-  const embeddingService = new EmbeddingService(storageDir);
-  const collector = new RoutingCollector(storageDir, embeddingService);
+  router.rules.setProfile(profiles.getActive());
+  const collector = router.collector;
 
   // MCP servers
   const mcpClient = new McpClientManager();

@@ -67,7 +67,7 @@ const PROFILES: Record<ProfileName, BudgetProfile> = {
   quality: {
     name: 'quality',
     description: 'Frontier models, thorough review, generous context',
-    planningPreference: ['planning', 'reasoning', 'architecture'],
+    planningPreference: ['general', 'planning', 'reasoning', 'architecture'],
     executionPreference: ['coding', 'reasoning'],
     reviewPreference: ['code-review', 'analysis', 'reasoning'],
     contextBudget: 60_000,
@@ -84,7 +84,7 @@ const PROFILES: Record<ProfileName, BudgetProfile> = {
   balanced: {
     name: 'balanced',
     description: 'Good cost/quality balance — default mode',
-    planningPreference: ['planning', 'reasoning'],
+    planningPreference: ['general', 'planning', 'reasoning'],
     executionPreference: ['coding', 'fast-coding'],
     reviewPreference: ['code-review', 'analysis'],
     contextBudget: 30_000,

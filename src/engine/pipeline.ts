@@ -15,7 +15,7 @@ import { createTaskCard, executeTaskCard, readRelevantFiles } from './task-card.
 import { parseFileReplacements, applyChanges, formatApplyResult, type ApplyResult } from './apply.ts';
 import { verify } from './verify.ts';
 import { Ledger } from '../audit/ledger.ts';
-import type { RuleRouter, RouteDecision } from '../router/rules.ts';
+import type { Router as UnifiedRouter } from '../router/index.ts';
 import type { RoutingCollector } from '../router/collector.ts';
 
 // ---------------------------------------------------------------------------
@@ -26,8 +26,8 @@ export interface PipelineConfig {
   /** Fallback provider (used when no router is available) */
   provider: ProviderId;
   model?: string;
-  /** Rule-based router for model selection */
-  router?: RuleRouter;
+  /** Unified router for model selection */
+  router?: UnifiedRouter;
   /** Training data collector */
   collector?: RoutingCollector;
   /** Max failures before retrying with enhanced prompt */
@@ -79,18 +79,29 @@ export async function runPipeline(
 ): Promise<PipelineResult> {
 
   /** Resolve provider/model from router or fallback */
-  const route = (phase: import('../types.ts').LedgerPhase, taskKind?: string, failures = 0) => {
+  const route = async (
+    phase: import('../types.ts').LedgerPhase,
+    promptText: string,
+    taskKind?: string,
+    failures = 0,
+  ) => {
     if (config.router) {
-      const decision = config.router.select(phase, taskKind, failures, config.promotionThreshold);
+      const decision = await config.router.select(
+        phase,
+        promptText,
+        taskKind,
+        failures,
+        config.promotionThreshold,
+      );
       return { provider: decision.model.provider, model: decision.model.id, decision };
     }
-    return { provider: config.provider, model: config.model, decision: undefined as RouteDecision | undefined };
+    return { provider: config.provider, model: config.model, decision: undefined as any };
   };
 
   // -----------------------------------------------------------------------
   // Step 1: Dispatch — create task card
   // -----------------------------------------------------------------------
-  const dispatchRoute = route('dispatch');
+  const dispatchRoute = await route('dispatch', userIntent);
   process.stderr.write(`  │  ╭─ dispatch${dispatchRoute.decision ? ` [${dispatchRoute.decision.reason}]` : ''}\n`);
   const { card, response: dispatchResponse } = await createTaskCard(
     userIntent,
@@ -126,7 +137,7 @@ export async function runPipeline(
     ? readRelevantFiles(config.workingDir, card.relevantFiles)
     : '';
 
-  const execRoute = route('execute', card.kind, card.failures);
+  const execRoute = await route('execute', card.goal, card.kind, card.failures);
   process.stderr.write(`  │  ╭─ execute${execRoute.decision ? ` [${execRoute.decision.reason}]` : ''}\n`);
   let executionResponse = await executeTaskCard(
     card,
@@ -191,7 +202,7 @@ export async function runPipeline(
       );
 
       // Retry — router may promote to a better model based on failure count
-      const retryRoute = route('execute', card.kind, card.failures);
+      const retryRoute = await route('execute', card.goal, card.kind, card.failures);
       const retryCard = { ...card, constraints: [...card.constraints, `Previous attempt failed with: ${verifyOutput.slice(0, 500)}`] };
       process.stderr.write(`  │  │  ${retryRoute.decision?.promoted ? 'PROMOTED' : 'retrying'}${retryRoute.decision ? ` [${retryRoute.decision.reason}]` : ''}\n`);
       executionResponse = await executeTaskCard(
@@ -238,7 +249,7 @@ export async function runPipeline(
   // -----------------------------------------------------------------------
   // Step 4: Reflect — frontier summarizes what happened
   // -----------------------------------------------------------------------
-  const reflectRoute = route('reflect');
+  const reflectRoute = await route('reflect', card.goal);
   process.stderr.write(`  │  ╭─ reflect${reflectRoute.decision ? ` [${reflectRoute.decision.reason}]` : ''}\n`);
   const reflectionResponse = await callLLM({
     provider: reflectRoute.provider,

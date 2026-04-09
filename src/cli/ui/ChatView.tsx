@@ -1,9 +1,9 @@
 /**
  * ChatView — scrollable message display (chat mode).
  *
- * Messages are truncated to fit the viewport. Long responses show
- * a preview with a hint to press Ctrl+M to read the full message.
- * Tool output and stats are in separate detail views (Ctrl+O / Ctrl+T).
+ * Renders messages bottom-aligned inside a container with overflow="hidden".
+ * The parent Box constrains the height; this component just renders content.
+ * Long messages are truncated with a hint to press Ctrl+M for the full text.
  */
 
 import React, { useMemo } from 'react';
@@ -15,7 +15,6 @@ const MAX_MESSAGE_LINES = 15;
 
 interface ChatViewProps {
   messages: ChatMessage[];
-  maxHeight: number;
   scrollOffset: number;
 }
 
@@ -30,34 +29,7 @@ function truncateContent(content: string, maxLines: number): { text: string; tru
   };
 }
 
-function estimateMessageHeight(msg: ChatMessage, termWidth: number): number {
-  const maxW = Math.max(termWidth - 6, 40);
-
-  if (msg.role === 'user') {
-    const lines = msg.content.split('\n');
-    let h = 0;
-    for (const l of lines) h += Math.max(1, Math.ceil(l.length / maxW));
-    return Math.min(h, MAX_MESSAGE_LINES) + 1;
-  }
-
-  if (msg.role === 'system') {
-    const lines = msg.content.split('\n');
-    let h = 0;
-    for (const l of lines) h += Math.max(1, Math.ceil(l.length / maxW));
-    return Math.min(h, MAX_MESSAGE_LINES) + 1;
-  }
-
-  // Assistant: label + truncated content + optional indicator
-  let h = 1; // label line
-  const { text } = truncateContent(msg.content, MAX_MESSAGE_LINES);
-  const lines = text.split('\n');
-  for (const l of lines) h += Math.max(1, Math.ceil(l.length / maxW));
-  if (msg.toolCalls || msg.stats) h += 1; // indicator
-  h += 1; // spacing
-  return h;
-}
-
-export function ChatView({ messages, maxHeight, scrollOffset }: ChatViewProps) {
+export function ChatView({ messages, scrollOffset }: ChatViewProps) {
   if (messages.length === 0) {
     return (
       <Box flexDirection="column" paddingX={1}>
@@ -67,34 +39,24 @@ export function ChatView({ messages, maxHeight, scrollOffset }: ChatViewProps) {
     );
   }
 
-  const termWidth = process.stdout.columns || 80;
-  const visibleMessages = useMemo(() => {
-    const result: ChatMessage[] = [];
-    let usedHeight = 0;
-    const endIdx = Math.max(messages.length - scrollOffset, 1);
-
-    for (let i = endIdx - 1; i >= 0; i--) {
-      const h = estimateMessageHeight(messages[i], termWidth);
-      if (usedHeight + h > maxHeight && result.length > 0) break;
-      result.unshift(messages[i]);
-      usedHeight += h;
-    }
-    return result;
-  }, [messages, maxHeight, termWidth, scrollOffset]);
-
-  const firstVisibleIdx = messages.indexOf(visibleMessages[0]);
-  const lastVisibleIdx = messages.indexOf(visibleMessages[visibleMessages.length - 1]);
+  // Determine which messages to show based on scroll offset.
+  // scrollOffset=0 means "show the latest messages" (bottom of history).
+  // We render from the end backwards, skipping `scrollOffset` messages.
+  const endIdx = Math.max(messages.length - scrollOffset, 1);
+  const visibleMessages = messages.slice(0, endIdx);
+  const skippedAbove = 0; // We render all from start to endIdx; container clips the top
+  const skippedBelow = messages.length - endIdx;
 
   return (
-    <Box flexDirection="column" paddingX={1}>
-      {firstVisibleIdx > 0 && (
-        <Text dimColor>--- {firstVisibleIdx} earlier messages ---</Text>
+    <Box flexDirection="column" paddingX={1} justifyContent="flex-end" flexGrow={1}>
+      {visibleMessages.length < messages.length - skippedBelow && (
+        <Text dimColor>--- earlier messages (scroll up) ---</Text>
       )}
       {visibleMessages.map((msg) => (
         <MessageBubble key={msg.id} message={msg} />
       ))}
-      {lastVisibleIdx < messages.length - 1 && (
-        <Text dimColor>--- {messages.length - 1 - lastVisibleIdx} newer messages ---</Text>
+      {skippedBelow > 0 && (
+        <Text dimColor>--- {skippedBelow} newer messages (scroll down) ---</Text>
       )}
     </Box>
   );
