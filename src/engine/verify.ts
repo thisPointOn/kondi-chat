@@ -3,6 +3,8 @@
  */
 
 import { execSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { VerificationResult, RepoMap } from '../types.ts';
 
 const TIMEOUT_MS = 60_000; // 1 minute per command
@@ -42,8 +44,7 @@ export function verify(workingDir: string, repoMap?: RepoMap): VerificationResul
  * Auto-detect build/test/lint commands from project files.
  */
 function detectCommands(workingDir: string): RepoMap['commands'] {
-  const { existsSync, readFileSync } = require('node:fs');
-  const { join } = require('node:path');
+  // fs and path imported at top level
   const commands: RepoMap['commands'] = {};
 
   // Node.js / package.json

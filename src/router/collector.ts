@@ -11,7 +11,7 @@
  * The orchestrator is the teacher; the NN is the student.
  */
 
-import { appendFileSync, readFileSync, existsSync } from 'node:fs';
+import { appendFileSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LedgerPhase, TaskKind } from '../types.ts';
 import type { EmbeddingService } from './embeddings.ts';
@@ -155,7 +155,6 @@ export class RoutingCollector {
       }
     }
     // Rewrite the file
-    const { writeFileSync } = require('node:fs');
     writeFileSync(this.filePath, samples.map(s => JSON.stringify(s)).join('\n') + '\n');
   }
 

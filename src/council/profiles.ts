@@ -11,7 +11,7 @@
  * Presets are generated on first run; users can create custom ones.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 // ---------------------------------------------------------------------------
@@ -163,7 +163,6 @@ export class CouncilProfileManager {
   delete(name: string): boolean {
     const path = join(this.profileDir, `${name}.json`);
     if (!existsSync(path)) return false;
-    const { unlinkSync } = require('node:fs');
     unlinkSync(path);
     return true;
   }

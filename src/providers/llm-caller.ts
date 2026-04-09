@@ -22,6 +22,8 @@ async function* parseSSE(resp: Response): AsyncGenerator<{ type?: string; data?:
 
   const decoder = new TextDecoder();
   let buffer = '';
+  let eventType: string | undefined;
+  let dataLines: string[] = [];
 
   try {
     while (true) {
@@ -32,33 +34,42 @@ async function* parseSSE(resp: Response): AsyncGenerator<{ type?: string; data?:
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 
-      let eventType: string | undefined;
-      let eventData: string | undefined;
-
       for (const line of lines) {
-        if (line.startsWith('event: ')) {
-          eventType = line.slice(7).trim();
-        } else if (line.startsWith('data: ')) {
-          const raw = line.slice(6);
+        if (line.startsWith('event:')) {
+          eventType = line.slice(6).trim();
+        } else if (line.startsWith('data:')) {
+          const raw = line.slice(5).trim();
           if (raw === '[DONE]') continue;
-          try {
-            eventData = JSON.parse(raw);
-          } catch {
-            eventData = raw;
+          dataLines.push(raw);
+        } else if (line.trim() === '') {
+          // Blank line = end of SSE event
+          if (dataLines.length > 0) {
+            const joined = dataLines.join('\n');
+            let parsed: any;
+            try {
+              parsed = JSON.parse(joined);
+            } catch {
+              parsed = joined;
+            }
+            yield { type: eventType, data: parsed };
           }
-        } else if (line === '' && eventData !== undefined) {
-          yield { type: eventType, data: eventData };
           eventType = undefined;
-          eventData = undefined;
+          dataLines = [];
         }
+        // Ignore other lines (comments starting with :, etc.)
       }
+    }
 
-      // If we have data accumulated without a blank line separator, yield it
-      if (eventData !== undefined) {
-        yield { type: eventType, data: eventData };
-        eventType = undefined;
-        eventData = undefined;
+    // Flush any remaining event at end of stream
+    if (dataLines.length > 0) {
+      const joined = dataLines.join('\n');
+      let parsed: any;
+      try {
+        parsed = JSON.parse(joined);
+      } catch {
+        parsed = joined;
       }
+      yield { type: eventType, data: parsed };
     }
   } finally {
     reader.releaseLock();

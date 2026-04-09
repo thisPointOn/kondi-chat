@@ -6,6 +6,8 @@
  * nothing it doesn't.
  */
 
+import { readFileSync, existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import type { TaskCard, TaskKind, RepoMap, SessionState, LLMResponse } from '../types.ts';
 import { callLLM } from '../providers/llm-caller.ts';
 import type { Ledger } from '../audit/ledger.ts';
@@ -154,8 +156,6 @@ export function readRelevantFiles(
   files: string[],
   maxCharsPerFile = 4096,
 ): string {
-  const { readFileSync, existsSync } = require('node:fs');
-  const { join, resolve } = require('node:path');
   const base = resolve(workingDir);
   const sections: string[] = [];
 
