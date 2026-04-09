@@ -35,6 +35,7 @@ export interface RouteDecision {
 export class RuleRouter {
   private registry: ModelRegistry;
   private profile?: BudgetProfile;
+  private override?: ModelEntry;
 
   constructor(registry: ModelRegistry) {
     this.registry = registry;
@@ -43,6 +44,16 @@ export class RuleRouter {
   /** Set the active budget profile — changes model selection priorities */
   setProfile(profile: BudgetProfile): void {
     this.profile = profile;
+  }
+
+  /** Force all routing to a specific model. Pass undefined to clear. */
+  setOverride(model: ModelEntry | undefined): void {
+    this.override = model;
+  }
+
+  /** Get the current override, if any */
+  getOverride(): ModelEntry | undefined {
+    return this.override;
   }
 
   /**
@@ -59,6 +70,11 @@ export class RuleRouter {
     failures = 0,
     promotionThreshold = 2,
   ): RouteDecision {
+    // Manual override — user forced a specific model with /use
+    if (this.override) {
+      return { model: this.override, reason: `override: ${this.override.alias || this.override.id}`, promoted: false };
+    }
+
     const promoted = failures >= promotionThreshold;
 
     // Promotion overrides: if the cheap model failed enough, use the best

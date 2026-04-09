@@ -285,8 +285,11 @@ export function App({ onSubmit, initialStatus, aliases }: AppProps) {
 function CommittedMessage({ message }: { message: ChatMessage }) {
   if (message.role === 'user') {
     return (
-      <Box paddingX={1}>
-        <Text bold color="blue">{message.content}</Text>
+      <Box paddingX={1} flexDirection="column">
+        <Text> </Text>
+        <Box>
+          <Text bold color="blue">{'> '}{message.content}</Text>
+        </Box>
       </Box>
     );
   }

@@ -526,10 +526,31 @@ async function handleCommand(
   const cmd = parts[0];
 
   switch (cmd) {
+    case '/use': {
+      const alias = parts[1];
+      if (!alias) {
+        const current = router.getOverride();
+        if (current) {
+          return `Currently using: ${current.alias || current.id} (${current.provider})\n/use auto — let the router decide`;
+        }
+        return `Router is choosing models automatically.\n/use <alias> — force a specific model\nAliases: ${registry.getAliases().join(', ')}`;
+      }
+      if (alias === 'auto' || alias === 'router') {
+        router.setOverride(undefined);
+        return 'Router will choose models automatically.';
+      }
+      const model = registry.getByAlias(alias);
+      if (!model) {
+        return `Unknown alias: ${alias}. Available: ${registry.getAliases().join(', ')}`;
+      }
+      router.setOverride(model);
+      return `All messages will now use ${model.name} (@${model.alias}). /use auto to restore router.`;
+    }
+
     case '/switch': {
       const newProvider = parts[1] as ProviderId | undefined;
       const newModel = parts[2];
-      if (!newProvider) return 'Usage: /switch <provider> [model]';
+      if (!newProvider) return 'Usage: /switch <provider> [model] — or use /use <alias>';
       session.activeProvider = newProvider;
       session.activeModel = newModel;
       toolCtx.pipelineConfig.provider = newProvider;
@@ -844,6 +865,8 @@ async function handleCommand(
     case '/help':
       return [
         'Commands:',
+        '  /use <alias>                 Force a model for all messages',
+        '  /use auto                    Let the router choose again',
         '  /switch <provider> [model]   Switch provider/model',
         '  /models                      List models and aliases',
         '  /health                      Check model availability',

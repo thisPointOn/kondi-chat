@@ -13,6 +13,8 @@ import { Box, Text, useInput } from 'ink';
 
 const COMMANDS = [
   // Slash commands (you run these)
+  { cmd: '/use', desc: '<alias> — force a model (e.g., /use gpt)' },
+  { cmd: '/use auto', desc: 'let the router choose again' },
   { cmd: '/switch', desc: '<provider> [model] — switch provider' },
   { cmd: '/models', desc: 'list models and aliases' },
   { cmd: '/models enable', desc: '<id> — enable a model' },
