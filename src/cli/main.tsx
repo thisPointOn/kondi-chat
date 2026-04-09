@@ -135,6 +135,7 @@ interface UIBridge {
   addMessage: (msg: ChatMessage) => void;
   setStatus: (text: string) => void;
   updateLastAssistant: (update: Partial<ChatMessage>) => void;
+  updateMessage: (id: string, update: Partial<ChatMessage>) => void;
   addActivity: (entry: import('./ui/types.js').ActivityEntry) => void;
   clearActivity: () => void;
 }
@@ -291,32 +292,28 @@ async function handleInput(
   const allToolCalls: ToolCallDisplay[] = [];
   const modelsUsed = new Set<string>();
 
+  // Add a working message that shows tool progress in real-time
+  const workingMsgId = `msg-working-${Date.now()}`;
+  ui.addMessage({
+    id: workingMsgId,
+    role: 'assistant',
+    content: '',
+    modelLabel: '...',
+    timestamp: new Date().toISOString(),
+    toolCalls: [],
+  });
+
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     const decision = await router.select('discuss', userMessage, undefined, iteration);
     respondingModel = decision.model.alias || decision.model.name;
     ui.setStatus(`${respondingModel} thinking${iteration > 0 ? ` (step ${iteration + 1})` : ''}...`);
+    // Update working message with model name
+    ui.updateMessage(workingMsgId, { modelLabel: respondingModel });
     ui.addActivity({
       text: `${respondingModel} — ${decision.reason}`,
       type: 'step',
       timestamp: new Date().toISOString(),
     });
-
-    // Add a streaming placeholder message
-    const streamMsgId = `msg-stream-${Date.now()}`;
-    let streamContent = '';
-
-    // Only stream the first text response (not tool-use iterations where we need the full response)
-    const shouldStream = iteration === 0;
-
-    if (shouldStream) {
-      ui.addMessage({
-        id: streamMsgId,
-        role: 'assistant',
-        content: '',
-        modelLabel: respondingModel,
-        timestamp: new Date().toISOString(),
-      });
-    }
 
     const response = await callLLM({
       provider: decision.model.provider,
@@ -326,11 +323,6 @@ async function handleInput(
       tools: toolManager.getTools('discuss'),
       maxOutputTokens: 8192,
       cacheablePrefix,
-      stream: shouldStream,
-      onToken: shouldStream ? (token: string) => {
-        streamContent += token;
-        ui.updateLastAssistant({ content: streamContent });
-      } : undefined,
     });
 
     const iterCost = estimateCost(response.model, response.inputTokens, response.outputTokens);
@@ -374,30 +366,10 @@ async function handleInput(
       });
     }
 
-    // No tool calls — final response (streaming message already shows it)
+    // No tool calls — final response
     if (!response.toolCalls || response.toolCalls.length === 0) {
       finalContent = response.content;
-      // Update the streaming message with final stats
-      if (shouldStream) {
-        ui.updateLastAssistant({
-          content: finalContent,
-          toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
-          stats: {
-            inputTokens: totalInputTokens,
-            outputTokens: totalOutputTokens,
-            costUsd: totalCost,
-            iterations: messages.filter(m => m.role === 'assistant').length || 1,
-            models: [...modelsUsed],
-          },
-        });
-      }
       break;
-    }
-
-    // Tool calls — remove the streaming placeholder (model isn't done yet)
-    if (shouldStream) {
-      // Replace streaming message content with what we have so far
-      ui.updateLastAssistant({ content: response.content || '(using tools...)' });
     }
 
     // Tool calls
@@ -440,6 +412,12 @@ async function handleInput(
         isError: result.isError,
       });
 
+      // Update working message to show tool calls in real-time
+      ui.updateMessage(workingMsgId, {
+        content: response.content || '',
+        toolCalls: [...allToolCalls],
+      });
+
       toolResults.push({
         toolCallId: tc.id,
         content: capped,
@@ -477,26 +455,13 @@ async function handleInput(
     models: [...modelsUsed],
   };
 
-  // If we didn't stream (multi-iteration with tools), add the final message now
-  // If we did stream, the message was already added and updated above
-  if (iterationCount > 1) {
-    // Multi-iteration: add a fresh final message with everything
-    ui.addMessage({
-      id: `msg-${Date.now()}`,
-      role: 'assistant',
-      content: finalContent,
-      modelLabel: respondingModel,
-      timestamp: new Date().toISOString(),
-      toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
-      stats: finalStats,
-    });
-  } else {
-    // Single iteration: streaming message already exists, just update stats
-    ui.updateLastAssistant({
-      stats: finalStats,
-      toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
-    });
-  }
+  // Update the working message with final content and stats
+  ui.updateMessage(workingMsgId, {
+    content: finalContent,
+    modelLabel: respondingModel,
+    toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+    stats: finalStats,
+  });
 
   await contextManager.maybeCompact();
   await contextManager.updateSessionState();
@@ -998,7 +963,7 @@ async function main(): Promise<void> {
   const ledger = new Ledger(session.id, storageDir);
   const router = new UnifiedRouter(storageDir, { useIntent: true });
   const registry = router.registry;
-  const profiles = new ProfileManager('balanced');
+  const profiles = new ProfileManager('balanced', storageDir);
   router.rules.setProfile(profiles.getActive());
   const collector = router.collector;
 

@@ -1,0 +1,18 @@
+--- /dev/null
++++ b/ARCHITECTURE.md
+@@ -0,0 +1,45 @@
++# CLI TUI Architecture - Model Label Display
++
++## Single Source of Truth for Current Model
++
++### Problem
++Previously, there was no unified way to determine "what model is currently active" in the UI.
++- Each message had its own `modelLabel`
++- No consistent display of the current model in the status/header area
++- Potential for confusion when the model changes between messages
++
++### Solution
++The `App` component now maintains `displayModel` state as the single source of truth for the currently active model.
++
++#### Data Flow
++

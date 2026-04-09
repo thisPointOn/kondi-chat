@@ -1,69 +1,59 @@
 /**
- * Budget Profiles — named presets that control how the system
- * balances cost vs quality across all components.
+ * Budget Profiles — control how the system balances cost vs quality.
  *
- * Profiles affect:
- *   - Which models the router prefers (capability priority order)
- *   - Context budget (how much context is assembled per call)
- *   - Loop limits (max iterations, max cost per loop)
- *   - Whether review/reflection steps are included
- *   - Promotion threshold (how many failures before escalating)
+ * Three built-in profiles: quality, balanced, cheap.
+ * Custom profiles: add JSON files to .kondi-chat/profiles/
  *
- * Usage:
- *   /mode cheap        — local/cheapest models, tight loops
- *   /mode balanced     — default, good cost/quality tradeoff
- *   /mode quality      — frontier models, thorough review
- *   /mode              — show current mode
+ * Example custom profile (.kondi-chat/profiles/aerospace-review.json):
+ * {
+ *   "name": "aerospace-review",
+ *   "description": "Aerospace engineering analysis with frontier models",
+ *   "planningPreference": ["reasoning", "aerospace", "architecture"],
+ *   "executionPreference": ["aerospace", "coding"],
+ *   "reviewPreference": ["analysis", "reasoning"],
+ *   "contextBudget": 50000,
+ *   "maxIterations": 15,
+ *   "loopCostCap": 5.00,
+ *   "loopIterationCap": 8,
+ *   "promotionThreshold": 2,
+ *   "includeReflection": true,
+ *   "includeVerification": true,
+ *   "preferLocal": false,
+ *   "maxOutputTokens": 16384
+ * }
  */
 
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+
 // ---------------------------------------------------------------------------
-// Profile definition
+// Types
 // ---------------------------------------------------------------------------
 
-export type ProfileName = 'quality' | 'balanced' | 'cheap';
+export type ProfileName = string;
 
 export interface BudgetProfile {
-  name: ProfileName;
+  name: string;
   description: string;
-
-  /** Model selection: which capabilities to prefer, in order */
-  planningPreference: string[];   // For discuss/dispatch/reflect
-  executionPreference: string[];  // For execute phase
-  reviewPreference: string[];     // For code review / analysis
-
-  /** Context budget (tokens) for prompt assembly */
+  planningPreference: string[];
+  executionPreference: string[];
+  reviewPreference: string[];
   contextBudget: number;
-
-  /** Max tool-use iterations per agent turn */
   maxIterations: number;
-
-  /** Max cost (USD) per autonomous loop before breaking */
   loopCostCap: number;
-
-  /** Max iterations per autonomous loop */
   loopIterationCap: number;
-
-  /** Failures before promoting to a better model */
   promotionThreshold: number;
-
-  /** Include reflection step after task execution? */
   includeReflection: boolean;
-
-  /** Include verification (tests/lint) after execution? */
   includeVerification: boolean;
-
-  /** Prefer local models when available? */
   preferLocal: boolean;
-
-  /** Max output tokens per LLM call */
   maxOutputTokens: number;
 }
 
 // ---------------------------------------------------------------------------
-// Preset profiles
+// Built-in profiles
 // ---------------------------------------------------------------------------
 
-const PROFILES: Record<ProfileName, BudgetProfile> = {
+const BUILTIN_PROFILES: Record<string, BudgetProfile> = {
   quality: {
     name: 'quality',
     description: 'Frontier models, thorough review, generous context',
@@ -80,7 +70,6 @@ const PROFILES: Record<ProfileName, BudgetProfile> = {
     preferLocal: false,
     maxOutputTokens: 16_384,
   },
-
   balanced: {
     name: 'balanced',
     description: 'Good cost/quality balance — default mode',
@@ -97,18 +86,17 @@ const PROFILES: Record<ProfileName, BudgetProfile> = {
     preferLocal: false,
     maxOutputTokens: 8_192,
   },
-
   cheap: {
     name: 'cheap',
     description: 'Cheapest models, tight limits, local when possible',
     planningPreference: ['fast-coding', 'general'],
     executionPreference: ['fast-coding', 'coding'],
-    reviewPreference: [],  // Skip review
+    reviewPreference: [],
     contextBudget: 15_000,
     maxIterations: 10,
     loopCostCap: 0.50,
     loopIterationCap: 3,
-    promotionThreshold: 3,  // More attempts before promoting
+    promotionThreshold: 3,
     includeReflection: false,
     includeVerification: true,
     preferLocal: true,
@@ -117,14 +105,32 @@ const PROFILES: Record<ProfileName, BudgetProfile> = {
 };
 
 // ---------------------------------------------------------------------------
-// Profile manager
+// Profile Manager
 // ---------------------------------------------------------------------------
 
 export class ProfileManager {
   private active: BudgetProfile;
+  private custom: Record<string, BudgetProfile> = {};
+  private profileDir: string;
 
-  constructor(initial: ProfileName = 'balanced') {
-    this.active = { ...PROFILES[initial] };
+  constructor(initial: ProfileName = 'balanced', storageDir?: string) {
+    this.profileDir = storageDir ? join(storageDir, 'profiles') : '';
+    if (this.profileDir) {
+      mkdirSync(this.profileDir, { recursive: true });
+      this.ensureBuiltins();
+      this.loadCustom();
+    }
+    this.active = { ...(this.getAll()[initial] || BUILTIN_PROFILES.balanced) };
+  }
+
+  /** Write built-in profiles to disk so they're visible and editable */
+  private ensureBuiltins(): void {
+    for (const [name, profile] of Object.entries(BUILTIN_PROFILES)) {
+      const path = join(this.profileDir, `${name}.json`);
+      if (!existsSync(path)) {
+        writeFileSync(path, JSON.stringify(profile, null, 2));
+      }
+    }
   }
 
   getActive(): BudgetProfile {
@@ -132,31 +138,60 @@ export class ProfileManager {
   }
 
   setProfile(name: ProfileName): void {
-    if (!PROFILES[name]) {
-      throw new Error(`Unknown profile: ${name}. Use: quality, balanced, cheap`);
+    const all = this.getAll();
+    if (!all[name]) {
+      const available = Object.keys(all).join(', ');
+      throw new Error(`Unknown profile: ${name}. Available: ${available}`);
     }
-    this.active = { ...PROFILES[name] };
+    this.active = { ...all[name] };
   }
 
-  /** Get a specific profile without activating it */
   getProfile(name: ProfileName): BudgetProfile {
-    return { ...PROFILES[name] };
+    const all = this.getAll();
+    return { ...(all[name] || BUILTIN_PROFILES.balanced) };
   }
 
-  /** Get all profile names */
-  getNames(): ProfileName[] {
-    return Object.keys(PROFILES) as ProfileName[];
+  getNames(): string[] {
+    return Object.keys(this.getAll());
   }
 
-  /** Format for display */
+  /** Get all profiles — disk versions override built-in defaults */
+  getAll(): Record<string, BudgetProfile> {
+    // Custom (from disk) takes priority — this includes edited built-ins
+    return { ...BUILTIN_PROFILES, ...this.custom };
+  }
+
+  /** Load custom profiles from .kondi-chat/profiles/*.json */
+  private loadCustom(): void {
+    if (!this.profileDir || !existsSync(this.profileDir)) return;
+    const files = readdirSync(this.profileDir).filter(f => f.endsWith('.json'));
+    for (const file of files) {
+      try {
+        const raw = readFileSync(join(this.profileDir, file), 'utf-8');
+        const profile = JSON.parse(raw) as BudgetProfile;
+        if (profile.name) {
+          this.custom[profile.name] = profile;
+        }
+      } catch {
+        // Skip invalid files
+      }
+    }
+  }
+
+  /** Reload custom profiles from disk */
+  reload(): void {
+    this.custom = {};
+    this.loadCustom();
+  }
+
   format(): string {
+    const all = this.getAll();
     const lines: string[] = [];
-    for (const [name, profile] of Object.entries(PROFILES)) {
+    for (const [name, profile] of Object.entries(all)) {
       const marker = name === this.active.name ? ' (active)' : '';
-      lines.push(`${name}${marker}: ${profile.description}`);
-      lines.push(`  Context: ${profile.contextBudget.toLocaleString()} tokens | Max output: ${profile.maxOutputTokens.toLocaleString()}`);
-      lines.push(`  Loop: ${profile.loopIterationCap} iterations, $${profile.loopCostCap.toFixed(2)} cap`);
-      lines.push(`  Promotion after ${profile.promotionThreshold} failures | Review: ${profile.includeReflection ? 'yes' : 'skip'} | Local: ${profile.preferLocal ? 'prefer' : 'no preference'}`);
+      const isCustom = this.custom[name] ? ' [custom]' : '';
+      lines.push(`${name}${marker}${isCustom}: ${profile.description}`);
+      lines.push(`  Context: ${profile.contextBudget.toLocaleString()} | Loop: ${profile.loopIterationCap} iters, $${profile.loopCostCap.toFixed(2)} cap | Local: ${profile.preferLocal ? 'yes' : 'no'}`);
       lines.push('');
     }
     return lines.join('\n');

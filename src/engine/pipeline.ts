@@ -102,7 +102,7 @@ export async function runPipeline(
   // Step 1: Dispatch — create task card
   // -----------------------------------------------------------------------
   const dispatchRoute = await route('dispatch', userIntent);
-  process.stderr.write(`  │  ╭─ dispatch${dispatchRoute.decision ? ` [${dispatchRoute.decision.reason}]` : ''}\n`);
+  // process.stderr.write(`  │  ╭─ dispatch${dispatchRoute.decision ? ` [${dispatchRoute.decision.reason}]` : ''}\n`);
   const { card, response: dispatchResponse } = await createTaskCard(
     userIntent,
     session.state,
@@ -111,8 +111,8 @@ export async function runPipeline(
     dispatchRoute.model,
     ledger,
   );
-  process.stderr.write(`  │  │  model: ${dispatchResponse.model}  ${dispatchResponse.inputTokens}in/${dispatchResponse.outputTokens}out\n`);
-  process.stderr.write(`  │  ╰─ task ${card.id} (${card.kind}): ${card.goal.slice(0, 60)}\n`);
+  // process.stderr.write(`  │  │  model: ${dispatchResponse.model}  ${dispatchResponse.inputTokens}in/${dispatchResponse.outputTokens}out\n`);
+  // process.stderr.write(`  │  ╰─ task ${card.id} (${card.kind}): ${card.goal.slice(0, 60)}\n`);
 
   // Record routing outcome
   config.collector?.record({
@@ -138,7 +138,7 @@ export async function runPipeline(
     : '';
 
   const execRoute = await route('execute', card.goal, card.kind, card.failures);
-  process.stderr.write(`  │  ╭─ execute${execRoute.decision ? ` [${execRoute.decision.reason}]` : ''}\n`);
+  // process.stderr.write(`  │  ╭─ execute${execRoute.decision ? ` [${execRoute.decision.reason}]` : ''}\n`);
   let executionResponse = await executeTaskCard(
     card,
     session.repoMap,
@@ -147,8 +147,8 @@ export async function runPipeline(
     execRoute.model,
     ledger,
   );
-  process.stderr.write(`  │  │  model: ${executionResponse.model}  ${executionResponse.inputTokens}in/${executionResponse.outputTokens}out\n`);
-  process.stderr.write(`  │  ╰─ done\n`);
+  // process.stderr.write(`  │  │  model: ${executionResponse.model}  ${executionResponse.inputTokens}in/${executionResponse.outputTokens}out\n`);
+  // process.stderr.write(`  │  ╰─ done\n`);
 
   // -----------------------------------------------------------------------
   // Step 2.5: Apply — write model output to disk
@@ -159,14 +159,14 @@ export async function runPipeline(
     if (changes.length > 0) {
       const backupDir = join(config.workingDir, '.kondi-chat', 'backups', card.id);
       applyResult = applyChanges(config.workingDir, changes, backupDir);
-      process.stderr.write(`  │  ╭─ apply\n`);
+      // process.stderr.write(`  │  ╭─ apply\n`);
       for (const f of applyResult.applied) {
-        process.stderr.write(`  │  │  ${f.isNew ? '+' : '~'} ${f.path}\n`);
+        // process.stderr.write(`  │  │  ${f.isNew ? '+' : '~'} ${f.path}\n`);
       }
       for (const s of applyResult.skipped) {
-        process.stderr.write(`  │  │  ✗ ${s}\n`);
+        // process.stderr.write(`  │  │  ✗ ${s}\n`);
       }
-      process.stderr.write(`  │  ╰─ ${applyResult.applied.length} file(s) written\n`);
+      // process.stderr.write(`  │  ╰─ ${applyResult.applied.length} file(s) written\n`);
     }
   }
 
@@ -178,7 +178,7 @@ export async function runPipeline(
   if (config.autoVerify && config.workingDir) {
     card.status = 'verifying';
 
-    process.stderr.write(`  │  ╭─ verify (local)\n`);
+    // process.stderr.write(`  │  ╭─ verify (local)\n`);
     verification = verify(config.workingDir, session.repoMap);
 
     const verifyOutput = [
@@ -187,7 +187,7 @@ export async function runPipeline(
       verification.lintOutput ? `Lint: ${verification.lintOutput}` : '',
     ].filter(Boolean).join('\n\n');
 
-    process.stderr.write(`  │  ╰─ ${verification.passed ? 'PASSED' : 'FAILED'}\n`);
+    // process.stderr.write(`  │  ╰─ ${verification.passed ? 'PASSED' : 'FAILED'}\n`);
     ledger.recordVerification(card.id, verification.passed, verifyOutput);
 
     // Retry on failure — enrich prompt with error context so router can escalate
@@ -197,14 +197,12 @@ export async function runPipeline(
         `Task ${card.id} failed (attempt ${card.failures}): ${verifyOutput.slice(0, 200)}`
       );
 
-      process.stderr.write(
-        `  │  ╭─ retry (attempt ${card.failures}/${config.promotionThreshold})\n`
-      );
+      // pipeline: retry (attempt N/M) — suppressed for TUI
 
       // Retry — router may promote to a better model based on failure count
       const retryRoute = await route('execute', card.goal, card.kind, card.failures);
       const retryCard = { ...card, constraints: [...card.constraints, `Previous attempt failed with: ${verifyOutput.slice(0, 500)}`] };
-      process.stderr.write(`  │  │  ${retryRoute.decision?.promoted ? 'PROMOTED' : 'retrying'}${retryRoute.decision ? ` [${retryRoute.decision.reason}]` : ''}\n`);
+      // process.stderr.write(`  │  │  ${retryRoute.decision?.promoted ? 'PROMOTED' : 'retrying'}${retryRoute.decision ? ` [${retryRoute.decision.reason}]` : ''}\n`);
       executionResponse = await executeTaskCard(
         retryCard,
         session.repoMap,
@@ -213,17 +211,17 @@ export async function runPipeline(
         retryRoute.model,
         ledger,
       );
-      process.stderr.write(`  │  │  model: ${executionResponse.model}  ${executionResponse.inputTokens}in/${executionResponse.outputTokens}out\n`);
-      process.stderr.write(`  │  ╰─ retry done\n`);
+      // process.stderr.write(`  │  │  model: ${executionResponse.model}  ${executionResponse.inputTokens}in/${executionResponse.outputTokens}out\n`);
+      // process.stderr.write(`  │  ╰─ retry done\n`);
 
       // Re-verify
-      process.stderr.write(`  │  ╭─ verify (local)\n`);
+      // process.stderr.write(`  │  ╭─ verify (local)\n`);
       verification = verify(config.workingDir, session.repoMap);
       const retryVerifyOutput = [
         verification.testOutput ? `Tests: ${verification.passed ? 'PASS' : 'FAIL'}\n${verification.testOutput}` : '',
         verification.typecheckOutput ? `Typecheck: ${verification.typecheckOutput}` : '',
       ].filter(Boolean).join('\n\n');
-      process.stderr.write(`  │  ╰─ ${verification.passed ? 'PASSED' : 'FAILED'}\n`);
+      // process.stderr.write(`  │  ╰─ ${verification.passed ? 'PASSED' : 'FAILED'}\n`);
       ledger.recordVerification(card.id, verification.passed, retryVerifyOutput);
     }
   }
@@ -250,7 +248,7 @@ export async function runPipeline(
   // Step 4: Reflect — frontier summarizes what happened
   // -----------------------------------------------------------------------
   const reflectRoute = await route('reflect', card.goal);
-  process.stderr.write(`  │  ╭─ reflect${reflectRoute.decision ? ` [${reflectRoute.decision.reason}]` : ''}\n`);
+  // process.stderr.write(`  │  ╭─ reflect${reflectRoute.decision ? ` [${reflectRoute.decision.reason}]` : ''}\n`);
   const reflectionResponse = await callLLM({
     provider: reflectRoute.provider,
     model: reflectRoute.model,
@@ -269,8 +267,8 @@ ${verification.typecheckOutput ? `Typecheck: ${verification.typecheckOutput.slic
 Summarize the results for the user. If failed, suggest what to try next.`,
     maxOutputTokens: 1500,
   });
-  process.stderr.write(`  │  │  model: ${reflectionResponse.model}  ${reflectionResponse.inputTokens}in/${reflectionResponse.outputTokens}out\n`);
-  process.stderr.write(`  │  ╰─ done\n`);
+  // process.stderr.write(`  │  │  model: ${reflectionResponse.model}  ${reflectionResponse.inputTokens}in/${reflectionResponse.outputTokens}out\n`);
+  // process.stderr.write(`  │  ╰─ done\n`);
 
   ledger.record('reflect', reflectionResponse, `Reflect on task ${card.id}`, { taskId: card.id });
 

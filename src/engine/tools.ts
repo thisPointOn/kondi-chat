@@ -240,7 +240,7 @@ async function toolCreateTask(
 ): Promise<{ content: string }> {
   const description = args.description as string;
 
-  process.stderr.write(`[tool] create_task: ${description.slice(0, 80)}\n`);
+  // process.stderr.write(`[tool] create_task: ${description.slice(0, 80)}\n`);
 
   const result = await runPipeline(description, ctx.session, ctx.ledger, ctx.pipelineConfig);
 
@@ -274,7 +274,7 @@ function toolReadFile(
     return { content: `File not found: ${relPath}`, isError: true };
   }
 
-  process.stderr.write(`[tool] read_file: ${relPath}\n`);
+  // process.stderr.write(`[tool] read_file: ${relPath}\n`);
 
   const content = readFileSync(fullPath, 'utf-8');
   const lines = content.split('\n');
@@ -302,7 +302,7 @@ function toolListFiles(
     return { content: `Directory not found: ${relPath}`, isError: true };
   }
 
-  process.stderr.write(`[tool] list_files: ${relPath}${recursive ? ' (recursive)' : ''}\n`);
+  // process.stderr.write(`[tool] list_files: ${relPath}${recursive ? ' (recursive)' : ''}\n`);
 
   if (recursive) {
     try {
@@ -347,7 +347,7 @@ function toolSearchCode(
     return { content: `Path traversal blocked: ${relPath}`, isError: true };
   }
 
-  process.stderr.write(`[tool] search_code: "${pattern}" in ${relPath}\n`);
+  // process.stderr.write(`[tool] search_code: "${pattern}" in ${relPath}\n`);
 
   // Sanitize glob to prevent command injection
   const safeGlob = glob ? glob.replace(/[^a-zA-Z0-9.*?_\-\/]/g, '') : '';
@@ -377,7 +377,7 @@ function toolRunCommand(
   const command = args.command as string;
   const timeout = (args.timeout as number) || 30_000;
 
-  process.stderr.write(`[tool] run_command: ${command}\n`);
+  // process.stderr.write(`[tool] run_command: ${command}\n`);
 
   try {
     const output = execSync(command, {
@@ -407,7 +407,7 @@ function toolUpdatePlan(
   if (args.constraints !== undefined) state.constraints = args.constraints as string[];
   if (args.plan !== undefined) state.currentPlan = args.plan as string[];
 
-  process.stderr.write(`[tool] update_plan: goal="${state.goal}"\n`);
+  // process.stderr.write(`[tool] update_plan: goal="${state.goal}"\n`);
 
   const summary = [
     `Goal: ${state.goal || '(not set)'}`,
@@ -432,7 +432,7 @@ function toolWriteFile(
     return { content: `Path traversal blocked: ${relPath}`, isError: true };
   }
 
-  process.stderr.write(`[tool] write_file: ${relPath}\n`);
+  // process.stderr.write(`[tool] write_file: ${relPath}\n`);
 
   // Backup existing file
   if (existsSync(fullPath)) {
@@ -467,7 +467,7 @@ function toolEditFile(
     return { content: `File not found: ${relPath}`, isError: true };
   }
 
-  process.stderr.write(`[tool] edit_file: ${relPath}\n`);
+  // process.stderr.write(`[tool] edit_file: ${relPath}\n`);
 
   const original = readFileSync(fullPath, 'utf-8');
 
