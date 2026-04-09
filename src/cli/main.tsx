@@ -161,6 +161,47 @@ async function handleInput(
 ): Promise<void> {
   const ui = getUI();
 
+  // --- User feedback detection ---
+  // If this message is similar to the previous user message, the previous
+  // response was unsatisfactory (retry signal). Record this as negative feedback.
+  const prevUserMsgs = session.messages.filter(m => m.role === 'user');
+  if (prevUserMsgs.length >= 1 && !input.startsWith('/') && !input.startsWith('@')) {
+    const prevInput = prevUserMsgs[prevUserMsgs.length - 1]?.content || '';
+    const similarity = computeSimilarity(input, prevInput);
+    if (similarity > 0.6) {
+      // User is retrying — the last response was bad
+      const lastAssistant = [...session.messages].reverse().find(m => m.role === 'assistant');
+      if (lastAssistant?.model) {
+        collector.recordFeedback(lastAssistant.model, {
+          userRetried: true,
+          userAccepted: false,
+          qualityScore: RoutingCollector.computeQualityScore({
+            userRetried: true,
+            responseLength: lastAssistant.content.length,
+            toolsUsed: 0,
+            latencyMs: 0,
+            phase: 'discuss',
+          }),
+        });
+      }
+    } else if (prevUserMsgs.length >= 2) {
+      // User moved on to a new topic — previous response was accepted
+      const lastAssistant = [...session.messages].reverse().find(m => m.role === 'assistant');
+      if (lastAssistant?.model) {
+        collector.recordFeedback(lastAssistant.model, {
+          userAccepted: true,
+          qualityScore: RoutingCollector.computeQualityScore({
+            userRetried: false,
+            responseLength: lastAssistant.content.length,
+            toolsUsed: 0,
+            latencyMs: 0,
+            phase: 'discuss',
+          }),
+        });
+      }
+    }
+  }
+
   // Slash commands
   if (input.startsWith('/')) {
     const output = await handleCommand(input, session, contextManager, ledger, registry, collector, toolCtx, mcpClient, toolManager, workingDir, profiles, router);
@@ -296,14 +337,22 @@ async function handleInput(
 
     ledger.record('discuss', response, messages[messages.length - 1]?.content?.slice(0, 200) || '(tool continuation)');
 
+    const toolsUsedThisIter = response.toolCalls?.length || 0;
     collector.recordWithEmbedding({
       timestamp: new Date().toISOString(),
       phase: 'discuss', promptLength: userMessage.length,
       contextTokens: response.inputTokens, failures: 0, promoted: false,
+      profile: profiles.getActive().name,
       modelId: response.model, provider: decision.model.provider,
       succeeded: true, wasFallback: response.wasFallback,
       inputTokens: response.inputTokens, outputTokens: response.outputTokens,
       costUsd: iterCost, latencyMs: response.latencyMs,
+      qualityScore: RoutingCollector.computeQualityScore({
+        responseLength: response.content.length,
+        toolsUsed: toolsUsedThisIter,
+        latencyMs: response.latencyMs,
+        phase: 'discuss',
+      }),
       routeReason: decision.reason,
     }, userMessage).catch(e => {
       process.stderr.write(`[embedding] ${(e as Error).message}\n`);
@@ -812,6 +861,22 @@ function compactOlderToolResults(messages: LLMMessage[]): void {
       }
     }
   }
+}
+
+/**
+ * Simple string similarity (Jaccard on word sets).
+ * Used to detect user retries — if >60% similar, it's a retry.
+ */
+function computeSimilarity(a: string, b: string): number {
+  const wordsA = new Set(a.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+  const wordsB = new Set(b.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+  if (wordsA.size === 0 || wordsB.size === 0) return 0;
+  let intersection = 0;
+  for (const w of wordsA) {
+    if (wordsB.has(w)) intersection++;
+  }
+  const union = new Set([...wordsA, ...wordsB]).size;
+  return union > 0 ? intersection / union : 0;
 }
 
 function formatToolArgs(tc: ToolCall): string {

@@ -23,36 +23,71 @@ import type { EmbeddingService } from './embeddings.ts';
 export interface RoutingSample {
   timestamp: string;
 
-  // Routing context (features for the NN)
+  // --- Routing context (features for the NN) ---
   phase: LedgerPhase;
   taskKind?: TaskKind;
   promptLength: number;
   contextTokens: number;
   failures: number;
   promoted: boolean;
+  /** Active budget profile when this decision was made */
+  profile?: string;
 
   /** Truncated prompt text for embedding (first 512 chars) */
   promptText?: string;
   /** Pre-computed embedding vector (if embedding service was available) */
   embedding?: number[];
 
-  // What was chosen
+  // --- What was chosen ---
   modelId: string;
   provider: string;
 
-  // Outcome (labels for the NN)
+  // --- Outcome (labels for the NN) ---
   succeeded: boolean;
   verificationPassed?: boolean;
+
   /** API error — model was unreachable, overloaded, or timed out */
   apiError?: boolean;
   /** Error code (429, 500, 529, etc.) */
   apiErrorCode?: number;
   /** Was this a fallback call after the primary model failed? */
   wasFallback?: boolean;
+
+  // --- Cost & performance ---
   inputTokens: number;
   outputTokens: number;
   costUsd: number;
   latencyMs: number;
+
+  // --- Quality signals (richer training data) ---
+
+  /**
+   * User accepted the response (moved on to next message without
+   * rejecting, retrying, or asking the same question).
+   * null = not yet determined (set retroactively).
+   */
+  userAccepted?: boolean | null;
+
+  /**
+   * User retried — sent a very similar message right after this response,
+   * indicating the response was unsatisfactory.
+   */
+  userRetried?: boolean;
+
+  /**
+   * Quality score 0-1 based on heuristics:
+   * - Did the model use tools appropriately?
+   * - Was the response length reasonable for the task?
+   * - Did the user follow up with a correction?
+   * - Did verification pass (if applicable)?
+   */
+  qualityScore?: number;
+
+  /**
+   * Cost efficiency: quality / cost. Higher = better value.
+   * Used to learn which model gives the best bang for buck.
+   */
+  costEfficiency?: number;
 
   // The reason the rule router gave
   routeReason: string;
@@ -92,6 +127,74 @@ export class RoutingCollector {
       }
     }
     this.record(sample);
+  }
+
+  /**
+   * Retroactively update the last sample for a model with user feedback.
+   * Called when we detect the user's next action implies acceptance or rejection.
+   */
+  recordFeedback(modelId: string, feedback: {
+    userAccepted?: boolean;
+    userRetried?: boolean;
+    qualityScore?: number;
+  }): void {
+    // Read all samples, update the last one matching this model, rewrite
+    const samples = this.getAll();
+    for (let i = samples.length - 1; i >= 0; i--) {
+      if (samples[i].modelId === modelId) {
+        if (feedback.userAccepted !== undefined) samples[i].userAccepted = feedback.userAccepted;
+        if (feedback.userRetried !== undefined) samples[i].userRetried = feedback.userRetried;
+        if (feedback.qualityScore !== undefined) {
+          samples[i].qualityScore = feedback.qualityScore;
+          // Compute cost efficiency
+          if (samples[i].costUsd > 0) {
+            samples[i].costEfficiency = feedback.qualityScore / samples[i].costUsd;
+          }
+        }
+        break;
+      }
+    }
+    // Rewrite the file
+    const { writeFileSync } = require('node:fs');
+    writeFileSync(this.filePath, samples.map(s => JSON.stringify(s)).join('\n') + '\n');
+  }
+
+  /**
+   * Compute a quality score based on heuristics.
+   * Returns 0-1 where 1 is best quality.
+   */
+  static computeQualityScore(params: {
+    verificationPassed?: boolean;
+    apiError?: boolean;
+    userRetried?: boolean;
+    responseLength: number;
+    toolsUsed: number;
+    latencyMs: number;
+    phase: string;
+  }): number {
+    let score = 0.5; // Base score
+
+    // Verification is the strongest signal
+    if (params.verificationPassed === true) score += 0.3;
+    if (params.verificationPassed === false) score -= 0.4;
+
+    // API errors are very bad
+    if (params.apiError) score -= 0.5;
+
+    // User retry is a strong negative signal
+    if (params.userRetried) score -= 0.3;
+
+    // Response length heuristics (too short or too long is bad)
+    if (params.phase === 'execute' && params.responseLength < 50) score -= 0.1;
+    if (params.responseLength > 20000) score -= 0.05; // Wastefully long
+
+    // Tool usage in discuss phase is usually good (model is investigating)
+    if (params.phase === 'discuss' && params.toolsUsed > 0) score += 0.1;
+
+    // Very slow responses are penalized slightly
+    if (params.latencyMs > 30000) score -= 0.05;
+
+    return Math.max(0, Math.min(1, score));
   }
 
   /** Load all recorded samples */
@@ -199,17 +302,20 @@ export class RoutingCollector {
     // Collect all model IDs
     const modelNames = [...new Set(samples.map(s => s.modelId))].sort();
 
-    // Discover all phases and task kinds from the data (open-ended)
+    // Discover all categories from the data (open-ended)
     const phases = [...new Set(samples.map(s => s.phase))].sort();
     const taskKinds = [...new Set(samples.map(s => s.taskKind || 'none'))].sort();
+    const profileNames = [...new Set(samples.map(s => s.profile || 'none'))].sort();
 
     // Build feature names for interpretability
     const featureNames = [
       ...phases.map(p => `phase:${p}`),
       ...taskKinds.map(k => `kind:${k}`),
+      ...profileNames.map(p => `profile:${p}`),
       'prompt_length',
       'context_tokens',
       'failures',
+      'latency_norm',
     ];
 
     const features: number[][] = [];
@@ -221,20 +327,23 @@ export class RoutingCollector {
       const phaseVec = phases.map(p => p === s.phase ? 1 : 0);
       // One-hot task kind (dynamic)
       const kindVec = taskKinds.map(k => k === (s.taskKind || 'none') ? 1 : 0);
+      // One-hot profile (dynamic)
+      const profileVec = profileNames.map(p => p === (s.profile || 'none') ? 1 : 0);
       // Normalized features
       const promptNorm = Math.min(s.promptLength / 10_000, 1);
       const contextNorm = Math.min(s.contextTokens / 100_000, 1);
       const failureNorm = Math.min(s.failures / 5, 1);
+      const latencyNorm = Math.min(s.latencyMs / 60_000, 1);
 
-      features.push([...phaseVec, ...kindVec, promptNorm, contextNorm, failureNorm]);
+      features.push([...phaseVec, ...kindVec, ...profileVec, promptNorm, contextNorm, failureNorm, latencyNorm]);
 
-      // Labels: did this model succeed on this sample?
+      // Labels: use quality score if available, otherwise binary success
       for (const name of modelNames) {
         if (s.modelId === name) {
-          labels[name].push(s.succeeded ? 1 : 0);
+          const label = s.qualityScore !== undefined ? s.qualityScore : (s.succeeded ? 1 : 0);
+          labels[name].push(label);
         } else {
-          // Unknown — we didn't test this model on this sample
-          labels[name].push(-1); // -1 = missing, exclude from loss
+          labels[name].push(-1); // Unknown — exclude from loss
         }
       }
     }
