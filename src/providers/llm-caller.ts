@@ -35,7 +35,7 @@ async function* parseSSE(resp: Response): AsyncGenerator<{ type?: string; data?:
       buffer = lines.pop() || '';
 
       for (const line of lines) {
-        const trimmed = line.trimEnd(); // Handle trailing whitespace from Anthropic
+        const trimmed = line.trim();
         if (trimmed === '') {
           // Blank line = end of SSE event
           if (dataLines.length > 0) {
@@ -44,21 +44,20 @@ async function* parseSSE(resp: Response): AsyncGenerator<{ type?: string; data?:
             try {
               parsed = JSON.parse(joined);
             } catch {
-              // Not JSON — keep as string (shouldn't happen with valid SSE)
               parsed = joined;
             }
             yield { type: eventType, data: parsed };
           }
           eventType = undefined;
           dataLines = [];
-        } else if (trimmed.startsWith('event:')) {
-          eventType = trimmed.slice(6).trim();
-        } else if (trimmed.startsWith('data:')) {
-          const raw = trimmed.slice(5).trim();
+        } else if (trimmed.startsWith('event:') || trimmed.startsWith('event :')) {
+          eventType = trimmed.replace(/^event\s*:\s*/, '');
+        } else if (trimmed.startsWith('data:') || trimmed.startsWith('data :')) {
+          const raw = trimmed.replace(/^data\s*:\s*/, '');
           if (raw === '[DONE]') continue;
           dataLines.push(raw);
         }
-        // Ignore other lines (comments starting with :, etc.)
+        // Ignore other lines (comments starting with :, id:, retry:, etc.)
       }
     }
 
@@ -182,6 +181,7 @@ async function callAnthropic(
     let currentToolJson = '';
 
     for await (const event of parseSSE(resp)) {
+      try {
       if (event.type === 'message_start') {
         const usage = event.data?.message?.usage;
         if (usage) {
@@ -222,6 +222,7 @@ async function callAnthropic(
         const usage = event.data?.usage;
         if (usage) outputTokens = usage.output_tokens || 0;
       }
+      } catch { /* skip malformed SSE event */ }
     }
 
     return {

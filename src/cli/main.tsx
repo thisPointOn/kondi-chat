@@ -326,7 +326,7 @@ async function handleInput(
       tools: toolManager.getTools('discuss'),
       maxOutputTokens: 8192,
       cacheablePrefix,
-      stream: true,
+      stream: shouldStream,
       onToken: shouldStream ? (token: string) => {
         streamContent += token;
         ui.updateLastAssistant({ content: streamContent });
