@@ -50,11 +50,21 @@ async fn main() -> io::Result<()> {
         std::process::exit(status.code().unwrap_or(1));
     }
 
+    // Ratatui renders to stderr (see below), so the backend's stderr MUST NOT
+    // be inherited — a single retry/warning write would corrupt the frame.
+    // Pipe it to an append-only log file under the project's .kondi-chat dir.
+    let log_dir = project_root.join(".kondi-chat");
+    std::fs::create_dir_all(&log_dir).ok();
+    let backend_log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join("backend.log"))
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to open backend log: {e}")))?;
     let mut child = TokioCommand::new("npx")
         .args(["tsx", "src/cli/backend.ts"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::from(backend_log))
         .current_dir(&project_root)
         .spawn()
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to start backend: {e}")))?;

@@ -649,9 +649,13 @@ function geminiMessages(messages: LLMMessage[]): any[] {
 
 const MAX_RETRIES = 2;
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504, 529]);
+// Per-call LLM timeout. 60s is still generous for simple questions and
+// caps the worst-case "stuck in working..." duration before a retry kicks in.
+// The previous 120s meant a single hung connection tied the UI up for two
+// full minutes before the first retry.
 // Spec 13 — per-call timeout and per-turn wall-clock cap.
-const LLM_TIMEOUT_MS = 120_000;
-const TURN_WALL_CLOCK_MS = 300_000;
+const LLM_TIMEOUT_MS = 60_000;
+const TURN_WALL_CLOCK_MS = 180_000;
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -745,9 +749,8 @@ export async function callLLM(req: LLMRequest): Promise<LLMResponse> {
       if (attempt < MAX_RETRIES && retryable && Date.now() < turnDeadline) {
         const baseDelay = retryAfter ?? Math.min(1000 * Math.pow(2, attempt), 8_000);
         const delay = Math.min(baseDelay, Math.max(0, turnDeadline - Date.now()));
-        process.stderr.write(
-          `  │  [retry] ${provider}/${model} ${statusCode || 'timeout'} — waiting ${(delay / 1000).toFixed(0)}s (attempt ${attempt + 1}/${MAX_RETRIES})\n`
-        );
+        // Do NOT write to stderr here — the Rust TUI renders to stderr and
+        // any stray bytes corrupt the frame. Details land in backend.log.
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
@@ -764,11 +767,14 @@ export async function callLLM(req: LLMRequest): Promise<LLMResponse> {
     if (!fbKey && fb.provider !== 'ollama') continue;
 
     try {
-      process.stderr.write(
-        `  │  [fallback] ${provider}/${model} unavailable → trying ${fb.provider}/${fb.model}\n`
-      );
       const fbReq = { ...req, provider: fb.provider, model: fb.model };
-      const fbResponse = await callProvider(fb.provider, fbKey, fb.model, fbReq);
+      // Wrap fallback in the same timeout as the primary call — otherwise
+      // a hung fallback provider can block the turn forever.
+      const fbResponse = await withTimeout(
+        callProvider(fb.provider, fbKey, fb.model, fbReq),
+        LLM_TIMEOUT_MS,
+        `${fb.provider}/${fb.model}`,
+      );
       fbResponse.wasFallback = true;
       fbResponse.requestedModel = model;
       return fbResponse;
