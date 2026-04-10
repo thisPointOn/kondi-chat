@@ -36,6 +36,7 @@ import { CouncilProfileManager } from '../council/profiles.ts';
 import { COUNCIL_TOOL, executeCouncil } from '../council/tool.ts';
 import { RoutingCollector } from '../router/collector.ts';
 import { Analytics } from '../audit/analytics.ts';
+import { TelemetryEmitter } from '../audit/telemetry.ts';
 
 // Spec 08 — MAX_TOOL_ITERATIONS deleted; handleSubmit now uses LoopGuard
 // driven by the active budget profile.
@@ -96,6 +97,8 @@ async function main() {
   }
   const ledger = new Ledger(session.id, storageDir);
   const analytics = new Analytics(storageDir);
+  const telemetry = new TelemetryEmitter(storageDir);
+  telemetry.record({ kind: 'feature_used', feature: resumed ? 'session_resumed' : 'session_started', timestamp: new Date().toISOString() });
   const router = new UnifiedRouter(storageDir, { useIntent: true });
   const registry = router.registry;
   const collector = router.collector;
@@ -212,6 +215,10 @@ async function main() {
     resumed_message_count: resumed ? session.messages.length : null,
   });
 
+  if (telemetry.getState() === 'disabled' && !resumed) {
+    emit({ type: 'status', text: 'Telemetry is disabled. Run /telemetry enable to opt in to anonymous local usage metrics.' });
+  }
+
   sessionStore.setActive(session.id);
   sessionStore.save(session, profiles.getActive().name, router.rules.getOverride()?.id);
   const saveInterval = setInterval(() => {
@@ -282,7 +289,7 @@ async function main() {
     }
 
     if (cmd.type === 'command') {
-      const output = await handleCommand(cmd.text, session, contextManager, ledger, registry, collector, toolCtx, mcpClient, toolManager, workingDir, profiles, router, councilProfiles, councilPath, analytics, checkpointManager, sessionStore, rateLimiter, pendingImages);
+      const output = await handleCommand(cmd.text, session, contextManager, ledger, registry, collector, toolCtx, mcpClient, toolManager, workingDir, profiles, router, councilProfiles, councilPath, analytics, checkpointManager, sessionStore, rateLimiter, pendingImages, telemetry);
       emit({ type: 'command_result', output });
       return;
     }
@@ -519,6 +526,7 @@ async function handleCommand(
   sessionStore: SessionStore,
   rateLimiter: RateLimiter,
   pendingImages: ImageAttachment[],
+  telemetry: TelemetryEmitter,
 ): Promise<string> {
   // Import the actual command handler from main.tsx would be circular,
   // so we duplicate the essential commands here
@@ -606,6 +614,24 @@ async function handleCommand(
       } catch (e) {
         return `Attach failed: ${(e as Error).message}`;
       }
+    }
+    case '/telemetry': {
+      const sub = parts[1] || 'status';
+      if (sub === 'enable') { telemetry.enable(); return 'Telemetry: local-only (no network). Run /telemetry details to see the schema.'; }
+      if (sub === 'disable') { telemetry.disable(); return 'Telemetry: disabled (local events cleared).'; }
+      if (sub === 'delete') { telemetry.deleteAll(); return 'Telemetry: all local events deleted.'; }
+      if (sub === 'export') { return telemetry.export(); }
+      if (sub === 'details') {
+        return [
+          'Telemetry records anonymous counters only. Allowed kinds:',
+          '  feature_used   — enum counter (session_started, undo_invoked, …)',
+          '  tool_called    — counter by category (filesystem_read, git, web, …)',
+          '  error_occurred — counter by class (llm_timeout, permission_denied, …)',
+          'NEVER recorded: prompts, responses, tool args, file paths, URLs, API keys.',
+          'Storage: .kondi-chat/telemetry.json (local only). No network in v1.',
+        ].join('\n');
+      }
+      return telemetry.format();
     }
     case '/rate-limits': return rateLimiter.format();
     case '/sessions': return sessionStore.format(workingDir);

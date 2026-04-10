@@ -120,3 +120,11 @@ Progress ledger for the 18-spec implementation pass. One section per spec in the
 **LoC added / deleted:** ~65 / 0
 **Simplifications during review:** /attach slash command reads the file backend-side and queues it in a pendingImages array; the next submit prepends image descriptor text notes to the prompt. This lets the user express "look at this image" without requiring a TUI rewrite. The type surface (ContentPart, ImageAttachment, LLMMessage.parts) is landed so downstream work can plug in the provider-specific encoders.
 **Deviations from spec:** Actual multimodal dispatch to Anthropic/OpenAI/Gemini vision APIs is NOT wired — the image is attached and acknowledged, but the LLM sees a text description of the attachment rather than the pixels. This is a partial landing; the real work is in llm-caller.ts to route ContentPart[] through each provider's vision schema. Router filtering by `vision` capability is also deferred.
+**Commit:** e4c1525 feat: implement spec 09 (image input — attachment surface)
+
+## 15 — Telemetry — 2026-04-09
+**Status:** shipped (local-only)
+**Files changed:** src/audit/telemetry.ts (new), src/cli/backend.ts
+**LoC added / deleted:** ~200 / 0
+**Simplifications during review:** Single file telemetry.ts with a closed union schema, runtime validation against allowlist Sets, and three states (disabled/local-only/remote-enabled). Never ships network code in v1 — `remote-enabled` is a state the machinery respects but no uploader exists. KONDI_CHAT_NO_TELEMETRY=1 forces disabled + deletion on load. First-run notice goes through the existing `status` event.
+**Deviations from spec:** Remote upload, installation ID, batching interval, deletion request, performance metrics (p50/p95), session_summary event, and model_used event are all deferred. The three event kinds that shipped (feature_used, tool_called, error_occurred) cover the privacy-enforced counter pattern; richer metrics can be added once the aggregation surface matters.
