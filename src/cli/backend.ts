@@ -37,6 +37,7 @@ import { COUNCIL_TOOL, executeCouncil } from '../council/tool.ts';
 import { RoutingCollector } from '../router/collector.ts';
 import { Analytics } from '../audit/analytics.ts';
 import { TelemetryEmitter } from '../audit/telemetry.ts';
+import { runFirstRunWizard, checkForUpdate } from './wizard.ts';
 
 // Spec 08 — MAX_TOOL_ITERATIONS deleted; handleSubmit now uses LoopGuard
 // driven by the active budget profile.
@@ -68,6 +69,11 @@ async function main() {
   const workingDir = process.cwd();
   const storageDir = resolve(workingDir, '.kondi-chat');
   mkdirSync(storageDir, { recursive: true });
+
+  // Spec 16 — first-run setup wizard (non-interactive; safe on every start).
+  runFirstRunWizard(storageDir);
+  // Spec 16 — async update check; swallow failures. Don't block startup.
+  checkForUpdate('0.1.0').then(b => { if (b) emit({ type: 'status', text: b }); }).catch(() => {});
 
   // Spec 06 — session resume
   const sessionStore = new SessionStore(storageDir);

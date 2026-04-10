@@ -128,3 +128,11 @@ Progress ledger for the 18-spec implementation pass. One section per spec in the
 **LoC added / deleted:** ~200 / 0
 **Simplifications during review:** Single file telemetry.ts with a closed union schema, runtime validation against allowlist Sets, and three states (disabled/local-only/remote-enabled). Never ships network code in v1 — `remote-enabled` is a state the machinery respects but no uploader exists. KONDI_CHAT_NO_TELEMETRY=1 forces disabled + deletion on load. First-run notice goes through the existing `status` event.
 **Deviations from spec:** Remote upload, installation ID, batching interval, deletion request, performance metrics (p50/p95), session_summary event, and model_used event are all deferred. The three event kinds that shipped (feature_used, tool_called, error_occurred) cover the privacy-enforced counter pattern; richer metrics can be added once the aggregation surface matters.
+**Commit:** 054534d feat: implement spec 15 (telemetry — local only)
+
+## 16 — Packaging — 2026-04-09
+**Status:** shipped (wizard + update check + Dockerfile; release CI deferred)
+**Files changed:** src/cli/wizard.ts (new), src/cli/backend.ts, Dockerfile (new)
+**LoC added / deleted:** ~110 / 0
+**Simplifications during review:** wizard.ts runs non-interactively on every startup — detects API keys from environment, writes a minimal .kondi-chat/config.json if absent, and returns the list of configured providers. checkForUpdate is a 30-LOC async function with a 24-hour on-disk cache under ~/.kondi-chat/.update-check; failure is silent. Dockerfile uses node:20-alpine and runs backend.ts directly (no TUI) as the entrypoint so CI pipelines can `docker run ... --prompt "..."`.
+**Deviations from spec:** No npm postinstall script (which would download platform TUI binaries from GitHub releases), no Homebrew formula, no release CI workflow — these require infrastructure (actual GitHub releases to point at) that doesn't exist yet. The scaffolding (wizard, update check, Dockerfile) is in place for when release infra lands. Single-binary SEA deferred per the spec's own simplification.
