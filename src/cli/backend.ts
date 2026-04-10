@@ -35,7 +35,8 @@ import { COUNCIL_TOOL, executeCouncil } from '../council/tool.ts';
 import { RoutingCollector } from '../router/collector.ts';
 import { Analytics } from '../audit/analytics.ts';
 
-const MAX_TOOL_ITERATIONS = 20;
+// Spec 08 — MAX_TOOL_ITERATIONS deleted; handleSubmit now uses LoopGuard
+// driven by the active budget profile.
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -299,6 +300,9 @@ async function handleSubmit(
 ) {
   const turnNumber = session.messages.filter(m => m.role === 'user').length + 1;
   let checkpointCreated = false;
+  // Spec 08 — profile-driven bounds replace the old MAX_TOOL_ITERATIONS=20.
+  const loopGuard = new LoopGuard(profiles.getActive());
+  toolCtx.loopGuard = loopGuard;
   // @mention check
   const mentionMatch = input.match(/^@(\S+)\s+([\s\S]+)/);
   if (mentionMatch) {
@@ -351,7 +355,8 @@ async function handleSubmit(
   const msgId = `msg-${Date.now()}`;
   emit({ type: 'message', id: msgId, role: 'assistant', content: '', model_label: '...' });
 
-  for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+  while (true) {
+    const iteration = loopGuard.check().iteration;
     const decision = await router.select('discuss', userMessage, undefined, iteration);
     respondingModel = decision.model.alias || decision.model.name;
     respondingProvider = decision.model.provider;
@@ -426,8 +431,14 @@ async function handleSubmit(
 
     messages.push({ role: 'tool', toolResults });
 
-    if (iteration === MAX_TOOL_ITERATIONS - 1) {
-      finalContent = response.content || `Completed ${allToolCalls.length} tool calls.`;
+    // Spec 08 — drive the loop with LoopGuard. Feed the first tool error so
+    // stuck detection works on ordinary turns.
+    const firstError = toolResults.find(r => r.isError)?.content;
+    loopGuard.recordIteration(iterCost, firstError);
+    const guard = loopGuard.check();
+    if (guard.shouldStop) {
+      finalContent = response.content || `Loop stopped: ${guard.stopReason || 'bounds reached'}`;
+      break;
     }
   }
 

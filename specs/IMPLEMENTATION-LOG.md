@@ -96,3 +96,11 @@ Progress ledger for the 18-spec implementation pass. One section per spec in the
 **LoC added / deleted:** ~170 / 0
 **Simplifications during review:** No SubAgentManager class — `runSubAgent` is a single async function that runs a bounded loop reusing callLLM + toolManager.execute directly. Concurrency is "whatever the caller awaits"; the spec's 3-way semaphore is deferred since the parent agent already serializes tool calls per turn. Tool filtering per type uses two hardcoded Sets. A ToolContext callback (`spawnSubAgent`) keeps the tool dispatcher decoupled from backend wiring.
 **Deviations from spec:** SubAgentManager + concurrency semaphore deferred — agents currently spawn one at a time because the LLM's parallel tool_calls already execute sequentially in handleSubmit. The runAgentLoop extraction called for by Spec 10 was not performed (Spec 10 used a different path), so runSubAgent reimplements a smaller version of the loop body. This is the duplication the spec warned against — worth revisiting if sub-agents grow more complex. Sub-agent-specific routing model preferences dropped per the simplification note.
+**Commit:** 345b78e feat: implement spec 07 (sub-agent spawning)
+
+## 08 — Persistent Loop — 2026-04-09
+**Status:** shipped
+**Files changed:** src/cli/backend.ts, src/engine/tools.ts
+**LoC added / deleted:** ~15 / ~6
+**Simplifications during review:** Deleted MAX_TOOL_ITERATIONS=20; handleSubmit now loops via LoopGuard(profile). The first error from each iteration's tool results feeds `loopGuard.recordIteration` so stuck detection works on regular turns, not just `/loop`. `toolCtx.loopGuard` is exposed for tools that want to inspect status.
+**Deviations from spec:** None — this is exactly the spec.

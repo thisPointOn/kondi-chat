@@ -21,6 +21,7 @@ import { runPipeline, type PipelineConfig } from './pipeline.ts';
 import { computeUnifiedDiff } from './diff.ts';
 import type { MemoryManager } from '../context/memory.ts';
 import type { PermissionManager } from './permissions.ts';
+import type { LoopGuard } from './loop-guard.ts';
 
 // ---------------------------------------------------------------------------
 // Tool definitions (provider-agnostic JSON Schema)
@@ -233,6 +234,8 @@ export interface ToolContext {
   mutatedFiles?: Set<string>;
   /** Spec 07 — used by spawn_agent to run bounded child agent loops. */
   spawnSubAgent?: (type: 'research' | 'worker' | 'planner', instruction: string) => Promise<string>;
+  /** Spec 08 — current-turn loop guard for tools that want to inspect status. */
+  loopGuard?: LoopGuard;
 }
 
 // ---------------------------------------------------------------------------
