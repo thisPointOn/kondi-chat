@@ -67,9 +67,9 @@ export class WebToolsManager {
   constructor() {
     this.apiKey = process.env.BRAVE_SEARCH_API_KEY || '';
     this.enabled = this.apiKey !== '';
-    if (!this.enabled) {
-      process.stderr.write('[web] BRAVE_SEARCH_API_KEY not set; web_search/web_fetch disabled\n');
-    }
+    // No stderr write: absence of an optional env var is not an error and
+    // fires on every single startup. getTools() returns [] when disabled
+    // so the agent simply never sees the web tools.
   }
 
   isEnabled(): boolean { return this.enabled; }

@@ -222,9 +222,8 @@ async function main() {
     resumed_message_count: resumed ? session.messages.length : null,
   });
 
-  if (telemetry.getState() === 'disabled' && !resumed) {
-    emit({ type: 'status', text: 'Telemetry is disabled. Run /telemetry enable to opt in to anonymous local usage metrics.' });
-  }
+  // Telemetry-disabled startup banner removed — it rendered on every launch
+  // and cluttered the status line. Users can discover /telemetry via /help.
 
   sessionStore.setActive(session.id);
   sessionStore.save(session, profiles.getActive().name, router.rules.getOverride()?.id);
