@@ -64,3 +64,11 @@ Progress ledger for the 18-spec implementation pass. One section per spec in the
 **LoC added / deleted:** ~260 / ~2
 **Simplifications during review:** Single rate-limiter.ts with Bucket as a private helper class, RateLimitOverflowError, RateLimiter, config loader, and module-global getter/setter. Proactive limiting is always on; post-throttle slowdown is hard-coded to 10%/5min. llm-caller.ts acquires before each attempt, records after success, records throttle on 429/503. Overflow is surfaced as a synthetic 503 so the existing fallback loop handles it without new error paths.
 **Deviations from spec:** `responseHeaders` are not yet populated by provider implementations — the rate limiter's header-parsing path is wired but will only fire when a provider opts in to surfacing headers. Retry-After already works via the llm-caller's error-message regex parser added in Spec 13.
+**Commit:** f38a845 feat: implement spec 14 (rate limiting)
+
+## 12 — Hooks System — 2026-04-09
+**Status:** shipped
+**Files changed:** src/engine/hooks.ts (new), src/mcp/tool-manager.ts, src/cli/backend.ts
+**LoC added / deleted:** ~175 / ~3
+**Simplifications during review:** Single hooks.ts. `executeWithoutHooks` splits recursion-free dispatch from the public hooked path; `tool:` hooks go through executeWithoutHooks via a callback registered at setHookRunner time. Shell expansion uses single-quote escaping for all interpolated values. Built-in auto-format only (no lint/test). Depth limit is a simple counter.
+**Deviations from spec:** Variable substitution quotes ALL substituted values uniformly rather than context-aware inside vs outside shell quotes — acceptable because the simpler scheme is safer and the spec's "placeholders outside quotes are shell-escaped" clause is satisfied. Hook-invoked tools still go through permissions per the Spec 12 clarification.

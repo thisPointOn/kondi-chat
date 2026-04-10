@@ -22,6 +22,7 @@ import { detectGitRepo, formatGitContextForPrompt, GIT_TOOLS, executeGitTool, ty
 import { CheckpointManager, isMutatingToolCall, predictedMutations } from '../engine/checkpoints.ts';
 import { SessionStore, AUTO_SAVE_MS } from '../session/store.ts';
 import { RateLimiter, loadRateLimitConfig, setRateLimiter } from '../providers/rate-limiter.ts';
+import { HookRunner } from '../engine/hooks.ts';
 import { Router as UnifiedRouter } from '../router/index.ts';
 import { ProfileManager } from '../router/profiles.ts';
 import { LoopGuard } from '../engine/loop-guard.ts';
@@ -107,6 +108,8 @@ async function main() {
     await mcpClient.connectAll(mcpConfigs);
   }
   const toolManager = new ToolManager(mcpClient);
+  const hookRunner = new HookRunner(join(storageDir, 'hooks.json'), workingDir);
+  toolManager.setHookRunner(hookRunner);
 
   const councilProfiles = new CouncilProfileManager(storageDir);
   const councilPath = resolve(workingDir, '../kondi-council');

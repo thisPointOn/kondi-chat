@@ -12,6 +12,7 @@ import type { ToolDefinition } from '../types.ts';
 import { AGENT_TOOLS, executeTool, type ToolContext, type ToolExecutionResult } from '../engine/tools.ts';
 import { McpClientManager } from './client.ts';
 import type { McpToolInfo } from './types.ts';
+import type { HookRunner } from '../engine/hooks.ts';
 
 /** Extra tools registered at runtime (e.g., council) */
 let extraTools: ToolDefinition[] = [];
@@ -56,9 +57,15 @@ const PHASE_TOOLS: Record<string, string[]> = {
 
 export class ToolManager {
   private mcpClient: McpClientManager;
+  private hookRunner?: HookRunner;
 
   constructor(mcpClient: McpClientManager) {
     this.mcpClient = mcpClient;
+  }
+
+  setHookRunner(runner: HookRunner): void {
+    this.hookRunner = runner;
+    runner.setToolExecutor((name, args, ctx) => this.executeWithoutHooks(name, args, ctx));
   }
 
   /** Register an extra tool (e.g., council) */
@@ -102,6 +109,31 @@ export class ToolManager {
    * Spec 01: every path goes through the permission wedge first.
    */
   async execute(
+    name: string,
+    args: Record<string, unknown>,
+    toolCtx: ToolContext,
+  ): Promise<ToolExecutionResult> {
+    // Spec 12 — before hooks run first (can block before the permission dialog).
+    if (this.hookRunner) {
+      const before = await this.hookRunner.runBefore(name, args, toolCtx, toolCtx.emit);
+      if (before.blocked) {
+        return { content: `Tool blocked by hook: ${before.messages.join('; ')}`, isError: true };
+      }
+    }
+
+    const result = await this.executeWithoutHooks(name, args, toolCtx);
+
+    if (this.hookRunner) {
+      return this.hookRunner.runAfter(name, args, result, toolCtx, toolCtx.emit);
+    }
+    return result;
+  }
+
+  /**
+   * Run a tool without the before/after hook pass — used by `tool:` hooks to
+   * avoid recursion. Permissions still apply (Spec 01 hasn't moved).
+   */
+  async executeWithoutHooks(
     name: string,
     args: Record<string, unknown>,
     toolCtx: ToolContext,
