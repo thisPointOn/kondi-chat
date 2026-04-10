@@ -8,7 +8,13 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type")]
 pub enum BackendEvent {
     #[serde(rename = "ready")]
-    Ready { models: Vec<String>, mode: String, status: String },
+    Ready {
+        models: Vec<String>,
+        mode: String,
+        status: String,
+        #[serde(default)]
+        git_info: Option<GitInfo>,
+    },
 
     #[serde(rename = "message")]
     Message { id: String, role: String, content: String, model_label: Option<String> },
@@ -62,6 +68,14 @@ pub struct ToolCallInfo {
     /// Spec 03 — unified diff produced by write_file / edit_file.
     #[serde(default)]
     pub diff: Option<String>,
+}
+
+/// Spec 02 — git snapshot the backend sends on `ready`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitInfo {
+    pub branch: String,
+    pub dirty_count: u32,
+    pub last_commit: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

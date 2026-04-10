@@ -1,4 +1,4 @@
-use crate::protocol::{BackendEvent, MessageStats, ToolCallInfo};
+use crate::protocol::{BackendEvent, GitInfo, MessageStats, ToolCallInfo};
 use std::time::Instant;
 
 #[derive(Debug, Clone)]
@@ -38,6 +38,8 @@ pub struct App {
     pub session_cost: f64,
     /// Spec 01 — queue of pending permission prompts (oldest at front).
     pub pending_permissions: Vec<PermissionDialog>,
+    /// Spec 02 — current git snapshot (None when not a git repo).
+    pub git_info: Option<GitInfo>,
 }
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -65,6 +67,7 @@ impl App {
             start_time: Instant::now(),
             session_cost: 0.0,
             pending_permissions: vec![],
+            git_info: None,
         }
     }
 
@@ -95,9 +98,10 @@ impl App {
 
     pub fn handle_backend_event(&mut self, event: BackendEvent) {
         match event {
-            BackendEvent::Ready { mode, status, .. } => {
+            BackendEvent::Ready { mode, status, git_info, .. } => {
                 self.status = status;
                 self.model = mode;
+                self.git_info = git_info;
             }
             BackendEvent::Message { id, role, content, model_label } => {
                 self.messages.push(ChatMessage {

@@ -35,6 +35,12 @@ const DEFAULT_TOOL_TIERS: Record<string, PermissionTier> = {
   run_command: 'confirm',
   create_task: 'confirm',
   update_memory: 'confirm',
+  git_status: 'auto-approve',
+  git_diff: 'auto-approve',
+  git_log: 'auto-approve',
+  git_commit: 'confirm',
+  git_branch: 'confirm',
+  git_create_pr: 'confirm',
 };
 
 const DEFAULT_ALWAYS_CONFIRM_PATTERNS: string[] = [

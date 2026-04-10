@@ -32,13 +32,19 @@ const BUILTIN_CATEGORIES: Record<string, string[]> = {
   create_task: ['coding', 'execution'],
   update_plan: ['planning'],
   update_memory: ['planning'],
+  git_status: ['git', 'analysis'],
+  git_diff: ['git', 'analysis'],
+  git_log: ['git', 'analysis'],
+  git_branch: ['git', 'coding'],
+  git_commit: ['git', 'coding'],
+  git_create_pr: ['git', 'coding'],
 };
 
 /** Phase → which tool categories are relevant */
 const PHASE_TOOLS: Record<string, string[]> = {
-  discuss: ['filesystem', 'coding', 'analysis', 'planning', 'system'],
+  discuss: ['filesystem', 'coding', 'analysis', 'planning', 'system', 'git'],
   dispatch: ['planning'],
-  execute: ['filesystem', 'coding', 'system'],
+  execute: ['filesystem', 'coding', 'system', 'git'],
   reflect: [],
   compress: [],
   state_update: ['planning'],

@@ -18,6 +18,7 @@ import { bootstrapDirectory } from '../context/bootstrap.ts';
 import { Ledger, estimateCost } from '../audit/ledger.ts';
 import { AGENT_TOOLS, type ToolContext } from '../engine/tools.ts';
 import { PermissionManager } from '../engine/permissions.ts';
+import { detectGitRepo, formatGitContextForPrompt, GIT_TOOLS, executeGitTool, type GitContext } from '../engine/git-tools.ts';
 import { Router as UnifiedRouter } from '../router/index.ts';
 import { ProfileManager } from '../router/profiles.ts';
 import { LoopGuard } from '../engine/loop-guard.ts';
@@ -88,6 +89,21 @@ async function main() {
   const memoryManager = new MemoryManager(workingDir);
   const contextManager = new ContextManager(session, { contextBudget: 30_000 }, ledger, memoryManager);
 
+  // Spec 02 — git context (refreshed after mutating tools and once per turn).
+  let gitCtx: GitContext = detectGitRepo(workingDir);
+  contextManager.setGitContextText(formatGitContextForPrompt(gitCtx));
+  const refreshGit = () => {
+    gitCtx = detectGitRepo(workingDir);
+    contextManager.setGitContextText(formatGitContextForPrompt(gitCtx));
+  };
+  for (const tool of GIT_TOOLS) {
+    toolManager.registerTool(tool, async (args, _toolCtx) => {
+      const res = await executeGitTool(tool.name, args, workingDir, gitCtx);
+      refreshGit();
+      return res;
+    });
+  }
+
   const skipPermissions = process.argv.includes('--dangerously-skip-permissions');
   const permissionManager = new PermissionManager(
     join(storageDir, 'permissions.json'),
@@ -122,6 +138,11 @@ async function main() {
     models: available.map(m => m.alias || m.id),
     mode: profiles.getActive().name,
     status: `${available.length} models | mode: ${profiles.getActive().name}`,
+    git_info: gitCtx.isGitRepo ? {
+      branch: gitCtx.branch,
+      dirty_count: gitCtx.dirtyCount + gitCtx.untrackedCount,
+      last_commit: gitCtx.lastCommitHash,
+    } : null,
   });
 
   // ── Handle commands from TUI ───────────────────────────────────────
@@ -149,6 +170,7 @@ async function main() {
     }
 
     if (cmd.type === 'submit') {
+      refreshGit();
       await handleSubmit(cmd.text, session, contextManager, ledger, router, collector, toolCtx, toolManager, profiles);
       return;
     }

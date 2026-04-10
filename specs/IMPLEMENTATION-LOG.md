@@ -24,3 +24,11 @@ Progress ledger for the 18-spec implementation pass. One section per spec in the
 **LoC added / deleted:** ~320 / ~5
 **Simplifications during review:** Single permissions.ts file. Inline summarize() helper. Dialog renders as a modal overlay with y/n/a handled by intercepting keys when `pending_permissions` is non-empty. Session approvals keyed by tool+args fingerprint (sha1, 16 hex chars). Default permissions.json written on first run so users discover the config.
 **Deviations from spec:** Non-TTY fail-fast for non-interactive mode is deferred to Spec 10 (where the pipe/json mode lives — TUI mode always has a TUI). The `permission_timeout` event is surfaced as a system message rather than a dedicated dialog, since timeouts are rare and warrant only a visible note.
+**Commit:** 646dbde feat: implement spec 01 (permission system)
+
+## 02 — Git Integration — 2026-04-09
+**Status:** shipped
+**Files changed:** src/engine/git-tools.ts (new), src/engine/permissions.ts, src/mcp/tool-manager.ts, src/context/manager.ts, src/cli/backend.ts, tui/src/protocol.rs, tui/src/app.rs, tui/src/ui.rs
+**LoC added / deleted:** ~280 / ~5
+**Simplifications during review:** Single git-tools.ts. `detectGitRepo` is a plain snapshot function — no GitContext class. The `refreshGit` closure is a three-liner declared near the tool registrations. Git context injected via ContextManager's `setGitContextText`, re-applied after every mutating git tool and once per submit (before prompt assembly). The "git_info on ready is one-shot" simplification is intentional — mid-session branch changes propagate on next backend restart, which matches the spec's deletion of periodic status polling.
+**Deviations from spec:** MessageStats git_branch/git_dirty fields were not added — adding them would require touching Rust protocol, app state, and ui rendering for one string that already appears in the permanent status bar after next turn. Re-visit in Spec 15 if telemetry needs it.

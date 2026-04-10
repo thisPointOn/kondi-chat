@@ -228,17 +228,23 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(area);
 
-    // Left: status text
+    // Left: status text + git branch (Spec 02)
     let status_style = if app.is_processing {
         Style::default().fg(Color::Yellow)
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    let status = Paragraph::new(Span::styled(&app.status, status_style));
-    f.render_widget(status, chunks[0]);
+    let mut left_spans: Vec<Span> = vec![Span::styled(app.status.clone(), status_style)];
+    if let Some(ref g) = app.git_info {
+        let suffix = if g.dirty_count == 0 { "clean".to_string() } else { format!("{} modified", g.dirty_count) };
+        let branch_color = if g.dirty_count == 0 { Color::Green } else { Color::Yellow };
+        left_spans.push(Span::raw(" "));
+        left_spans.push(Span::styled(format!(" {} [{}] ", g.branch, suffix), Style::default().fg(branch_color)));
+    }
+    f.render_widget(Paragraph::new(Line::from(left_spans)), chunks[0]);
 
     // Right: keyboard hints
     let hints = Paragraph::new(Span::styled(

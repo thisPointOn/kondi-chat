@@ -87,6 +87,8 @@ export class ContextManager {
   private memoryManager?: MemoryManager;
   /** Last file a tool touched — used as an anchor for subdirectory memory lookup. */
   private activeFile?: string;
+  /** Spec 02 — pre-formatted git context injected per-turn. */
+  private gitContextText = '';
 
   /** Token budget tracking */
   private sessionTokensUsed = 0;
@@ -109,6 +111,7 @@ export class ContextManager {
   getConfig(): Required<ContextManagerConfig> { return this.config; }
   setTokenBudget(budget: number | null): void { this.sessionTokenBudget = budget; }
   setActiveFile(path: string): void { this.activeFile = path; }
+  setGitContextText(text: string): void { this.gitContextText = text; }
 
   // -------------------------------------------------------------------------
   // Turn management
@@ -166,6 +169,11 @@ export class ContextManager {
     const stateText = this.formatSessionState();
     if (stateText) {
       budget.add('session-state', `## Session State\n${stateText}`, 1, false);
+    }
+
+    // Priority 2a: Git context (Spec 02) — cheap to refresh, always current
+    if (this.gitContextText) {
+      budget.add('git-context', this.gitContextText, 2, false);
     }
 
     // Priority 2: Repo map
