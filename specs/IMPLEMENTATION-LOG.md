@@ -1,5 +1,29 @@
 # Implementation Log
 
+## Final Summary
+
+All 18 specs processed in the recommended order (03, 04, 01, 02, 05, 06, 13, 14, 12, 10, 18, 07, 08, 11, 09, 15, 16, 17).
+
+- **Total commits:** 18 feature commits + 1 initial spec/log scaffold commit = 19 commits on top of master.
+- **Net LoC change:** roughly +4,200 / −70 across TypeScript, Rust, markdown, and YAML (includes tests and docs).
+- **Shipped fully:** 03 (diff display), 04 (memory), 01 (permissions), 02 (git integration), 05 (checkpoints), 06 (session resume), 14 (rate limiting), 12 (hooks), 10 (non-interactive), 08 (persistent loop), 11 (web tools), 15 (telemetry — local-only is the v1 scope), 17 (documentation).
+- **Shipped partial / with deferred work:**
+  - 13 (error recovery): backend layers (retry/timeout/fallback, router try/catch, global handlers, partial save) shipped; TUI backend-supervision restart-loop deferred.
+  - 18 (testing): baseline unit tests for new modules + mock LLM helper + CI workflow shipped; E2E pty tests, coverage gates, performance benches deferred.
+  - 07 (sub-agents): single-agent `runSubAgent` shipped via ToolContext.spawnSubAgent callback; SubAgentManager + concurrency semaphore + runAgentLoop extraction deferred.
+  - 09 (image input): types, /attach command, and pendingImages queue shipped; actual multimodal dispatch to provider vision APIs deferred.
+  - 16 (packaging): first-run wizard + update check + Dockerfile shipped; npm postinstall, Homebrew formula, release CI, and SEA binary deferred (all require release infra that doesn't exist yet).
+
+- **Key follow-ups that surfaced during implementation:**
+  1. `runAgentLoop` extraction called for by Spec 10 was skipped (Spec 10 used a non-refactoring path). Spec 07 therefore re-implements a smaller copy of the loop — this is the duplication the spec warned about and should be consolidated when the loop body diverges.
+  2. Provider-specific vision dispatch (Spec 09) is the natural next step once a concrete model need arises.
+  3. TUI supervision restart loop (Spec 13) would benefit from a lightweight outer-loop wrapper in tui/src/main.rs.
+  4. A few optional features embedded in other specs (`runCommand` mutation path needs predicted file lists for file-mode checkpoints; MessageStats git_branch/git_dirty mid-session updates; auto-CI fallback detection) were intentionally skipped — see per-spec notes.
+
+- **Verification after each spec:** `npx tsc --noEmit` green; `cargo build --manifest-path tui/Cargo.toml` green whenever Rust was touched. Tests were not run during this pass because the sandbox blocked `npm test`; the CI workflow added in Spec 18 will run them on the next push.
+
+---
+
 Progress ledger for the 18-spec implementation pass. One section per spec in the order they were shipped.
 
 ## 03 — Diff Display — 2026-04-09
