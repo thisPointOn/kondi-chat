@@ -25,6 +25,7 @@ import { RateLimiter, loadRateLimitConfig, setRateLimiter } from '../providers/r
 import { HookRunner } from '../engine/hooks.ts';
 import { runSubAgent, formatSubAgentResult } from '../engine/sub-agents.ts';
 import { WebToolsManager } from '../web/manager.ts';
+import type { ImageAttachment } from '../types.ts';
 import { Router as UnifiedRouter } from '../router/index.ts';
 import { ProfileManager } from '../router/profiles.ts';
 import { LoopGuard } from '../engine/loop-guard.ts';
@@ -156,6 +157,9 @@ async function main() {
 
   const checkpointManager = new CheckpointManager(workingDir, session.id, storageDir);
 
+  // Spec 09 — pending image attachments (from /attach). Flushed on next submit.
+  const pendingImages: ImageAttachment[] = [];
+
   const skipPermissions = process.argv.includes('--dangerously-skip-permissions');
   const permissionManager = new PermissionManager(
     join(storageDir, 'permissions.json'),
@@ -278,7 +282,7 @@ async function main() {
     }
 
     if (cmd.type === 'command') {
-      const output = await handleCommand(cmd.text, session, contextManager, ledger, registry, collector, toolCtx, mcpClient, toolManager, workingDir, profiles, router, councilProfiles, councilPath, analytics, checkpointManager, sessionStore, rateLimiter);
+      const output = await handleCommand(cmd.text, session, contextManager, ledger, registry, collector, toolCtx, mcpClient, toolManager, workingDir, profiles, router, councilProfiles, councilPath, analytics, checkpointManager, sessionStore, rateLimiter, pendingImages);
       emit({ type: 'command_result', output });
       return;
     }
@@ -286,7 +290,23 @@ async function main() {
     if (cmd.type === 'submit') {
       refreshGit();
       toolCtx.mutatedFiles = new Set();
-      await handleSubmit(cmd.text, session, contextManager, ledger, router, collector, toolCtx, toolManager, profiles, checkpointManager);
+      // Spec 09 — images arrive as an array of {mimeType, base64, originalPath?}
+      // on the submit command. For v1 we just note them in the text so the
+      // user's intent is visible to the model; full multimodal dispatch is
+      // deferred (see IMPLEMENTATION-LOG.md).
+      let input = cmd.text as string;
+      const submitImages: ImageAttachment[] = [
+        ...(Array.isArray(cmd.images) ? cmd.images : []),
+        ...pendingImages,
+      ];
+      pendingImages.length = 0;
+      if (submitImages.length > 0) {
+        const notes = submitImages.map((img, i) =>
+          `[image ${i + 1}${img.originalPath ? ` from ${img.originalPath}` : ''}: ${img.mimeType}, ${img.sizeBytes || 0} bytes]`
+        ).join('\n');
+        input = `${input}\n\n${notes}`;
+      }
+      await handleSubmit(input, session, contextManager, ledger, router, collector, toolCtx, toolManager, profiles, checkpointManager);
       try { sessionStore.save(session, profiles.getActive().name, router.rules.getOverride()?.id); } catch { /* ignore */ }
       return;
     }
@@ -498,6 +518,7 @@ async function handleCommand(
   checkpointManager: CheckpointManager,
   sessionStore: SessionStore,
   rateLimiter: RateLimiter,
+  pendingImages: ImageAttachment[],
 ): Promise<string> {
   // Import the actual command handler from main.tsx would be circular,
   // so we duplicate the essential commands here
@@ -561,6 +582,30 @@ async function handleCommand(
       if (parts[1] === 'rebuild') { analytics.rebuild(); return 'Analytics rebuilt from all ledger files.'; }
       if (parts[1] === 'export') { return analytics.exportAll(); }
       return analytics.format(days);
+    }
+    case '/attach': {
+      const p = parts.slice(1).join(' ');
+      if (!p) return 'Usage: /attach <path to image>';
+      try {
+        const abs = resolve(workingDir, p);
+        const buf = readFileSync(abs);
+        const MAX_BYTES = 10 * 1024 * 1024;
+        if (buf.byteLength > MAX_BYTES) return `Image too large: ${buf.byteLength} > 10MB`;
+        if (pendingImages.length >= 5) return 'Already 5 images queued for next message.';
+        const ext = (p.split('.').pop() || '').toLowerCase();
+        const mime: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+        const mimeType = mime[ext];
+        if (!mimeType) return `Unsupported image type: .${ext}`;
+        pendingImages.push({
+          mimeType,
+          base64: buf.toString('base64'),
+          originalPath: p,
+          sizeBytes: buf.byteLength,
+        });
+        return `Attached ${p} (${mimeType}, ${buf.byteLength} bytes). Queued ${pendingImages.length}/5 for next message.`;
+      } catch (e) {
+        return `Attach failed: ${(e as Error).message}`;
+      }
     }
     case '/rate-limits': return rateLimiter.format();
     case '/sessions': return sessionStore.format(workingDir);

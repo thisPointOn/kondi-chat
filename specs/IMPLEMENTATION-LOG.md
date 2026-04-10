@@ -112,3 +112,11 @@ Progress ledger for the 18-spec implementation pass. One section per spec in the
 **LoC added / deleted:** ~210 / 0
 **Simplifications during review:** Single manager file, Brave-only backend, in-memory LRU cache (no disk), zero-dependency HTML stripping via a regex pipeline (good enough for 90% of pages; no readability port). SSRF guard blocks localhost, RFC1918, link-local, .local/.internal. Rate limiter reuses the Spec 14 bucket machinery under a synthetic 'brave' provider.
 **Deviations from spec:** HTML to clean markdown is a regex pipeline, not a proper DOM-aware extractor. Title/links are not structured output — callers see a plain-text stream. Disk cache deferred. SerpAPI, Ollama web search, DuckDuckGo all deferred to v2.
+**Commit:** 4b38c87 feat: implement spec 11 (web tools)
+
+## 09 — Image Input — 2026-04-09
+**Status:** partial (attachment surface shipped; vision API integration deferred)
+**Files changed:** src/types.ts, src/cli/backend.ts
+**LoC added / deleted:** ~65 / 0
+**Simplifications during review:** /attach slash command reads the file backend-side and queues it in a pendingImages array; the next submit prepends image descriptor text notes to the prompt. This lets the user express "look at this image" without requiring a TUI rewrite. The type surface (ContentPart, ImageAttachment, LLMMessage.parts) is landed so downstream work can plug in the provider-specific encoders.
+**Deviations from spec:** Actual multimodal dispatch to Anthropic/OpenAI/Gemini vision APIs is NOT wired — the image is attached and acknowledged, but the LLM sees a text description of the attachment rather than the pixels. This is a partial landing; the real work is in llm-caller.ts to route ContentPart[] through each provider's vision schema. Router filtering by `vision` capability is also deferred.

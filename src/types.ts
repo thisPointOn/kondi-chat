@@ -243,11 +243,26 @@ export interface ToolResult {
 // LLM Call — multi-turn message for agent loops
 // ---------------------------------------------------------------------------
 
+/** Spec 09 — multimodal content part. Text remains the default. */
+export type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image'; mimeType: string; base64: string };
+
 export interface LLMMessage {
   role: 'user' | 'assistant' | 'tool';
   content?: string;
+  /** Spec 09 — interleaved text/image parts; providers that support it use this. */
+  parts?: ContentPart[];
   toolCalls?: ToolCall[];     // assistant messages with tool use
   toolResults?: ToolResult[]; // tool-result messages
+}
+
+/** Spec 09 — image attachment descriptor (used by submit command + pipeline). */
+export interface ImageAttachment {
+  mimeType: string;
+  base64: string;
+  originalPath?: string;
+  sizeBytes: number;
 }
 
 export interface LLMRequest {
