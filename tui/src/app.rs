@@ -11,6 +11,14 @@ pub struct ChatMessage {
     pub stats: Option<MessageStats>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PermissionDialog {
+    pub id: String,
+    pub tool: String,
+    pub summary: String,
+    pub tier: String,
+}
+
 pub struct App {
     pub messages: Vec<ChatMessage>,
     pub input: String,
@@ -28,6 +36,8 @@ pub struct App {
     pub start_time: Instant,
     /// Total session cost
     pub session_cost: f64,
+    /// Spec 01 — queue of pending permission prompts (oldest at front).
+    pub pending_permissions: Vec<PermissionDialog>,
 }
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -54,6 +64,7 @@ impl App {
             working_id: None,
             start_time: Instant::now(),
             session_cost: 0.0,
+            pending_permissions: vec![],
         }
     }
 
@@ -153,6 +164,20 @@ impl App {
                 });
                 self.is_processing = false;
                 self.status = String::new();
+            }
+            BackendEvent::PermissionRequest { id, tool, args: _, summary, tier } => {
+                self.pending_permissions.push(PermissionDialog { id, tool, summary, tier });
+            }
+            BackendEvent::PermissionTimeout { id, tool } => {
+                self.pending_permissions.retain(|p| p.id != id);
+                self.messages.push(ChatMessage {
+                    id: format!("perm-timeout-{}", self.messages.len()),
+                    role: "system".to_string(),
+                    content: format!("Permission request for {tool} timed out and was denied"),
+                    model_label: None,
+                    tool_calls: vec![],
+                    stats: None,
+                });
             }
             BackendEvent::CommandResult { output } => {
                 self.messages.push(ChatMessage {

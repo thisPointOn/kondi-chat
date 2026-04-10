@@ -12,6 +12,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     // Detail view — full screen
     if let Some(ref view) = app.detail_view {
         draw_detail(f, app, view);
+        if let Some(p) = app.pending_permissions.first() { draw_permission_overlay(f, p); }
         return;
     }
 
@@ -50,6 +51,51 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_status(f, app, chunks[2]);
     draw_input(f, app, chunks[3]);
     draw_model_indicator(f, app, chunks[4]);
+
+    // Spec 01 — modal permission dialog overlay (drawn last, on top)
+    if let Some(p) = app.pending_permissions.first() { draw_permission_overlay(f, p); }
+}
+
+fn draw_permission_overlay(f: &mut Frame, p: &crate::app::PermissionDialog) {
+    let area = f.area();
+    let w = area.width.saturating_sub(8).min(80);
+    let h: u16 = 9;
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let dialog_area = Rect { x, y, width: w, height: h };
+
+    // Clear the background
+    f.render_widget(ratatui::widgets::Clear, dialog_area);
+
+    let title_color = if p.tier == "always-confirm" { Color::Red } else { Color::Yellow };
+    let lines = vec![
+        Line::from(Span::styled(
+            format!(" Permission required [{}]", p.tier),
+            Style::default().fg(title_color).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::raw(format!(" Tool: {}", p.tool))),
+        Line::from(Span::raw(format!(" {}", truncate(&p.summary, (w as usize).saturating_sub(2))))),
+        Line::from(""),
+        Line::from(Span::styled(
+            " [y] approve   [n] deny   [a] approve all (this session)",
+            Style::default().fg(Color::Cyan),
+        )),
+    ];
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(title_color))
+        .title(" permission ");
+    let para = Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false });
+    f.render_widget(para, dialog_area);
+}
+
+fn truncate(s: &str, n: usize) -> String {
+    if s.chars().count() <= n { s.to_string() } else {
+        let mut out: String = s.chars().take(n.saturating_sub(1)).collect();
+        out.push('…'); out
+    }
 }
 
 fn draw_chat(f: &mut Frame, app: &App, area: Rect) {

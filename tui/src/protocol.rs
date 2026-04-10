@@ -36,6 +36,20 @@ pub enum BackendEvent {
 
     #[serde(rename = "command_result")]
     CommandResult { output: String },
+
+    /// Spec 01 — ask the user to approve a tool call.
+    #[serde(rename = "permission_request")]
+    PermissionRequest {
+        id: String,
+        tool: String,
+        args: String,
+        summary: String,
+        tier: String,
+    },
+
+    /// Spec 01 — backend gave up waiting on a pending permission.
+    #[serde(rename = "permission_timeout")]
+    PermissionTimeout { id: String, tool: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,4 +88,8 @@ pub enum TuiCommand {
 
     #[serde(rename = "quit")]
     Quit,
+
+    /// Spec 01 — user decision on a pending permission request.
+    #[serde(rename = "permission_response")]
+    PermissionResponse { id: String, decision: String },
 }

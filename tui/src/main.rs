@@ -61,7 +61,29 @@ async fn main() -> io::Result<()> {
 
         if crossterm::event::poll(std::time::Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                match (key.code, key.modifiers) {
+                // Spec 01 — when a permission dialog is open, intercept y/n/a.
+                let permission_open = !app.pending_permissions.is_empty();
+                if permission_open {
+                    let pending_id = app.pending_permissions[0].id.clone();
+                    let decision: Option<&str> = match (key.code, key.modifiers) {
+                        (KeyCode::Char('y'), _) | (KeyCode::Char('Y'), _) => Some("approved"),
+                        (KeyCode::Char('n'), _) | (KeyCode::Char('N'), _) | (KeyCode::Esc, _) => Some("denied"),
+                        (KeyCode::Char('a'), _) | (KeyCode::Char('A'), _) => Some("approved-session"),
+                        (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                            send_command(&mut writer, TuiCommand::Quit).await;
+                            break;
+                        }
+                        _ => None,
+                    };
+                    if let Some(d) = decision {
+                        send_command(&mut writer, TuiCommand::PermissionResponse {
+                            id: pending_id,
+                            decision: d.to_string(),
+                        }).await;
+                        app.pending_permissions.remove(0);
+                    }
+                }
+                if !permission_open { match (key.code, key.modifiers) {
                     (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                         send_command(&mut writer, TuiCommand::Quit).await;
                         break;
@@ -114,7 +136,7 @@ async fn main() -> io::Result<()> {
                     }
                     (KeyCode::Char(c), _) => { app.input.push(c); }
                     _ => {}
-                }
+                } }
             }
         }
 

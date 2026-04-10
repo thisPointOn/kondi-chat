@@ -93,12 +93,28 @@ export class ToolManager {
 
   /**
    * Execute a tool call — routes to built-in handler or MCP server.
+   * Spec 01: every path goes through the permission wedge first.
    */
   async execute(
     name: string,
     args: Record<string, unknown>,
     toolCtx: ToolContext,
   ): Promise<ToolExecutionResult> {
+    // Spec 01 — permission gate (applies to built-in, extra, and MCP tools)
+    const pm = toolCtx.permissionManager;
+    if (pm) {
+      const tier = pm.check(name, args);
+      if (tier !== 'auto-approve') {
+        if (!toolCtx.emit) {
+          return { content: `Permission check for ${name} requires an emit channel`, isError: true };
+        }
+        const decision = await pm.requestPermission(name, args, toolCtx.emit);
+        if (decision === 'denied') {
+          return { content: `Permission denied for ${name}.`, isError: true };
+        }
+      }
+    }
+
     // Check extra tools first (e.g., council)
     const extraExec = extraExecutors.get(name);
     if (extraExec) {

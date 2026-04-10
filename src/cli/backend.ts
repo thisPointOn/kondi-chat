@@ -8,7 +8,7 @@
  */
 
 import { createInterface } from 'node:readline';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
 import { existsSync, readFileSync, mkdirSync } from 'node:fs';
 import type { ProviderId, Session, LLMMessage } from '../types.ts';
 import { callLLM } from '../providers/llm-caller.ts';
@@ -17,6 +17,7 @@ import { MemoryManager } from '../context/memory.ts';
 import { bootstrapDirectory } from '../context/bootstrap.ts';
 import { Ledger, estimateCost } from '../audit/ledger.ts';
 import { AGENT_TOOLS, type ToolContext } from '../engine/tools.ts';
+import { PermissionManager } from '../engine/permissions.ts';
 import { Router as UnifiedRouter } from '../router/index.ts';
 import { ProfileManager } from '../router/profiles.ts';
 import { LoopGuard } from '../engine/loop-guard.ts';
@@ -87,6 +88,12 @@ async function main() {
   const memoryManager = new MemoryManager(workingDir);
   const contextManager = new ContextManager(session, { contextBudget: 30_000 }, ledger, memoryManager);
 
+  const skipPermissions = process.argv.includes('--dangerously-skip-permissions');
+  const permissionManager = new PermissionManager(
+    join(storageDir, 'permissions.json'),
+    skipPermissions,
+  );
+
   const toolCtx: ToolContext = {
     workingDir,
     session,
@@ -102,6 +109,8 @@ async function main() {
     },
     memoryManager,
     setActiveFile: (p: string) => contextManager.setActiveFile(p),
+    permissionManager,
+    emit,
   };
 
   // Health check
@@ -126,6 +135,11 @@ async function main() {
     if (cmd.type === 'quit') {
       await mcpClient.disconnectAll();
       process.exit(0);
+    }
+
+    if (cmd.type === 'permission_response') {
+      permissionManager.handleResponse(cmd.id, cmd.decision);
+      return;
     }
 
     if (cmd.type === 'command') {

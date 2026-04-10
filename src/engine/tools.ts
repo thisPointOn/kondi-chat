@@ -20,6 +20,7 @@ import type { Ledger } from '../audit/ledger.ts';
 import { runPipeline, type PipelineConfig } from './pipeline.ts';
 import { computeUnifiedDiff } from './diff.ts';
 import type { MemoryManager } from '../context/memory.ts';
+import type { PermissionManager } from './permissions.ts';
 
 // ---------------------------------------------------------------------------
 // Tool definitions (provider-agnostic JSON Schema)
@@ -212,6 +213,10 @@ export interface ToolContext {
   memoryManager?: MemoryManager;
   /** Spec 04 — callback to update ContextManager's active-file anchor for subdir memory. */
   setActiveFile?: (path: string) => void;
+  /** Spec 01 — permission gate, consulted before every tool dispatch. */
+  permissionManager?: PermissionManager;
+  /** Spec 01 — used by permission requests to push events to the TUI. */
+  emit?: (event: any) => void;
 }
 
 // ---------------------------------------------------------------------------
