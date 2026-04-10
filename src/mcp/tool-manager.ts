@@ -33,6 +33,7 @@ const BUILTIN_CATEGORIES: Record<string, string[]> = {
   create_task: ['coding', 'execution'],
   update_plan: ['planning'],
   update_memory: ['planning'],
+  spawn_agent: ['planning', 'coding'],
   git_status: ['git', 'analysis'],
   git_diff: ['git', 'analysis'],
   git_log: ['git', 'analysis'],

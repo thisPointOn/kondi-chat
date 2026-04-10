@@ -23,6 +23,7 @@ import { CheckpointManager, isMutatingToolCall, predictedMutations } from '../en
 import { SessionStore, AUTO_SAVE_MS } from '../session/store.ts';
 import { RateLimiter, loadRateLimitConfig, setRateLimiter } from '../providers/rate-limiter.ts';
 import { HookRunner } from '../engine/hooks.ts';
+import { runSubAgent, formatSubAgentResult } from '../engine/sub-agents.ts';
 import { Router as UnifiedRouter } from '../router/index.ts';
 import { ProfileManager } from '../router/profiles.ts';
 import { LoopGuard } from '../engine/loop-guard.ts';
@@ -168,6 +169,12 @@ async function main() {
     setActiveFile: (p: string) => contextManager.setActiveFile(p),
     permissionManager,
     emit,
+    spawnSubAgent: async (type, instruction) => {
+      emit({ type: 'activity', text: `spawn_agent(${type}): ${instruction.slice(0, 80)}`, activity_type: 'sub_agent' });
+      const r = await runSubAgent(type, instruction, { router, toolManager, toolCtx, session });
+      emit({ type: 'activity', text: `sub-agent ${type} done: ${r.iterations}it $${r.costUsd.toFixed(4)}`, activity_type: 'sub_agent' });
+      return formatSubAgentResult(r);
+    },
   };
 
   // Health check

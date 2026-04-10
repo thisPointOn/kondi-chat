@@ -41,6 +41,7 @@ const DEFAULT_TOOL_TIERS: Record<string, PermissionTier> = {
   git_commit: 'confirm',
   git_branch: 'confirm',
   git_create_pr: 'confirm',
+  spawn_agent: 'confirm',
 };
 
 const DEFAULT_ALWAYS_CONFIRM_PATTERNS: string[] = [

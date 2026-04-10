@@ -164,6 +164,18 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'spawn_agent',
+    description: 'Spawn a bounded sub-agent to handle a focused sub-task. `research` can read and search; `worker` can read/write/edit/run commands; `planner` has no tools and just reasons about the instruction. Sub-agents do not nest.',
+    parameters: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', enum: ['research', 'worker', 'planner'], description: 'Sub-agent role' },
+        instruction: { type: 'string', description: 'Clear, bounded task for the sub-agent' },
+      },
+      required: ['type', 'instruction'],
+    },
+  },
+  {
     name: 'update_memory',
     description: 'Update a KONDI.md memory file to record project conventions, decisions, or preferences. Scope "project" writes to <workingDir>/KONDI.md; "user" writes to ~/.kondi-chat/KONDI.md.',
     parameters: {
@@ -219,6 +231,8 @@ export interface ToolContext {
   emit?: (event: any) => void;
   /** Spec 05 — files mutated during the current turn (write_file / edit_file). */
   mutatedFiles?: Set<string>;
+  /** Spec 07 — used by spawn_agent to run bounded child agent loops. */
+  spawnSubAgent?: (type: 'research' | 'worker' | 'planner', instruction: string) => Promise<string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -257,6 +271,8 @@ export async function executeTool(
         return toolEditFile(args, ctx);
       case 'update_memory':
         return toolUpdateMemory(args, ctx);
+      case 'spawn_agent':
+        return await toolSpawnAgent(args, ctx);
       default:
         return { content: `Unknown tool: ${name}`, isError: true };
     }
@@ -539,6 +555,29 @@ function toolEditFile(
     content: `Edited ${relPath} (+${d.linesAdded}/-${d.linesRemoved})`,
     diff: d.diff || undefined,
   };
+}
+
+async function toolSpawnAgent(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolExecutionResult> {
+  const type = args.type as 'research' | 'worker' | 'planner';
+  const instruction = args.instruction as string;
+  if (!ctx.spawnSubAgent) {
+    return { content: 'spawn_agent is not available in this context (no sub-agent runner)', isError: true };
+  }
+  if (!['research', 'worker', 'planner'].includes(type)) {
+    return { content: `Invalid sub-agent type: ${type}`, isError: true };
+  }
+  if (!instruction) {
+    return { content: 'spawn_agent requires a non-empty instruction', isError: true };
+  }
+  try {
+    const result = await ctx.spawnSubAgent(type, instruction);
+    return { content: result };
+  } catch (e) {
+    return { content: `spawn_agent failed: ${(e as Error).message}`, isError: true };
+  }
 }
 
 function toolUpdateMemory(

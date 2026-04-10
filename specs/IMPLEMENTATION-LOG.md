@@ -88,3 +88,11 @@ Progress ledger for the 18-spec implementation pass. One section per spec in the
 **LoC added / deleted:** ~210 / 0
 **Simplifications during review:** Baseline unit tests for the modules added in this pass, plus a mock-llm helper (queue + call log). CI runs typecheck + tests + rust build without coverage gates — the spec's 70% threshold can be added later once the test suite grows beyond the smoke-test scale.
 **Deviations from spec:** E2E tests via pty + fixture repos, performance benchmarks, and security-traversal matrix tests are deferred. Coverage gates not enforced in CI.
+**Commit:** 5f57d37 feat: implement spec 18 (testing baseline)
+
+## 07 — Sub-agent Spawning — 2026-04-09
+**Status:** shipped (single-agent sequential; concurrency queue deferred)
+**Files changed:** src/engine/sub-agents.ts (new), src/engine/tools.ts, src/engine/permissions.ts, src/mcp/tool-manager.ts, src/cli/backend.ts
+**LoC added / deleted:** ~170 / 0
+**Simplifications during review:** No SubAgentManager class — `runSubAgent` is a single async function that runs a bounded loop reusing callLLM + toolManager.execute directly. Concurrency is "whatever the caller awaits"; the spec's 3-way semaphore is deferred since the parent agent already serializes tool calls per turn. Tool filtering per type uses two hardcoded Sets. A ToolContext callback (`spawnSubAgent`) keeps the tool dispatcher decoupled from backend wiring.
+**Deviations from spec:** SubAgentManager + concurrency semaphore deferred — agents currently spawn one at a time because the LLM's parallel tool_calls already execute sequentially in handleSubmit. The runAgentLoop extraction called for by Spec 10 was not performed (Spec 10 used a different path), so runSubAgent reimplements a smaller version of the loop body. This is the duplication the spec warned against — worth revisiting if sub-agents grow more complex. Sub-agent-specific routing model preferences dropped per the simplification note.
