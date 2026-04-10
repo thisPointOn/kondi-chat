@@ -11,6 +11,8 @@ import type {
   ProviderId, LLMRequest, LLMResponse,
   ToolDefinition, ToolCall, LLMMessage,
 } from '../types.ts';
+import { getRateLimiter, RateLimitOverflowError } from './rate-limiter.ts';
+import { estimateTokens } from '../context/budget.ts';
 
 // ---------------------------------------------------------------------------
 // SSE stream parser
@@ -704,10 +706,31 @@ export async function callLLM(req: LLMRequest): Promise<LLMResponse> {
   // Try the requested model first
   let lastError: Error | null = null;
 
+  const limiter = getRateLimiter();
+  const estTokens = estimateTokens(
+    (req.systemPrompt || '') +
+    (req.userMessage || '') +
+    (req.messages?.map(m => m.content || '').join('\n') || ''),
+  ) + (req.maxOutputTokens || 2048);
+
   const turnDeadline = Date.now() + TURN_WALL_CLOCK_MS;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      return await withTimeout(callProvider(provider, apiKey, model, req), LLM_TIMEOUT_MS, `${provider}/${model}`);
+      if (limiter) {
+        try { await limiter.acquire(provider, estTokens); }
+        catch (e) {
+          if (e instanceof RateLimitOverflowError) {
+            // Surface as retryable error so the existing fallback kicks in.
+            throw new Error(`API 503: ${e.message}`);
+          }
+          throw e;
+        }
+      }
+      const response = await withTimeout(callProvider(provider, apiKey, model, req), LLM_TIMEOUT_MS, `${provider}/${model}`);
+      if (limiter) {
+        limiter.recordResponse(provider, response.inputTokens, response.outputTokens, estTokens, response.responseHeaders);
+      }
+      return response;
     } catch (error) {
       lastError = error as Error;
       const statusMatch = lastError.message.match(/API (\d+):/);
@@ -715,6 +738,9 @@ export async function callLLM(req: LLMRequest): Promise<LLMResponse> {
       const retryAfter = parseRetryAfter(lastError.message);
       const isTimeout = /timeout after/.test(lastError.message);
       const retryable = RETRYABLE_STATUS_CODES.has(statusCode) || isTimeout;
+      if (limiter && (statusCode === 429 || statusCode === 503)) {
+        limiter.recordThrottle(provider, retryAfter ?? 5000);
+      }
 
       if (attempt < MAX_RETRIES && retryable && Date.now() < turnDeadline) {
         const baseDelay = retryAfter ?? Math.min(1000 * Math.pow(2, attempt), 8_000);

@@ -21,6 +21,7 @@ import { PermissionManager } from '../engine/permissions.ts';
 import { detectGitRepo, formatGitContextForPrompt, GIT_TOOLS, executeGitTool, type GitContext } from '../engine/git-tools.ts';
 import { CheckpointManager, isMutatingToolCall, predictedMutations } from '../engine/checkpoints.ts';
 import { SessionStore, AUTO_SAVE_MS } from '../session/store.ts';
+import { RateLimiter, loadRateLimitConfig, setRateLimiter } from '../providers/rate-limiter.ts';
 import { Router as UnifiedRouter } from '../router/index.ts';
 import { ProfileManager } from '../router/profiles.ts';
 import { LoopGuard } from '../engine/loop-guard.ts';
@@ -135,6 +136,10 @@ async function main() {
     });
   }
 
+  // Spec 14 — rate limiter is a global singleton consulted from llm-caller.
+  const rateLimiter = new RateLimiter(loadRateLimitConfig(storageDir));
+  setRateLimiter(rateLimiter);
+
   const checkpointManager = new CheckpointManager(workingDir, session.id, storageDir);
 
   const skipPermissions = process.argv.includes('--dangerously-skip-permissions');
@@ -239,7 +244,7 @@ async function main() {
     }
 
     if (cmd.type === 'command') {
-      const output = await handleCommand(cmd.text, session, contextManager, ledger, registry, collector, toolCtx, mcpClient, toolManager, workingDir, profiles, router, councilProfiles, councilPath, analytics, checkpointManager, sessionStore);
+      const output = await handleCommand(cmd.text, session, contextManager, ledger, registry, collector, toolCtx, mcpClient, toolManager, workingDir, profiles, router, councilProfiles, councilPath, analytics, checkpointManager, sessionStore, rateLimiter);
       emit({ type: 'command_result', output });
       return;
     }
@@ -448,6 +453,7 @@ async function handleCommand(
   analytics: Analytics,
   checkpointManager: CheckpointManager,
   sessionStore: SessionStore,
+  rateLimiter: RateLimiter,
 ): Promise<string> {
   // Import the actual command handler from main.tsx would be circular,
   // so we duplicate the essential commands here
@@ -512,6 +518,7 @@ async function handleCommand(
       if (parts[1] === 'export') { return analytics.exportAll(); }
       return analytics.format(days);
     }
+    case '/rate-limits': return rateLimiter.format();
     case '/sessions': return sessionStore.format(workingDir);
     case '/resume': {
       if (!parts[1]) return 'Usage: /resume <session-id>';

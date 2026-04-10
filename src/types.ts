@@ -281,4 +281,6 @@ export interface LLMResponse {
   wasFallback?: boolean;
   /** The originally requested model (if different from the responding model) */
   requestedModel?: string;
+  /** Spec 14 — raw response headers for rate-limit parsing. */
+  responseHeaders?: Record<string, string>;
 }

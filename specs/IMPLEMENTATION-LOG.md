@@ -56,3 +56,11 @@ Progress ledger for the 18-spec implementation pass. One section per spec in the
 **LoC added / deleted:** ~95 / ~5
 **Simplifications during review:** No new files. Timeout via a tiny `withTimeout` promise wrapper; `parseRetryAfter` is a three-line regex; `TURN_WALL_CLOCK_MS` caps the retry chain. Router wraps NN and Intent in try/catch and logs to stderr on failure. Global uncaughtException / unhandledRejection handlers flush sessionStore before exit. SessionStore gained savePartialMessage / checkForRecovery / clearRecovery.
 **Deviations from spec:** TUI backend supervision (restart on crash with `--resume`) is deferred. The existing TUI spawns the backend once and never restarts; restructuring the Rust main loop into an inner spawn+event-loop inside a restart loop is a significant change that the spec itself flags as complex. Partial recovery on the backend side still works — a new TUI instance launched with --resume would integrate the partial. Emitting fallback events as activity lines during callLLM requires plumbing an emit channel through the provider call; skipped for now since the existing stderr log is visible in backend logs.
+**Commit:** e4354b1 feat: implement spec 13 (error recovery — backend layers)
+
+## 14 — Rate Limiting — 2026-04-09
+**Status:** shipped
+**Files changed:** src/providers/rate-limiter.ts (new), src/providers/llm-caller.ts, src/types.ts, src/cli/backend.ts
+**LoC added / deleted:** ~260 / ~2
+**Simplifications during review:** Single rate-limiter.ts with Bucket as a private helper class, RateLimitOverflowError, RateLimiter, config loader, and module-global getter/setter. Proactive limiting is always on; post-throttle slowdown is hard-coded to 10%/5min. llm-caller.ts acquires before each attempt, records after success, records throttle on 429/503. Overflow is surfaced as a synthetic 503 so the existing fallback loop handles it without new error paths.
+**Deviations from spec:** `responseHeaders` are not yet populated by provider implementations — the rate limiter's header-parsing path is wired but will only fire when a provider opts in to surfacing headers. Retry-After already works via the llm-caller's error-message regex parser added in Spec 13.
