@@ -80,3 +80,11 @@ Progress ledger for the 18-spec implementation pass. One section per spec in the
 **LoC added / deleted:** ~170 / ~1
 **Simplifications during review:** Instead of extracting runAgentLoop into a new file (the spec's suggested refactor), I added a non-interactive branch inside backend.ts main() that reuses the existing handleSubmit code path. stdout is intercepted to buffer event JSON; final output is rendered either as JSON or plain text after the turn completes. The Rust main detects --prompt/--pipe/--json/--sessions and spawns the Node backend with inherited stdio instead of entering raw-mode TUI.
 **Deviations from spec:** No `src/cli/non-interactive.ts` file; the 170-LOC helper lives at the bottom of backend.ts so it shares the existing initialization code path. runAgentLoop extraction is deferred — Spec 07 can revisit if needed. Cost cap, iteration cap, and --max-iterations are handled post-hoc rather than during the loop, which means the agent may exceed them slightly before the check fires.
+**Commit:** c43768b feat: implement spec 10 (non-interactive mode)
+
+## 18 — Testing — 2026-04-09
+**Status:** shipped (baseline)
+**Files changed:** src/test-utils/mock-llm.ts (new), src/engine/diff.test.ts (new), src/engine/permissions.test.ts (new), src/engine/checkpoints.test.ts (new), src/providers/rate-limiter.test.ts (new), src/context/memory.test.ts (new), .github/workflows/ci.yml (new)
+**LoC added / deleted:** ~210 / 0
+**Simplifications during review:** Baseline unit tests for the modules added in this pass, plus a mock-llm helper (queue + call log). CI runs typecheck + tests + rust build without coverage gates — the spec's 70% threshold can be added later once the test suite grows beyond the smoke-test scale.
+**Deviations from spec:** E2E tests via pty + fixture repos, performance benchmarks, and security-traversal matrix tests are deferred. Coverage gates not enforced in CI.
