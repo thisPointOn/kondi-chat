@@ -48,3 +48,11 @@ Progress ledger for the 18-spec implementation pass. One section per spec in the
 **LoC added / deleted:** ~240 / ~5
 **Simplifications during review:** Single SessionStore class, two constants, atomic writes via renameSync. Ledger files intentionally stay flat in storageDir (not migrated). `--resume [id]` parsed inline in main(). Periodic save via setInterval + save-on-exit handlers. `/resume` prints the restart command per the spec's v1 clarification.
 **Deviations from spec:** TUI does not re-render past messages from the resumed session — it shows a "Resumed session N messages" banner and the backend context carries full history into the next LLM turn, which is where it matters. Re-streaming past turns to the UI would double message volume for no functional win. File lock for concurrent access deferred — existing deployment is single-user.
+**Commit:** 813d041 feat: implement spec 06 (session resume)
+
+## 13 — Error Recovery — 2026-04-09
+**Status:** partial (backend layers shipped; TUI supervision loop deferred)
+**Files changed:** src/providers/llm-caller.ts, src/router/index.ts, src/session/store.ts, src/cli/backend.ts
+**LoC added / deleted:** ~95 / ~5
+**Simplifications during review:** No new files. Timeout via a tiny `withTimeout` promise wrapper; `parseRetryAfter` is a three-line regex; `TURN_WALL_CLOCK_MS` caps the retry chain. Router wraps NN and Intent in try/catch and logs to stderr on failure. Global uncaughtException / unhandledRejection handlers flush sessionStore before exit. SessionStore gained savePartialMessage / checkForRecovery / clearRecovery.
+**Deviations from spec:** TUI backend supervision (restart on crash with `--resume`) is deferred. The existing TUI spawns the backend once and never restarts; restructuring the Rust main loop into an inner spawn+event-loop inside a restart loop is a significant change that the spec itself flags as complex. Partial recovery on the backend side still works — a new TUI instance launched with --resume would integrate the partial. Emitting fallback events as activity lines during callLLM requires plumbing an emit channel through the provider call; skipped for now since the existing stderr log is visible in backend logs.

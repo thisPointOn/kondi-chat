@@ -646,7 +646,24 @@ function geminiMessages(messages: LLMMessage[]): any[] {
 // ---------------------------------------------------------------------------
 
 const MAX_RETRIES = 2;
-const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 529]);
+const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504, 529]);
+// Spec 13 — per-call timeout and per-turn wall-clock cap.
+const LLM_TIMEOUT_MS = 120_000;
+const TURN_WALL_CLOCK_MS = 300_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
+    p.then(v => { clearTimeout(timer); resolve(v); },
+           e => { clearTimeout(timer); reject(e); });
+  });
+}
+
+function parseRetryAfter(msg: string): number | null {
+  const m = msg.match(/retry[- ]?after[^0-9]*(\d+)/i);
+  if (!m) return null;
+  return parseInt(m[1], 10) * 1000;
+}
 
 /**
  * Fallback chains: when a model is overloaded (529) or rate-limited (429),
@@ -687,18 +704,23 @@ export async function callLLM(req: LLMRequest): Promise<LLMResponse> {
   // Try the requested model first
   let lastError: Error | null = null;
 
+  const turnDeadline = Date.now() + TURN_WALL_CLOCK_MS;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      return await callProvider(provider, apiKey, model, req);
+      return await withTimeout(callProvider(provider, apiKey, model, req), LLM_TIMEOUT_MS, `${provider}/${model}`);
     } catch (error) {
       lastError = error as Error;
       const statusMatch = lastError.message.match(/API (\d+):/);
       const statusCode = statusMatch ? parseInt(statusMatch[1]) : 0;
+      const retryAfter = parseRetryAfter(lastError.message);
+      const isTimeout = /timeout after/.test(lastError.message);
+      const retryable = RETRYABLE_STATUS_CODES.has(statusCode) || isTimeout;
 
-      if (attempt < MAX_RETRIES && RETRYABLE_STATUS_CODES.has(statusCode)) {
-        const delay = Math.min(1000 * Math.pow(2, attempt), 8_000);
+      if (attempt < MAX_RETRIES && retryable && Date.now() < turnDeadline) {
+        const baseDelay = retryAfter ?? Math.min(1000 * Math.pow(2, attempt), 8_000);
+        const delay = Math.min(baseDelay, Math.max(0, turnDeadline - Date.now()));
         process.stderr.write(
-          `  │  [retry] ${provider}/${model} ${statusCode} — waiting ${(delay / 1000).toFixed(0)}s (attempt ${attempt + 1}/${MAX_RETRIES})\n`
+          `  │  [retry] ${provider}/${model} ${statusCode || 'timeout'} — waiting ${(delay / 1000).toFixed(0)}s (attempt ${attempt + 1}/${MAX_RETRIES})\n`
         );
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;

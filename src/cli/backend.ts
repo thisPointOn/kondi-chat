@@ -196,6 +196,29 @@ async function main() {
   process.on('SIGTERM', () => { saveAndExit(); process.exit(0); });
   process.on('SIGINT', () => { saveAndExit(); process.exit(0); });
 
+  // Spec 13 — fatal handlers flush session state before crashing out
+  process.on('uncaughtException', (err) => {
+    try { emit({ type: 'error', message: `Uncaught: ${err.message}`, recoverable: false }); } catch { /* ignore */ }
+    saveAndExit();
+    process.exit(1);
+  });
+  process.on('unhandledRejection', (reason) => {
+    try { emit({ type: 'error', message: `Unhandled rejection: ${String(reason)}`, recoverable: false }); } catch { /* ignore */ }
+    saveAndExit();
+    process.exit(1);
+  });
+
+  // Spec 13 — integrate any recovery partial left by a prior crashed run
+  const recovered = sessionStore.checkForRecovery(session.id);
+  if (recovered?.content) {
+    session.messages.push({
+      role: 'assistant',
+      content: `${recovered.content}\n\n[recovered from crash]`,
+      timestamp: recovered.savedAt,
+    });
+    sessionStore.clearRecovery(session.id);
+  }
+
   // ── Handle commands from TUI ───────────────────────────────────────
 
   const rl = createInterface({ input: process.stdin });

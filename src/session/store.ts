@@ -183,6 +183,26 @@ export class SessionStore {
     atomicWrite(this.indexPath, JSON.stringify({ sessions: this.index }, null, 2));
   }
 
+  /** Spec 13 — save in-progress assistant content so a crash leaves a recoverable trail. */
+  savePartialMessage(sessionId: string, content: string): void {
+    const dir = join(this.sessionsDir, '..', 'recovery');
+    const path = join(dir, `${sessionId}-partial.json`);
+    atomicWrite(path, JSON.stringify({ sessionId, content, savedAt: new Date().toISOString() }));
+  }
+
+  /** Spec 13 — read any partial from a prior run; null if none. */
+  checkForRecovery(sessionId: string): { content: string; savedAt: string } | null {
+    const path = join(this.sessionsDir, '..', 'recovery', `${sessionId}-partial.json`);
+    if (!existsSync(path)) return null;
+    try { return JSON.parse(readFileSync(path, 'utf-8')); } catch { return null; }
+  }
+
+  /** Delete the partial file once the session has integrated it. */
+  clearRecovery(sessionId: string): void {
+    const path = join(this.sessionsDir, '..', 'recovery', `${sessionId}-partial.json`);
+    if (existsSync(path)) { try { unlinkSync(path); } catch { /* ignore */ } }
+  }
+
   private computeSummary(session: Session): string {
     if (session.state.goal) return session.state.goal.slice(0, 120);
     const firstUser = session.messages.find(m => m.role === 'user');

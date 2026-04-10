@@ -73,46 +73,50 @@ export class Router {
     failures?: number,
     promotionThreshold?: number,
   ): Promise<UnifiedRouteDecision> {
-    // 1. Try NN router (fast, no LLM call)
-    if (this.nn.isAvailable()) {
-      let embedding: number[] | undefined;
-      try {
-        embedding = await this.embeddings.embed(promptText.slice(0, 2048));
-      } catch {
-        // Embedding failed — try NN without it
-      }
+    // 1. Try NN router (fast, no LLM call) — Spec 13: never let a tier crash the turn.
+    try {
+      if (this.nn.isAvailable()) {
+        let embedding: number[] | undefined;
+        try { embedding = await this.embeddings.embed(promptText.slice(0, 2048)); } catch { /* skip */ }
 
-      const nnResult = this.nn.predict(
-        phase, taskKind,
-        promptText.length, 0, failures || 0,
-        this.registry, embedding,
-      );
+        const nnResult = this.nn.predict(
+          phase, taskKind,
+          promptText.length, 0, failures || 0,
+          this.registry, embedding,
+        );
 
-      if (nnResult) {
-        return {
-          model: nnResult.model,
-          reason: `nn (${(nnResult.confidence * 100).toFixed(0)}% confidence)`,
-          tier: 'nn',
-          promoted: false,
-          confidence: nnResult.confidence,
-        };
+        if (nnResult) {
+          return {
+            model: nnResult.model,
+            reason: `nn (${(nnResult.confidence * 100).toFixed(0)}% confidence)`,
+            tier: 'nn',
+            promoted: false,
+            confidence: nnResult.confidence,
+          };
+        }
       }
+    } catch (e) {
+      process.stderr.write(`[router] NN tier failed: ${(e as Error).message}\n`);
     }
 
     // 2. Try intent router (LLM call, for cold-start/new models)
-    if (this.useIntent) {
-      const intentResult = await this.intent.classify(
-        promptText, phase, taskKind, this.registry,
-      );
+    try {
+      if (this.useIntent) {
+        const intentResult = await this.intent.classify(
+          promptText, phase, taskKind, this.registry,
+        );
 
-      if (intentResult) {
-        return {
-          model: intentResult.model,
-          reason: `intent: ${intentResult.intent}`,
-          tier: 'intent',
-          promoted: false,
-        };
+        if (intentResult) {
+          return {
+            model: intentResult.model,
+            reason: `intent: ${intentResult.intent}`,
+            tier: 'intent',
+            promoted: false,
+          };
+        }
       }
+    } catch (e) {
+      process.stderr.write(`[router] Intent tier failed: ${(e as Error).message}\n`);
     }
 
     // 3. Fall back to rules
