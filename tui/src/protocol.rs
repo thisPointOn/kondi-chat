@@ -14,6 +14,12 @@ pub enum BackendEvent {
         status: String,
         #[serde(default)]
         git_info: Option<GitInfo>,
+        #[serde(default)]
+        resumed: bool,
+        #[serde(default)]
+        resumed_session_id: Option<String>,
+        #[serde(default)]
+        resumed_message_count: Option<u32>,
     },
 
     #[serde(rename = "message")]

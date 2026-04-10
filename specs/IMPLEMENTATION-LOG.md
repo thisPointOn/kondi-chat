@@ -40,3 +40,11 @@ Progress ledger for the 18-spec implementation pass. One section per spec in the
 **LoC added / deleted:** ~260 / ~5
 **Simplifications during review:** Single checkpoints.ts file. `isMutatingToolCall` + `predictedMutations` are a pair of small pure functions, not a class. Non-mutating run_command allowlist is a hard-coded prefix list. CheckpointManager uses renameSync for atomicity (no execSync of `mv`). File-mode snapshots happen just before the first mutating tool runs, using paths predicted from the tool args so the pre-state is captured correctly. `/undo` parses strict-numeric for multi-step, otherwise treats as id.
 **Deviations from spec:** `/restore` command omitted (spec already deletes it). The `run_command` with mutation is checkpointed but in file mode we have no predicted path list, so file-mode file capture is empty for run_command — git mode covers this correctly via `git stash create`. Acceptable because real projects are git repos.
+**Commit:** b157ab2 feat: implement spec 05 (undo/checkpoints)
+
+## 06 — Session Resume — 2026-04-09
+**Status:** shipped
+**Files changed:** src/session/store.ts (new), src/cli/backend.ts, tui/src/protocol.rs, tui/src/app.rs
+**LoC added / deleted:** ~240 / ~5
+**Simplifications during review:** Single SessionStore class, two constants, atomic writes via renameSync. Ledger files intentionally stay flat in storageDir (not migrated). `--resume [id]` parsed inline in main(). Periodic save via setInterval + save-on-exit handlers. `/resume` prints the restart command per the spec's v1 clarification.
+**Deviations from spec:** TUI does not re-render past messages from the resumed session — it shows a "Resumed session N messages" banner and the backend context carries full history into the next LLM turn, which is where it matters. Re-streaming past turns to the UI would double message volume for no functional win. File lock for concurrent access deferred — existing deployment is single-user.

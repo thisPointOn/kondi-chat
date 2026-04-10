@@ -98,10 +98,22 @@ impl App {
 
     pub fn handle_backend_event(&mut self, event: BackendEvent) {
         match event {
-            BackendEvent::Ready { mode, status, git_info, .. } => {
+            BackendEvent::Ready { mode, status, git_info, resumed, resumed_session_id, resumed_message_count, .. } => {
                 self.status = status;
                 self.model = mode;
                 self.git_info = git_info;
+                if resumed {
+                    let id = resumed_session_id.unwrap_or_default();
+                    let count = resumed_message_count.unwrap_or(0);
+                    self.messages.push(ChatMessage {
+                        id: format!("sys-resume-{}", self.messages.len()),
+                        role: "system".to_string(),
+                        content: format!("Resumed session {} ({} messages).", id.chars().take(8).collect::<String>(), count),
+                        model_label: None,
+                        tool_calls: vec![],
+                        stats: None,
+                    });
+                }
             }
             BackendEvent::Message { id, role, content, model_label } => {
                 self.messages.push(ChatMessage {

@@ -20,6 +20,7 @@ import { AGENT_TOOLS, type ToolContext } from '../engine/tools.ts';
 import { PermissionManager } from '../engine/permissions.ts';
 import { detectGitRepo, formatGitContextForPrompt, GIT_TOOLS, executeGitTool, type GitContext } from '../engine/git-tools.ts';
 import { CheckpointManager, isMutatingToolCall, predictedMutations } from '../engine/checkpoints.ts';
+import { SessionStore, AUTO_SAVE_MS } from '../session/store.ts';
 import { Router as UnifiedRouter } from '../router/index.ts';
 import { ProfileManager } from '../router/profiles.ts';
 import { LoopGuard } from '../engine/loop-guard.ts';
@@ -61,14 +62,43 @@ async function main() {
   const storageDir = resolve(workingDir, '.kondi-chat');
   mkdirSync(storageDir, { recursive: true });
 
-  const session = createSession('openai' as ProviderId, undefined, workingDir);
+  // Spec 06 — session resume
+  const sessionStore = new SessionStore(storageDir);
+  sessionStore.cleanup();
+  const resumeIdx = process.argv.indexOf('--resume');
+  let session: Session;
+  let resumed = false;
+  let resumedSummary = '';
+  let restoredProfile: string | undefined;
+  let restoredOverrideModel: string | undefined;
+  if (resumeIdx >= 0) {
+    const nextArg = process.argv[resumeIdx + 1];
+    const persisted = nextArg && !nextArg.startsWith('--')
+      ? sessionStore.load(nextArg)
+      : sessionStore.loadLatest(workingDir);
+    if (persisted) {
+      session = persisted.session;
+      resumed = true;
+      resumedSummary = `${session.messages.length} messages, $${session.totalCostUsd.toFixed(4)}`;
+      restoredProfile = persisted.activeProfile;
+      restoredOverrideModel = persisted.overrideModel;
+    } else {
+      session = createSession('openai' as ProviderId, undefined, workingDir);
+    }
+  } else {
+    session = createSession('openai' as ProviderId, undefined, workingDir);
+  }
   const ledger = new Ledger(session.id, storageDir);
   const analytics = new Analytics(storageDir);
   const router = new UnifiedRouter(storageDir, { useIntent: true });
   const registry = router.registry;
   const collector = router.collector;
-  const profiles = new ProfileManager('balanced', storageDir);
+  const profiles = new ProfileManager((restoredProfile as any) || 'balanced', storageDir);
   router.rules.setProfile(profiles.getActive());
+  if (restoredOverrideModel) {
+    const m = registry.getById(restoredOverrideModel) || registry.getByAlias(restoredOverrideModel);
+    if (m) router.rules.setOverride(m);
+  }
 
   const mcpClient = new McpClientManager();
   const mcpConfigs = loadMcpConfig(workingDir);
@@ -140,13 +170,31 @@ async function main() {
     type: 'ready',
     models: available.map(m => m.alias || m.id),
     mode: profiles.getActive().name,
-    status: `${available.length} models | mode: ${profiles.getActive().name}`,
+    status: resumed
+      ? `resumed ${session.id.slice(0, 8)} (${resumedSummary}) | mode: ${profiles.getActive().name}`
+      : `${available.length} models | mode: ${profiles.getActive().name}`,
     git_info: gitCtx.isGitRepo ? {
       branch: gitCtx.branch,
       dirty_count: gitCtx.dirtyCount + gitCtx.untrackedCount,
       last_commit: gitCtx.lastCommitHash,
     } : null,
+    resumed,
+    resumed_session_id: resumed ? session.id : null,
+    resumed_message_count: resumed ? session.messages.length : null,
   });
+
+  sessionStore.setActive(session.id);
+  sessionStore.save(session, profiles.getActive().name, router.rules.getOverride()?.id);
+  const saveInterval = setInterval(() => {
+    try { sessionStore.save(session, profiles.getActive().name, router.rules.getOverride()?.id); }
+    catch (e) { process.stderr.write(`[session-save] ${(e as Error).message}\n`); }
+  }, AUTO_SAVE_MS);
+  const saveAndExit = () => {
+    try { sessionStore.save(session, profiles.getActive().name, router.rules.getOverride()?.id); } catch { /* ignore */ }
+    clearInterval(saveInterval);
+  };
+  process.on('SIGTERM', () => { saveAndExit(); process.exit(0); });
+  process.on('SIGINT', () => { saveAndExit(); process.exit(0); });
 
   // ── Handle commands from TUI ───────────────────────────────────────
 
@@ -157,6 +205,7 @@ async function main() {
     try { cmd = JSON.parse(line); } catch { return; }
 
     if (cmd.type === 'quit') {
+      saveAndExit();
       await mcpClient.disconnectAll();
       process.exit(0);
     }
@@ -167,7 +216,7 @@ async function main() {
     }
 
     if (cmd.type === 'command') {
-      const output = await handleCommand(cmd.text, session, contextManager, ledger, registry, collector, toolCtx, mcpClient, toolManager, workingDir, profiles, router, councilProfiles, councilPath, analytics, checkpointManager);
+      const output = await handleCommand(cmd.text, session, contextManager, ledger, registry, collector, toolCtx, mcpClient, toolManager, workingDir, profiles, router, councilProfiles, councilPath, analytics, checkpointManager, sessionStore);
       emit({ type: 'command_result', output });
       return;
     }
@@ -176,6 +225,7 @@ async function main() {
       refreshGit();
       toolCtx.mutatedFiles = new Set();
       await handleSubmit(cmd.text, session, contextManager, ledger, router, collector, toolCtx, toolManager, profiles, checkpointManager);
+      try { sessionStore.save(session, profiles.getActive().name, router.rules.getOverride()?.id); } catch { /* ignore */ }
       return;
     }
   });
@@ -374,6 +424,7 @@ async function handleCommand(
   councilProfiles: CouncilProfileManager, councilPath: string,
   analytics: Analytics,
   checkpointManager: CheckpointManager,
+  sessionStore: SessionStore,
 ): Promise<string> {
   // Import the actual command handler from main.tsx would be circular,
   // so we duplicate the essential commands here
@@ -437,6 +488,13 @@ async function handleCommand(
       if (parts[1] === 'rebuild') { analytics.rebuild(); return 'Analytics rebuilt from all ledger files.'; }
       if (parts[1] === 'export') { return analytics.exportAll(); }
       return analytics.format(days);
+    }
+    case '/sessions': return sessionStore.format(workingDir);
+    case '/resume': {
+      if (!parts[1]) return 'Usage: /resume <session-id>';
+      const p = sessionStore.load(parts[1]);
+      if (!p) return `Session not found: ${parts[1]}`;
+      return `To resume ${p.session.id.slice(0, 8)}, restart with:\n  kondi-chat --resume ${p.session.id}`;
     }
     case '/checkpoints': return checkpointManager.format();
     case '/undo': {
