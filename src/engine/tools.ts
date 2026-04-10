@@ -217,6 +217,8 @@ export interface ToolContext {
   permissionManager?: PermissionManager;
   /** Spec 01 — used by permission requests to push events to the TUI. */
   emit?: (event: any) => void;
+  /** Spec 05 — files mutated during the current turn (write_file / edit_file). */
+  mutatedFiles?: Set<string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -478,6 +480,7 @@ function toolWriteFile(
   mkdirSync(dirname(fullPath), { recursive: true });
   writeFileSync(fullPath, content);
   ctx.setActiveFile?.(relPath);
+  ctx.mutatedFiles?.add(relPath);
 
   const d = computeUnifiedDiff(relPath, originalContent, content);
   return {
@@ -529,6 +532,7 @@ function toolEditFile(
   const updated = original.slice(0, idx) + newString + original.slice(idx + oldString.length);
   writeFileSync(fullPath, updated);
   ctx.setActiveFile?.(relPath);
+  ctx.mutatedFiles?.add(relPath);
 
   const d = computeUnifiedDiff(relPath, original, updated);
   return {
@@ -554,5 +558,12 @@ function toolUpdateMemory(
     return { content: `Invalid operation: ${operation} (expected 'append' or 'replace')`, isError: true };
   }
   const { path } = ctx.memoryManager.updateMemory(scope, operation, content);
+  // Track memory file mutations for checkpoint coverage (Spec 05 clarification).
+  if (ctx.mutatedFiles) {
+    try {
+      const rel = relative(ctx.workingDir, path);
+      if (!rel.startsWith('..')) ctx.mutatedFiles.add(rel);
+    } catch { /* ignore */ }
+  }
   return { content: `Memory ${operation} → ${path}` };
 }

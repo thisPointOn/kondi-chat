@@ -19,6 +19,7 @@ import { Ledger, estimateCost } from '../audit/ledger.ts';
 import { AGENT_TOOLS, type ToolContext } from '../engine/tools.ts';
 import { PermissionManager } from '../engine/permissions.ts';
 import { detectGitRepo, formatGitContextForPrompt, GIT_TOOLS, executeGitTool, type GitContext } from '../engine/git-tools.ts';
+import { CheckpointManager, isMutatingToolCall, predictedMutations } from '../engine/checkpoints.ts';
 import { Router as UnifiedRouter } from '../router/index.ts';
 import { ProfileManager } from '../router/profiles.ts';
 import { LoopGuard } from '../engine/loop-guard.ts';
@@ -104,6 +105,8 @@ async function main() {
     });
   }
 
+  const checkpointManager = new CheckpointManager(workingDir, session.id, storageDir);
+
   const skipPermissions = process.argv.includes('--dangerously-skip-permissions');
   const permissionManager = new PermissionManager(
     join(storageDir, 'permissions.json'),
@@ -164,14 +167,15 @@ async function main() {
     }
 
     if (cmd.type === 'command') {
-      const output = await handleCommand(cmd.text, session, contextManager, ledger, registry, collector, toolCtx, mcpClient, toolManager, workingDir, profiles, router, councilProfiles, councilPath, analytics);
+      const output = await handleCommand(cmd.text, session, contextManager, ledger, registry, collector, toolCtx, mcpClient, toolManager, workingDir, profiles, router, councilProfiles, councilPath, analytics, checkpointManager);
       emit({ type: 'command_result', output });
       return;
     }
 
     if (cmd.type === 'submit') {
       refreshGit();
-      await handleSubmit(cmd.text, session, contextManager, ledger, router, collector, toolCtx, toolManager, profiles);
+      toolCtx.mutatedFiles = new Set();
+      await handleSubmit(cmd.text, session, contextManager, ledger, router, collector, toolCtx, toolManager, profiles, checkpointManager);
       return;
     }
   });
@@ -189,7 +193,10 @@ async function handleSubmit(
   toolCtx: ToolContext,
   toolManager: ToolManager,
   profiles: ProfileManager,
+  checkpointManager: CheckpointManager,
 ) {
+  const turnNumber = session.messages.filter(m => m.role === 'user').length + 1;
+  let checkpointCreated = false;
   // @mention check
   const mentionMatch = input.match(/^@(\S+)\s+([\s\S]+)/);
   if (mentionMatch) {
@@ -280,6 +287,26 @@ async function handleSubmit(
       emit({ type: 'tool_call', name: tc.name, args: toolArgs, is_error: false });
       emit({ type: 'activity', text: `${tc.name}(${toolArgs})`, activity_type: 'tool' });
 
+      // Spec 05 — create a checkpoint before the first mutating tool in this turn.
+      if (!checkpointCreated && isMutatingToolCall(tc.name, tc.arguments)) {
+        try {
+          const predicted = new Set([
+            ...(toolCtx.mutatedFiles ?? []),
+            ...predictedMutations(tc.name, tc.arguments),
+          ]);
+          checkpointManager.create(
+            `Turn ${turnNumber}: ${input.slice(0, 60)}`,
+            input,
+            turnNumber,
+            totalCost,
+            predicted,
+          );
+          checkpointCreated = true;
+        } catch (e) {
+          emit({ type: 'error', message: `Checkpoint failed: ${(e as Error).message}` });
+        }
+      }
+
       const result = await toolManager.execute(tc.name, tc.arguments, toolCtx);
       const capped = result.content.length > 3000 ? result.content.slice(0, 3000) + '...' : result.content;
 
@@ -346,6 +373,7 @@ async function handleCommand(
   profiles: ProfileManager, router: UnifiedRouter,
   councilProfiles: CouncilProfileManager, councilPath: string,
   analytics: Analytics,
+  checkpointManager: CheckpointManager,
 ): Promise<string> {
   // Import the actual command handler from main.tsx would be circular,
   // so we duplicate the essential commands here
@@ -410,11 +438,33 @@ async function handleCommand(
       if (parts[1] === 'export') { return analytics.exportAll(); }
       return analytics.format(days);
     }
+    case '/checkpoints': return checkpointManager.format();
+    case '/undo': {
+      const arg = parts[1];
+      try {
+        if (!arg) {
+          const r = checkpointManager.restore(-1);
+          return `Reverted ${r.restored.id} (turn ${r.restored.turnNumber}): ${r.restored.summary}\n  files: ${r.filesRestored.length}${r.errors.length ? `  errors: ${r.errors.join('; ')}` : ''}`;
+        }
+        if (/^\d+$/.test(arg)) {
+          const n = parseInt(arg, 10);
+          const r = checkpointManager.restore(-n);
+          return `Reverted ${n} checkpoint(s) to ${r.restored.id} (turn ${r.restored.turnNumber}). Files: ${r.filesRestored.length}`;
+        }
+        const cp = checkpointManager.get(arg);
+        if (!cp) return `Unknown checkpoint: ${arg}. Run /checkpoints to list.`;
+        const r = checkpointManager.restore(arg);
+        return `Restored ${r.restored.id}. Files: ${r.filesRestored.join(', ') || '(none)'}`;
+      } catch (e) {
+        return `Undo failed: ${(e as Error).message}`;
+      }
+    }
     case '/help': return [
       '/mode [quality|balanced|cheap|<custom>]', '/use <alias>', '/use auto',
       '/models', '/health', '/routing', '/status', '/cost',
       '/analytics [days|rebuild|export]',
       '/council [list|run <profile> <brief>]', '/mcp',
+      '/checkpoints', '/undo [N|<id>]',
       '/help', '/quit',
     ].join('\n');
     default: return `Unknown: ${cmd}. Try /help`;

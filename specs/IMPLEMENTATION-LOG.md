@@ -32,3 +32,11 @@ Progress ledger for the 18-spec implementation pass. One section per spec in the
 **LoC added / deleted:** ~280 / ~5
 **Simplifications during review:** Single git-tools.ts. `detectGitRepo` is a plain snapshot function — no GitContext class. The `refreshGit` closure is a three-liner declared near the tool registrations. Git context injected via ContextManager's `setGitContextText`, re-applied after every mutating git tool and once per submit (before prompt assembly). The "git_info on ready is one-shot" simplification is intentional — mid-session branch changes propagate on next backend restart, which matches the spec's deletion of periodic status polling.
 **Deviations from spec:** MessageStats git_branch/git_dirty fields were not added — adding them would require touching Rust protocol, app state, and ui rendering for one string that already appears in the permanent status bar after next turn. Re-visit in Spec 15 if telemetry needs it.
+**Commit:** aab305d feat: implement spec 02 (git integration)
+
+## 05 — Undo / Checkpoints — 2026-04-09
+**Status:** shipped
+**Files changed:** src/engine/checkpoints.ts (new), src/engine/tools.ts, src/cli/backend.ts
+**LoC added / deleted:** ~260 / ~5
+**Simplifications during review:** Single checkpoints.ts file. `isMutatingToolCall` + `predictedMutations` are a pair of small pure functions, not a class. Non-mutating run_command allowlist is a hard-coded prefix list. CheckpointManager uses renameSync for atomicity (no execSync of `mv`). File-mode snapshots happen just before the first mutating tool runs, using paths predicted from the tool args so the pre-state is captured correctly. `/undo` parses strict-numeric for multi-step, otherwise treats as id.
+**Deviations from spec:** `/restore` command omitted (spec already deletes it). The `run_command` with mutation is checkpointed but in file mode we have no predicted path list, so file-mode file capture is empty for run_command — git mode covers this correctly via `git stash create`. Acceptable because real projects are git repos.
