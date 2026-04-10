@@ -227,6 +227,20 @@ async function main() {
     sessionStore.clearRecovery(session.id);
   }
 
+  // ── Non-interactive mode (Spec 10) ─────────────────────────────────
+  // When --prompt/--pipe/--json/--sessions are set, we run a single turn
+  // and exit instead of entering the JSON-RPC event loop.
+  const nonInteractive = parseNonInteractiveFlags(process.argv);
+  if (nonInteractive) {
+    const code = await runNonInteractiveTurn(
+      nonInteractive, workingDir, session, contextManager, ledger, router,
+      toolCtx, toolManager, profiles, checkpointManager, sessionStore,
+      skipPermissions,
+    );
+    clearInterval(saveInterval);
+    process.exit(code);
+  }
+
   // ── Handle commands from TUI ───────────────────────────────────────
 
   const rl = createInterface({ input: process.stdin });
@@ -573,6 +587,160 @@ function formatToolArgs(tc: any): string {
     case 'update_plan': return args.goal ? `goal="${String(args.goal).slice(0, 40)}"` : '...';
     default: return JSON.stringify(args).slice(0, 60);
   }
+}
+
+// ── Non-interactive helpers (Spec 10) ───────────────────────────────
+
+interface NonInteractiveFlags {
+  prompt?: string;
+  pipe: boolean;
+  json: boolean;
+  sessions: boolean;
+  maxIterations?: number;
+  maxCostUsd?: number;
+  autoApprove: Set<string>;
+}
+
+function parseNonInteractiveFlags(argv: string[]): NonInteractiveFlags | null {
+  const has = (f: string) => argv.includes(f);
+  if (!(has('--prompt') || has('--pipe') || has('--json') || has('--sessions'))) return null;
+  const flags: NonInteractiveFlags = {
+    pipe: has('--pipe'),
+    json: has('--json'),
+    sessions: has('--sessions'),
+    autoApprove: new Set(),
+  };
+  const promptIdx = argv.indexOf('--prompt');
+  if (promptIdx >= 0) flags.prompt = argv[promptIdx + 1];
+  const iterIdx = argv.indexOf('--max-iterations');
+  if (iterIdx >= 0) flags.maxIterations = parseInt(argv[iterIdx + 1], 10);
+  const costIdx = argv.indexOf('--max-cost');
+  if (costIdx >= 0) flags.maxCostUsd = parseFloat(argv[costIdx + 1]);
+  const aaIdx = argv.indexOf('--auto-approve');
+  if (aaIdx >= 0) flags.autoApprove = new Set((argv[aaIdx + 1] || '').split(',').filter(Boolean));
+  return flags;
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  return new Promise((resolve, reject) => {
+    process.stdin.on('data', c => chunks.push(Buffer.from(c)));
+    process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+    process.stdin.on('error', reject);
+  });
+}
+
+async function runNonInteractiveTurn(
+  flags: NonInteractiveFlags,
+  workingDir: string,
+  session: Session,
+  contextManager: ContextManager,
+  ledger: Ledger,
+  router: UnifiedRouter,
+  toolCtx: ToolContext,
+  toolManager: ToolManager,
+  profiles: ProfileManager,
+  checkpointManager: CheckpointManager,
+  sessionStore: SessionStore,
+  skipPermissions: boolean,
+): Promise<number> {
+  if (flags.sessions) {
+    process.stdout.write(sessionStore.format(workingDir) + '\n');
+    return 0;
+  }
+  // Non-TTY permission guard
+  if (!skipPermissions && flags.autoApprove.size === 0 && toolCtx.permissionManager) {
+    // Wrap emit as a no-op so confirm-tier tools fail fast with a clear error
+    // instead of hanging forever waiting for a TUI response.
+    toolCtx.emit = () => {};
+  }
+  // Install simple auto-approve overrides by bypassing check for listed tools
+  if (flags.autoApprove.size > 0 && toolCtx.permissionManager) {
+    const pm = toolCtx.permissionManager;
+    const origCheck = pm.check.bind(pm);
+    pm.check = (tool: string, args: Record<string, unknown>) => {
+      if (flags.autoApprove.has(tool)) return 'auto-approve';
+      return origCheck(tool, args);
+    };
+  }
+
+  let input = flags.prompt;
+  if (!input && flags.pipe) input = (await readStdin()).trim();
+  if (!input) {
+    process.stderr.write('Error: no prompt provided. Use --prompt "…" or --pipe.\n');
+    return 1;
+  }
+
+  toolCtx.mutatedFiles = new Set();
+
+  // Capture events that the agent loop writes to stdout via emit() — we need
+  // to replay them in the final JSON or drop them entirely in text mode.
+  const events: any[] = [];
+  const origStdoutWrite = process.stdout.write.bind(process.stdout);
+  (process.stdout as any).write = (chunk: any, ...rest: any[]): boolean => {
+    try {
+      const s = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
+      const line = s.endsWith('\n') ? s.slice(0, -1) : s;
+      if (line.startsWith('{')) {
+        try { events.push(JSON.parse(line)); return true; } catch { /* fallthrough */ }
+      }
+    } catch { /* fallthrough */ }
+    return origStdoutWrite(chunk, ...rest);
+  };
+
+  const start = Date.now();
+  let exitCode = 0;
+  try {
+    await handleSubmit(input, session, contextManager, ledger, router, (router as any).collector, toolCtx, toolManager, profiles, checkpointManager);
+  } catch (e) {
+    exitCode = 1;
+    process.stderr.write(`Error: ${(e as Error).message}\n`);
+  }
+  (process.stdout as any).write = origStdoutWrite;
+
+  // Locate the final assistant message
+  const lastAssistant = session.messages.filter(m => m.role === 'assistant').pop();
+  const finalMessage = lastAssistant?.content || '';
+  const stats = events.find(e => e.type === 'message_update' && e.stats)?.stats;
+  const filesModified = [...(toolCtx.mutatedFiles || [])];
+  const durationMs = Date.now() - start;
+
+  // Cost cap check
+  if (flags.maxCostUsd !== undefined && stats && stats.cost_usd > flags.maxCostUsd) {
+    exitCode = 3;
+  }
+
+  // Tool calls from the captured message_update events
+  const lastUpdate = [...events].reverse().find(e => e.type === 'message_update' && e.tool_calls);
+  const toolCalls = lastUpdate?.tool_calls || [];
+
+  if (flags.json) {
+    const payload = {
+      success: exitCode === 0,
+      exitCode,
+      finalMessage,
+      iterations: stats?.iterations ?? 0,
+      toolCalls,
+      stats: {
+        inputTokens: stats?.input_tokens ?? 0,
+        outputTokens: stats?.output_tokens ?? 0,
+        costUsd: stats?.cost_usd ?? 0,
+        modelsUsed: stats?.models ?? [],
+        durationMs,
+      },
+      session: { id: session.id, messageCount: session.messages.length },
+      filesModified,
+    };
+    origStdoutWrite(JSON.stringify(payload, null, 2) + '\n');
+  } else {
+    if (finalMessage) origStdoutWrite(finalMessage + '\n');
+    if (stats) {
+      process.stderr.write(
+        `Done: ${stats.iterations ?? 1} iterations, $${(stats.cost_usd || 0).toFixed(4)}\n`,
+      );
+    }
+  }
+  return exitCode;
 }
 
 main().catch(err => {

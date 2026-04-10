@@ -33,6 +33,23 @@ async fn main() -> io::Result<()> {
         }
     };
 
+    // Spec 10 — non-interactive mode bypasses the TUI entirely.
+    let forwarded: Vec<String> = std::env::args().skip(1).collect();
+    let is_non_interactive = forwarded.iter().any(|a|
+        a == "--prompt" || a == "--pipe" || a == "--json" || a == "--sessions"
+    );
+    if is_non_interactive {
+        let mut args = vec!["tsx".to_string(), "src/cli/backend.ts".to_string()];
+        args.extend(forwarded);
+        let status = TokioCommand::new("npx")
+            .args(&args)
+            .current_dir(&project_root)
+            .status()
+            .await
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to start backend: {e}")))?;
+        std::process::exit(status.code().unwrap_or(1));
+    }
+
     let mut child = TokioCommand::new("npx")
         .args(["tsx", "src/cli/backend.ts"])
         .stdin(Stdio::piped())

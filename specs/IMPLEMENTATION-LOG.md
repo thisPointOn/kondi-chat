@@ -72,3 +72,11 @@ Progress ledger for the 18-spec implementation pass. One section per spec in the
 **LoC added / deleted:** ~175 / ~3
 **Simplifications during review:** Single hooks.ts. `executeWithoutHooks` splits recursion-free dispatch from the public hooked path; `tool:` hooks go through executeWithoutHooks via a callback registered at setHookRunner time. Shell expansion uses single-quote escaping for all interpolated values. Built-in auto-format only (no lint/test). Depth limit is a simple counter.
 **Deviations from spec:** Variable substitution quotes ALL substituted values uniformly rather than context-aware inside vs outside shell quotes — acceptable because the simpler scheme is safer and the spec's "placeholders outside quotes are shell-escaped" clause is satisfied. Hook-invoked tools still go through permissions per the Spec 12 clarification.
+**Commit:** 51305dc feat: implement spec 12 (hooks system)
+
+## 10 — Non-interactive Mode — 2026-04-09
+**Status:** shipped
+**Files changed:** src/cli/backend.ts, tui/src/main.rs
+**LoC added / deleted:** ~170 / ~1
+**Simplifications during review:** Instead of extracting runAgentLoop into a new file (the spec's suggested refactor), I added a non-interactive branch inside backend.ts main() that reuses the existing handleSubmit code path. stdout is intercepted to buffer event JSON; final output is rendered either as JSON or plain text after the turn completes. The Rust main detects --prompt/--pipe/--json/--sessions and spawns the Node backend with inherited stdio instead of entering raw-mode TUI.
+**Deviations from spec:** No `src/cli/non-interactive.ts` file; the 170-LOC helper lives at the bottom of backend.ts so it shares the existing initialization code path. runAgentLoop extraction is deferred — Spec 07 can revisit if needed. Cost cap, iteration cap, and --max-iterations are handled post-hoc rather than during the loop, which means the agent may exceed them slightly before the check fires.
