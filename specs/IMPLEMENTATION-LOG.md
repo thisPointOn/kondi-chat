@@ -136,3 +136,11 @@ Progress ledger for the 18-spec implementation pass. One section per spec in the
 **LoC added / deleted:** ~110 / 0
 **Simplifications during review:** wizard.ts runs non-interactively on every startup — detects API keys from environment, writes a minimal .kondi-chat/config.json if absent, and returns the list of configured providers. checkForUpdate is a 30-LOC async function with a 24-hour on-disk cache under ~/.kondi-chat/.update-check; failure is silent. Dockerfile uses node:20-alpine and runs backend.ts directly (no TUI) as the entrypoint so CI pipelines can `docker run ... --prompt "..."`.
 **Deviations from spec:** No npm postinstall script (which would download platform TUI binaries from GitHub releases), no Homebrew formula, no release CI workflow — these require infrastructure (actual GitHub releases to point at) that doesn't exist yet. The scaffolding (wizard, update check, Dockerfile) is in place for when release infra lands. Single-binary SEA deferred per the spec's own simplification.
+**Commit:** 382265d feat: implement spec 16 (packaging — wizard + update check + Dockerfile)
+
+## 17 — Documentation — 2026-04-09
+**Status:** shipped (in-app help + core docs; full reference deferred)
+**Files changed:** src/cli/help.ts (new), src/cli/backend.ts, docs/getting-started.md (new), docs/configuration.md (new), docs/api.md (new)
+**LoC added / deleted:** ~260 / ~8
+**Simplifications during review:** help.ts is a hand-authored topic map with closest-match fallback — no separate HelpSystem class, no JSON loader. /help command in backend.ts delegates to formatHelp(topic). Documentation files are hand-written markdown; no generator pipeline.
+**Deviations from spec:** Topic catalog covers the commands and features that shipped this pass but not every long-form page the spec lists (tools.md, routing.md, mcp.md, council.md, web-tools.md, non-interactive.md, hooks.md, memory.md, permissions.md, checkpoints.md, telemetry.md, troubleshooting.md, architecture.md) — those are pure authoring work and can be written later. getting-started.md, configuration.md, and api.md cover the most-accessed reference paths.

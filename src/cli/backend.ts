@@ -38,6 +38,7 @@ import { RoutingCollector } from '../router/collector.ts';
 import { Analytics } from '../audit/analytics.ts';
 import { TelemetryEmitter } from '../audit/telemetry.ts';
 import { runFirstRunWizard, checkForUpdate } from './wizard.ts';
+import { formatHelp } from './help.ts';
 
 // Spec 08 — MAX_TOOL_ITERATIONS deleted; handleSubmit now uses LoopGuard
 // driven by the active budget profile.
@@ -668,14 +669,7 @@ async function handleCommand(
         return `Undo failed: ${(e as Error).message}`;
       }
     }
-    case '/help': return [
-      '/mode [quality|balanced|cheap|<custom>]', '/use <alias>', '/use auto',
-      '/models', '/health', '/routing', '/status', '/cost',
-      '/analytics [days|rebuild|export]',
-      '/council [list|run <profile> <brief>]', '/mcp',
-      '/checkpoints', '/undo [N|<id>]',
-      '/help', '/quit',
-    ].join('\n');
+    case '/help': return formatHelp(parts[1]);
     default: return `Unknown: ${cmd}. Try /help`;
   }
 }
