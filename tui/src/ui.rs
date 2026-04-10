@@ -87,6 +87,10 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
                         Span::styled(format!("⎿ {}", tc.name), Style::default().fg(color)),
                         Span::styled(format!("({})", tc.args), Style::default().fg(Color::DarkGray)),
                     ]));
+                    // Spec 03 — collapsed diff preview (first 10 lines, colored by prefix)
+                    if let Some(ref diff) = tc.diff {
+                        render_diff_lines(&mut lines, diff, 10, "    ");
+                    }
                 }
                 if msg.tool_calls.len() > 7 {
                     lines.push(Line::from(Span::styled(
@@ -292,6 +296,10 @@ fn draw_detail(f: &mut Frame, app: &App, view: &str) {
                         )));
                     }
                 }
+                // Spec 03 — full colored diff in the detail view
+                if let Some(ref diff) = tc.diff {
+                    render_diff_lines(&mut lines, diff, usize::MAX, "    ");
+                }
             }
         }
 
@@ -424,6 +432,34 @@ fn get_suggestions(input: &str, _model: &str) -> Vec<Suggestion> {
     }
 
     vec![]
+}
+
+/// Spec 03 — push colored unified-diff lines onto `lines`.
+/// Green for `+`, red for `-`, cyan for `@@` headers, dark gray for headers, default otherwise.
+/// If the diff has more than `max_lines` lines, a truncation notice is appended.
+fn render_diff_lines(lines: &mut Vec<Line>, diff: &str, max_lines: usize, indent: &str) {
+    let all: Vec<&str> = diff.lines().collect();
+    let show = all.len().min(max_lines);
+    for raw in all.iter().take(show) {
+        let style = if raw.starts_with("+++") || raw.starts_with("---") {
+            Style::default().fg(Color::DarkGray)
+        } else if raw.starts_with('+') {
+            Style::default().fg(Color::Green)
+        } else if raw.starts_with('-') {
+            Style::default().fg(Color::Red)
+        } else if raw.starts_with("@@") {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        lines.push(Line::from(Span::styled(format!("{indent}{raw}"), style)));
+    }
+    if all.len() > show {
+        lines.push(Line::from(Span::styled(
+            format!("{indent}... {} more lines (^O for full diff)", all.len() - show),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
 }
 
 fn draw_suggestions(f: &mut Frame, suggestions: &[Suggestion], area: Rect) {

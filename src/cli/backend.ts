@@ -243,10 +243,16 @@ async function handleSubmit(
       const result = await toolManager.execute(tc.name, tc.arguments, toolCtx);
       const capped = result.content.length > 3000 ? result.content.slice(0, 3000) + '...' : result.content;
 
-      allToolCalls.push({ name: tc.name, args: toolArgs, result: capped.slice(0, 300), is_error: result.isError || false });
+      allToolCalls.push({
+        name: tc.name,
+        args: toolArgs,
+        result: capped.slice(0, 300),
+        is_error: result.isError || false,
+        diff: result.diff,
+      });
       emit({ type: 'message_update', id: msgId, content: response.content || '', tool_calls: [...allToolCalls] });
 
-      toolResults.push({ toolCallId: tc.id, content: capped, isError: result.isError });
+      toolResults.push({ toolCallId: tc.id, content: capped, isError: result.isError, diff: result.diff });
     }
 
     messages.push({ role: 'tool', toolResults });

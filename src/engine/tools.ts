@@ -18,6 +18,7 @@ import { execSync } from 'node:child_process';
 import type { ToolDefinition, Session, TaskKind } from '../types.ts';
 import type { Ledger } from '../audit/ledger.ts';
 import { runPipeline, type PipelineConfig } from './pipeline.ts';
+import { computeUnifiedDiff } from './diff.ts';
 
 // ---------------------------------------------------------------------------
 // Tool definitions (provider-agnostic JSON Schema)
@@ -199,11 +200,18 @@ export interface ToolContext {
 // Tool dispatcher
 // ---------------------------------------------------------------------------
 
+export interface ToolExecutionResult {
+  content: string;
+  isError?: boolean;
+  /** Spec 03 — unified diff populated by write_file / edit_file. */
+  diff?: string;
+}
+
 export async function executeTool(
   name: string,
   args: Record<string, unknown>,
   ctx: ToolContext,
-): Promise<{ content: string; isError?: boolean }> {
+): Promise<ToolExecutionResult> {
   try {
     switch (name) {
       case 'create_task':
@@ -422,7 +430,7 @@ function toolUpdatePlan(
 function toolWriteFile(
   args: Record<string, unknown>,
   ctx: ToolContext,
-): { content: string; isError?: boolean } {
+): ToolExecutionResult {
   const relPath = args.path as string;
   const content = args.content as string;
   const base = resolve(ctx.workingDir);
@@ -432,10 +440,10 @@ function toolWriteFile(
     return { content: `Path traversal blocked: ${relPath}`, isError: true };
   }
 
-  // process.stderr.write(`[tool] write_file: ${relPath}\n`);
-
-  // Backup existing file
-  if (existsSync(fullPath)) {
+  const existed = existsSync(fullPath);
+  let originalContent = '';
+  if (existed) {
+    try { originalContent = readFileSync(fullPath, 'utf-8'); } catch { originalContent = ''; }
     const backupDir = join(ctx.workingDir, '.kondi-chat', 'backups', 'latest');
     const backupPath = join(backupDir, relPath);
     mkdirSync(dirname(backupPath), { recursive: true });
@@ -446,14 +454,17 @@ function toolWriteFile(
   mkdirSync(dirname(fullPath), { recursive: true });
   writeFileSync(fullPath, content);
 
-  const isNew = !existsSync(fullPath);
-  return { content: `${isNew ? 'Created' : 'Updated'} ${relPath} (${content.length} chars)` };
+  const d = computeUnifiedDiff(relPath, originalContent, content);
+  return {
+    content: `${existed ? 'Updated' : 'Created'} ${relPath} (+${d.linesAdded}/-${d.linesRemoved})`,
+    diff: d.diff || undefined,
+  };
 }
 
 function toolEditFile(
   args: Record<string, unknown>,
   ctx: ToolContext,
-): { content: string; isError?: boolean } {
+): ToolExecutionResult {
   const relPath = args.path as string;
   const oldString = args.old_string as string;
   const newString = args.new_string as string;
@@ -493,5 +504,9 @@ function toolEditFile(
   const updated = original.slice(0, idx) + newString + original.slice(idx + oldString.length);
   writeFileSync(fullPath, updated);
 
-  return { content: `Edited ${relPath}: replaced ${oldString.length} chars with ${newString.length} chars` };
+  const d = computeUnifiedDiff(relPath, original, updated);
+  return {
+    content: `Edited ${relPath} (+${d.linesAdded}/-${d.linesRemoved})`,
+    diff: d.diff || undefined,
+  };
 }

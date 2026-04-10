@@ -130,6 +130,7 @@ impl App {
                             args: args.clone(),
                             result: None,
                             is_error,
+                            diff: None,
                         });
                     }
                 }

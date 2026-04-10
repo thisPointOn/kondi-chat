@@ -42,8 +42,12 @@ pub enum BackendEvent {
 pub struct ToolCallInfo {
     pub name: String,
     pub args: String,
+    #[serde(default)]
     pub result: Option<String>,
     pub is_error: bool,
+    /// Spec 03 — unified diff produced by write_file / edit_file.
+    #[serde(default)]
+    pub diff: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

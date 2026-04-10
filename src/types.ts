@@ -235,6 +235,8 @@ export interface ToolResult {
   toolCallId: string;
   content: string;
   isError?: boolean;
+  /** Spec 03 — unified diff, when the tool mutated a file. */
+  diff?: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -9,13 +9,13 @@
  */
 
 import type { ToolDefinition } from '../types.ts';
-import { AGENT_TOOLS, executeTool, type ToolContext } from '../engine/tools.ts';
+import { AGENT_TOOLS, executeTool, type ToolContext, type ToolExecutionResult } from '../engine/tools.ts';
 import { McpClientManager } from './client.ts';
 import type { McpToolInfo } from './types.ts';
 
 /** Extra tools registered at runtime (e.g., council) */
 let extraTools: ToolDefinition[] = [];
-let extraExecutors: Map<string, (args: Record<string, unknown>, ctx: ToolContext) => Promise<{ content: string; isError?: boolean }>> = new Map();
+let extraExecutors: Map<string, (args: Record<string, unknown>, ctx: ToolContext) => Promise<ToolExecutionResult>> = new Map();
 
 // ---------------------------------------------------------------------------
 // Tool categories for filtering
@@ -57,7 +57,7 @@ export class ToolManager {
   /** Register an extra tool (e.g., council) */
   registerTool(
     tool: ToolDefinition,
-    executor: (args: Record<string, unknown>, ctx: ToolContext) => Promise<{ content: string; isError?: boolean }>,
+    executor: (args: Record<string, unknown>, ctx: ToolContext) => Promise<ToolExecutionResult>,
   ): void {
     extraTools.push(tool);
     extraExecutors.set(tool.name, executor);
@@ -97,7 +97,7 @@ export class ToolManager {
     name: string,
     args: Record<string, unknown>,
     toolCtx: ToolContext,
-  ): Promise<{ content: string; isError?: boolean }> {
+  ): Promise<ToolExecutionResult> {
     // Check extra tools first (e.g., council)
     const extraExec = extraExecutors.get(name);
     if (extraExec) {
