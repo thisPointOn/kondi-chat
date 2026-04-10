@@ -17,6 +17,7 @@ const CACHE_MAX_ENTRIES = 100;
 const MAX_FETCH_BYTES = 1_048_576;
 const MAX_MARKDOWN_BYTES = 20 * 1024;
 const FETCH_TIMEOUT_MS = 15_000;
+const MAX_REDIRECTS = 5;
 
 export interface SearchResult { title: string; url: string; snippet: string; }
 export interface FetchResult { url: string; content: string; contentType: string; sizeBytes: number; truncated?: boolean; }
@@ -124,20 +125,37 @@ export class WebToolsManager {
     const cached = this.cacheGet<FetchResult>(key);
     if (cached) return cached;
 
-    // SSRF guard
-    let parsed: URL;
-    try { parsed = new URL(url); } catch { throw new Error(`Invalid URL: ${url}`); }
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-      throw new Error(`Unsupported scheme: ${parsed.protocol}`);
-    }
-    if (isPrivateHost(parsed.hostname)) {
-      throw new Error(`Blocked private/localhost host: ${parsed.hostname}`);
-    }
+    // SSRF guard — re-applied at every redirect hop so a public URL that
+    // 302s to 127.0.0.1 (or an RFC1918 host) is blocked on the final target.
+    const assertSafe = (candidate: string): URL => {
+      let p: URL;
+      try { p = new URL(candidate); } catch { throw new Error(`Invalid URL: ${candidate}`); }
+      if (p.protocol !== 'https:' && p.protocol !== 'http:') {
+        throw new Error(`Unsupported scheme: ${p.protocol}`);
+      }
+      if (isPrivateHost(p.hostname)) {
+        throw new Error(`Blocked private/localhost host: ${p.hostname}`);
+      }
+      return p;
+    };
 
-    const resp = await fetch(url, {
-      redirect: 'follow',
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
+    let parsed = assertSafe(url);
+    let resp: Response;
+    let hops = 0;
+    while (true) {
+      resp = await fetch(parsed.toString(), {
+        redirect: 'manual',
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+      if (resp.status >= 300 && resp.status < 400) {
+        const loc = resp.headers.get('location');
+        if (!loc) throw new Error(`fetch ${resp.status} with no Location header`);
+        if (++hops > MAX_REDIRECTS) throw new Error(`Too many redirects (>${MAX_REDIRECTS})`);
+        parsed = assertSafe(new URL(loc, parsed).toString());
+        continue;
+      }
+      break;
+    }
     if (!resp.ok) throw new Error(`fetch ${resp.status}`);
     const contentType = resp.headers.get('content-type') || '';
     const reader = resp.body?.getReader();

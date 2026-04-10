@@ -223,12 +223,14 @@ export function loadRateLimitConfig(storageDir: string): Record<string, Provider
     } catch { /* non-fatal */ }
     return { ...DEFAULTS };
   }
-  try {
-    const raw = JSON.parse(readFileSync(path, 'utf-8'));
-    return { ...DEFAULTS, ...(raw.limits || {}) };
-  } catch {
-    return { ...DEFAULTS };
+  // Fail closed on corrupt config: rate limits guard paid APIs and a silent
+  // fallback could leave a user thinking a custom (stricter) config was in
+  // effect. Surface the error; the caller decides whether to continue.
+  const raw = JSON.parse(readFileSync(path, 'utf-8'));
+  if (raw == null || typeof raw !== 'object' || (raw.limits != null && typeof raw.limits !== 'object')) {
+    throw new Error(`rate-limits.json is malformed (expected { limits: {...} })`);
   }
+  return { ...DEFAULTS, ...(raw.limits || {}) };
 }
 
 let globalRateLimiter: RateLimiter | undefined;
