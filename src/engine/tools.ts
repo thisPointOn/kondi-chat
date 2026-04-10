@@ -19,6 +19,7 @@ import type { ToolDefinition, Session, TaskKind } from '../types.ts';
 import type { Ledger } from '../audit/ledger.ts';
 import { runPipeline, type PipelineConfig } from './pipeline.ts';
 import { computeUnifiedDiff } from './diff.ts';
+import type { MemoryManager } from '../context/memory.ts';
 
 // ---------------------------------------------------------------------------
 // Tool definitions (provider-agnostic JSON Schema)
@@ -162,6 +163,19 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'update_memory',
+    description: 'Update a KONDI.md memory file to record project conventions, decisions, or preferences. Scope "project" writes to <workingDir>/KONDI.md; "user" writes to ~/.kondi-chat/KONDI.md.',
+    parameters: {
+      type: 'object',
+      properties: {
+        scope: { type: 'string', enum: ['project', 'user'], description: 'Which memory file to update' },
+        operation: { type: 'string', enum: ['append', 'replace'], description: 'Append to the existing file or overwrite it' },
+        content: { type: 'string', description: 'Markdown content to append or write' },
+      },
+      required: ['scope', 'operation', 'content'],
+    },
+  },
+  {
     name: 'edit_file',
     description: 'Edit a file by replacing a specific string with new content. The old_string must match exactly (including whitespace).',
     parameters: {
@@ -194,6 +208,10 @@ export interface ToolContext {
   session: Session;
   ledger: Ledger;
   pipelineConfig: PipelineConfig;
+  /** Spec 04 — optional memory store for KONDI.md files. */
+  memoryManager?: MemoryManager;
+  /** Spec 04 — callback to update ContextManager's active-file anchor for subdir memory. */
+  setActiveFile?: (path: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -230,6 +248,8 @@ export async function executeTool(
         return toolWriteFile(args, ctx);
       case 'edit_file':
         return toolEditFile(args, ctx);
+      case 'update_memory':
+        return toolUpdateMemory(args, ctx);
       default:
         return { content: `Unknown tool: ${name}`, isError: true };
     }
@@ -282,8 +302,7 @@ function toolReadFile(
     return { content: `File not found: ${relPath}`, isError: true };
   }
 
-  // process.stderr.write(`[tool] read_file: ${relPath}\n`);
-
+  ctx.setActiveFile?.(relPath);
   const content = readFileSync(fullPath, 'utf-8');
   const lines = content.split('\n');
   if (lines.length > maxLines) {
@@ -453,6 +472,7 @@ function toolWriteFile(
   // Create parent directories and write
   mkdirSync(dirname(fullPath), { recursive: true });
   writeFileSync(fullPath, content);
+  ctx.setActiveFile?.(relPath);
 
   const d = computeUnifiedDiff(relPath, originalContent, content);
   return {
@@ -503,10 +523,31 @@ function toolEditFile(
   // Apply edit
   const updated = original.slice(0, idx) + newString + original.slice(idx + oldString.length);
   writeFileSync(fullPath, updated);
+  ctx.setActiveFile?.(relPath);
 
   const d = computeUnifiedDiff(relPath, original, updated);
   return {
     content: `Edited ${relPath} (+${d.linesAdded}/-${d.linesRemoved})`,
     diff: d.diff || undefined,
   };
+}
+
+function toolUpdateMemory(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): ToolExecutionResult {
+  const scope = args.scope as 'project' | 'user';
+  const operation = args.operation as 'append' | 'replace';
+  const content = args.content as string;
+  if (!ctx.memoryManager) {
+    return { content: 'Memory manager not available', isError: true };
+  }
+  if (scope !== 'project' && scope !== 'user') {
+    return { content: `Invalid scope: ${scope} (expected 'project' or 'user')`, isError: true };
+  }
+  if (operation !== 'append' && operation !== 'replace') {
+    return { content: `Invalid operation: ${operation} (expected 'append' or 'replace')`, isError: true };
+  }
+  const { path } = ctx.memoryManager.updateMemory(scope, operation, content);
+  return { content: `Memory ${operation} → ${path}` };
 }

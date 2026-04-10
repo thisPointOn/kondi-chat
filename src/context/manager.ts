@@ -14,6 +14,7 @@ import type { Message, Session, SessionState, RepoMap, LLMResponse, ProviderId }
 import { ContextBudget, estimateTokens } from './budget.ts';
 import { callLLM } from '../providers/llm-caller.ts';
 import type { Ledger } from '../audit/ledger.ts';
+import type { MemoryManager } from './memory.ts';
 
 // ---------------------------------------------------------------------------
 // Constants (matching Claude Code's approach)
@@ -83,6 +84,9 @@ export class ContextManager {
   private session: Session;
   private config: Required<ContextManagerConfig>;
   private ledger?: Ledger;
+  private memoryManager?: MemoryManager;
+  /** Last file a tool touched — used as an anchor for subdirectory memory lookup. */
+  private activeFile?: string;
 
   /** Token budget tracking */
   private sessionTokensUsed = 0;
@@ -94,15 +98,17 @@ export class ContextManager {
   private cacheHits = 0;
   private cacheMisses = 0;
 
-  constructor(session: Session, config?: ContextManagerConfig, ledger?: Ledger) {
+  constructor(session: Session, config?: ContextManagerConfig, ledger?: Ledger, memoryManager?: MemoryManager) {
     this.session = session;
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.ledger = ledger;
+    this.memoryManager = memoryManager;
   }
 
   getSession(): Session { return this.session; }
   getConfig(): Required<ContextManagerConfig> { return this.config; }
   setTokenBudget(budget: number | null): void { this.sessionTokenBudget = budget; }
+  setActiveFile(path: string): void { this.activeFile = path; }
 
   // -------------------------------------------------------------------------
   // Turn management
@@ -148,6 +154,13 @@ export class ContextManager {
     const budget = new ContextBudget(this.config.contextBudget);
     const messages = this.getMessagesAfterBoundary();
     const currentMessage = messages[messages.length - 1];
+
+    // Priority 0: Memory (KONDI.md files) — highest priority, non-compressible
+    if (this.memoryManager) {
+      const memEntries = this.memoryManager.load(this.activeFile);
+      const memText = this.memoryManager.formatForPrompt(memEntries);
+      if (memText) budget.add('memory', memText, 0, false);
+    }
 
     // Priority 1: Session state
     const stateText = this.formatSessionState();

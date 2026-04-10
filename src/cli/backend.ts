@@ -13,6 +13,7 @@ import { existsSync, readFileSync, mkdirSync } from 'node:fs';
 import type { ProviderId, Session, LLMMessage } from '../types.ts';
 import { callLLM } from '../providers/llm-caller.ts';
 import { ContextManager, createSession } from '../context/manager.ts';
+import { MemoryManager } from '../context/memory.ts';
 import { bootstrapDirectory } from '../context/bootstrap.ts';
 import { Ledger, estimateCost } from '../audit/ledger.ts';
 import { AGENT_TOOLS, type ToolContext } from '../engine/tools.ts';
@@ -83,7 +84,8 @@ async function main() {
   const ctx = await bootstrapDirectory(workingDir, 'light');
   if (ctx) session.groundingContext = ctx;
 
-  const contextManager = new ContextManager(session, { contextBudget: 30_000 }, ledger);
+  const memoryManager = new MemoryManager(workingDir);
+  const contextManager = new ContextManager(session, { contextBudget: 30_000 }, ledger, memoryManager);
 
   const toolCtx: ToolContext = {
     workingDir,
@@ -98,6 +100,8 @@ async function main() {
       workingDir,
       autoVerify: true,
     },
+    memoryManager,
+    setActiveFile: (p: string) => contextManager.setActiveFile(p),
   };
 
   // Health check

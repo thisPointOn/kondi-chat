@@ -31,6 +31,7 @@ const BUILTIN_CATEGORIES: Record<string, string[]> = {
   run_command: ['system', 'coding'],
   create_task: ['coding', 'execution'],
   update_plan: ['planning'],
+  update_memory: ['planning'],
 };
 
 /** Phase → which tool categories are relevant */
