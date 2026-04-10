@@ -104,3 +104,11 @@ Progress ledger for the 18-spec implementation pass. One section per spec in the
 **LoC added / deleted:** ~15 / ~6
 **Simplifications during review:** Deleted MAX_TOOL_ITERATIONS=20; handleSubmit now loops via LoopGuard(profile). The first error from each iteration's tool results feeds `loopGuard.recordIteration` so stuck detection works on regular turns, not just `/loop`. `toolCtx.loopGuard` is exposed for tools that want to inspect status.
 **Deviations from spec:** None — this is exactly the spec.
+**Commit:** 4cca321 feat: implement spec 08 (persistent loop)
+
+## 11 — Web Tools — 2026-04-09
+**Status:** shipped
+**Files changed:** src/web/manager.ts (new), src/cli/backend.ts, src/engine/permissions.ts
+**LoC added / deleted:** ~210 / 0
+**Simplifications during review:** Single manager file, Brave-only backend, in-memory LRU cache (no disk), zero-dependency HTML stripping via a regex pipeline (good enough for 90% of pages; no readability port). SSRF guard blocks localhost, RFC1918, link-local, .local/.internal. Rate limiter reuses the Spec 14 bucket machinery under a synthetic 'brave' provider.
+**Deviations from spec:** HTML to clean markdown is a regex pipeline, not a proper DOM-aware extractor. Title/links are not structured output — callers see a plain-text stream. Disk cache deferred. SerpAPI, Ollama web search, DuckDuckGo all deferred to v2.

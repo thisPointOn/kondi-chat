@@ -24,6 +24,7 @@ import { SessionStore, AUTO_SAVE_MS } from '../session/store.ts';
 import { RateLimiter, loadRateLimitConfig, setRateLimiter } from '../providers/rate-limiter.ts';
 import { HookRunner } from '../engine/hooks.ts';
 import { runSubAgent, formatSubAgentResult } from '../engine/sub-agents.ts';
+import { WebToolsManager } from '../web/manager.ts';
 import { Router as UnifiedRouter } from '../router/index.ts';
 import { ProfileManager } from '../router/profiles.ts';
 import { LoopGuard } from '../engine/loop-guard.ts';
@@ -112,6 +113,14 @@ async function main() {
   const toolManager = new ToolManager(mcpClient);
   const hookRunner = new HookRunner(join(storageDir, 'hooks.json'), workingDir);
   toolManager.setHookRunner(hookRunner);
+
+  // Spec 11 — web tools (only enabled when BRAVE_SEARCH_API_KEY is present)
+  const webTools = new WebToolsManager();
+  if (webTools.isEnabled()) {
+    for (const tool of webTools.getTools()) {
+      toolManager.registerTool(tool, async (args) => webTools.executeTool(tool.name, args));
+    }
+  }
 
   const councilProfiles = new CouncilProfileManager(storageDir);
   const councilPath = resolve(workingDir, '../kondi-council');
