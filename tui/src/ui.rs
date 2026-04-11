@@ -226,7 +226,10 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
     let total = wrapped_lines.len() as u16;
     let visible = area.height;
     let max_scroll = total.saturating_sub(visible);
-    let user_scroll = if app.is_processing { 0 } else { (app.chat_scroll as u16).min(max_scroll) };
+    // Respect the user's scroll position even during processing — previously
+    // we snapped to bottom on every frame, which made manual scrolling
+    // impossible mid-turn.
+    let user_scroll = (app.chat_scroll as u16).min(max_scroll);
     let scroll_y = max_scroll.saturating_sub(user_scroll);
 
     let para = Paragraph::new(Text::from(wrapped_lines))

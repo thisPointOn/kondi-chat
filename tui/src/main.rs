@@ -4,7 +4,7 @@ mod ui;
 
 use std::io;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     execute,
 };
@@ -77,7 +77,7 @@ async fn main() -> io::Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stderr = io::stderr();
-    execute!(stderr, EnterAlternateScreen)?;
+    execute!(stderr, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stderr);
     let mut terminal = Terminal::new(backend)?;
 
@@ -87,7 +87,27 @@ async fn main() -> io::Result<()> {
         terminal.draw(|f| ui::draw(f, &app))?;
 
         if crossterm::event::poll(std::time::Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
+            let evt = event::read()?;
+            if let Event::Mouse(MouseEvent { kind, .. }) = evt {
+                match kind {
+                    MouseEventKind::ScrollUp => {
+                        if app.detail_view.is_some() {
+                            app.detail_scroll = app.detail_scroll.saturating_add(3);
+                        } else {
+                            app.chat_scroll = app.chat_scroll.saturating_add(3);
+                        }
+                    }
+                    MouseEventKind::ScrollDown => {
+                        if app.detail_view.is_some() {
+                            app.detail_scroll = app.detail_scroll.saturating_sub(3);
+                        } else {
+                            app.chat_scroll = app.chat_scroll.saturating_sub(3);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Event::Key(key) = evt {
                 // Spec 01 — when a permission dialog is open, intercept y/n/a.
                 let permission_open = !app.pending_permissions.is_empty();
                 if permission_open {
@@ -183,7 +203,7 @@ async fn main() -> io::Result<()> {
     }
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
     Ok(())
 }
