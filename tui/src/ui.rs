@@ -107,9 +107,14 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
 
         match msg.role.as_str() {
             "user" => {
+                // Neon pink text on a barely-there off-white background — same
+                // pink as the input border, so it's clear what's "yours".
+                let pink = Color::Rgb(255, 20, 147);
+                let faint_bg = Color::Rgb(40, 40, 40);
+                let style = Style::default().fg(pink).bg(faint_bg).add_modifier(Modifier::BOLD);
                 lines.push(Line::from(vec![
-                    Span::styled("❯ ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
-                    Span::styled(&msg.content, Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+                    Span::styled("❯ ", style),
+                    Span::styled(&msg.content, style),
                 ]));
             }
             "system" => {
