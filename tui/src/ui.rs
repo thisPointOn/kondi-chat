@@ -118,7 +118,14 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    let mut left_spans: Vec<Span> = vec![Span::styled(app.status.clone(), status_style)];
+    let mut left_spans: Vec<Span> = Vec::new();
+    if app.is_processing {
+        left_spans.push(Span::styled(
+            format!("{} ", app.spinner()),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+    left_spans.push(Span::styled(app.status.clone(), status_style));
     if let Some(ref g) = app.git_info {
         let suffix = if g.dirty_count == 0 { "clean".to_string() } else { format!("{} modified", g.dirty_count) };
         let branch_color = if g.dirty_count == 0 { Color::Green } else { Color::Yellow };
