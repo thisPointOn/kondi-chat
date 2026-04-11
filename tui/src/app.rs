@@ -1,10 +1,11 @@
 use crate::protocol::{BackendEvent, GitInfo, MessageStats, ToolCallInfo};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
 use std::time::Instant;
 
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
     pub id: String,
-    pub role: String, // "user", "assistant", "system"
     pub content: String,
     pub model_label: Option<String>,
     pub tool_calls: Vec<ToolCallInfo>,
@@ -20,38 +21,32 @@ pub struct PermissionDialog {
 }
 
 pub struct App {
+    /// Holds AT MOST one entry: the in-progress assistant message currently
+    /// being streamed by the backend. When stats arrive (= turn complete),
+    /// the message is rendered to a Vec<Line> and pushed to pending_history,
+    /// then this is cleared. Past messages live in normal terminal scrollback.
     pub messages: Vec<ChatMessage>,
+    /// Render queue for the main loop. Each entry is a fully-rendered chat
+    /// message (one user/assistant turn or one system note). The main loop
+    /// drains this on every iteration via terminal.insert_before(...) so the
+    /// lines land in normal scrollback above the inline viewport.
+    pub pending_history: Vec<Vec<Line<'static>>>,
+    /// Bash-style input history.
+    pub user_inputs: Vec<String>,
+    pub history_idx: Option<usize>,
+    pub history_draft: String,
     pub input: String,
     pub status: String,
     pub model: String,
     pub is_processing: bool,
-    pub chat_scroll: usize,
-    /// Set by draw_chat each frame: (chat_area_y, chat_area_height, max_scroll).
-    /// Lets the mouse handler in main.rs translate a click on the scrollbar
-    /// column into a chat_scroll value.
-    pub chat_scroll_meta: (u16, u16, usize),
-    /// Bash-style input history. None = not recalling. Some(i) = walking back
-    /// through past user messages (0 = most recent). history_draft preserves
-    /// whatever the user was typing before they started recalling.
-    pub history_idx: Option<usize>,
-    pub history_draft: String,
-    /// Mouse capture state. True = wheel + scrollbar drag work, terminal
-    /// can't drag-select. False = native terminal drag-select works,
-    /// wheel and scrollbar are inert. Toggled with Alt+M.
-    pub mouse_capture: bool,
     pub detail_scroll: usize,
-    pub detail_view: Option<String>, // "tools", "stats", "message"
+    pub detail_view: Option<String>,
     pub show_activity: bool,
-    pub activity: Vec<(String, String)>, // (type, text)
-    /// ID of the message currently being built by the backend
+    pub activity: Vec<(String, String)>,
     pub working_id: Option<String>,
-    /// For spinner animation
     pub start_time: Instant,
-    /// Total session cost
     pub session_cost: f64,
-    /// Spec 01 — queue of pending permission prompts (oldest at front).
     pub pending_permissions: Vec<PermissionDialog>,
-    /// Spec 02 — current git snapshot (None when not a git repo).
     pub git_info: Option<GitInfo>,
 }
 
@@ -67,15 +62,14 @@ impl App {
     pub fn new() -> Self {
         Self {
             messages: vec![],
+            pending_history: vec![],
+            user_inputs: vec![],
+            history_idx: None,
+            history_draft: String::new(),
             input: String::new(),
             status: "Starting...".to_string(),
             model: "auto".to_string(),
             is_processing: false,
-            chat_scroll: 0,
-            chat_scroll_meta: (0, 0, 0),
-            history_idx: None,
-            history_draft: String::new(),
-            mouse_capture: true,
             detail_scroll: 0,
             detail_view: None,
             show_activity: false,
@@ -88,35 +82,23 @@ impl App {
         }
     }
 
-    /// Past user messages, newest first. Owned strings to avoid borrow
-    /// conflicts when callers also need &mut self.
-    fn user_history(&self) -> Vec<String> {
-        self.messages.iter().rev()
-            .filter(|m| m.role == "user")
-            .map(|m| m.content.clone())
-            .collect()
-    }
-
-    /// Bash-style: walk backwards through user history. On first press,
-    /// stash whatever was being typed so Down can restore it.
     pub fn history_prev(&mut self) {
-        let hist = self.user_history();
-        if hist.is_empty() { return; }
+        if self.user_inputs.is_empty() { return; }
         let next = match self.history_idx {
             None => {
                 self.history_draft = self.input.clone();
                 0
             }
-            Some(i) => (i + 1).min(hist.len() - 1),
+            Some(i) => (i + 1).min(self.user_inputs.len() - 1),
         };
         self.history_idx = Some(next);
-        self.input = hist[next].clone();
+        // user_inputs is newest-last, history_idx 0 = most recent.
+        let len = self.user_inputs.len();
+        self.input = self.user_inputs[len - 1 - next].clone();
     }
 
-    /// Bash-style: walk forward. Past the most recent entry, restore the draft.
     pub fn history_next(&mut self) {
-        let hist = self.user_history();
-        if hist.is_empty() { return; }
+        if self.user_inputs.is_empty() { return; }
         match self.history_idx {
             None => {}
             Some(0) => {
@@ -126,26 +108,23 @@ impl App {
             Some(i) => {
                 let next = i - 1;
                 self.history_idx = Some(next);
-                self.input = hist[next].clone();
+                let len = self.user_inputs.len();
+                self.input = self.user_inputs[len - 1 - next].clone();
             }
         }
     }
 
+    /// Called when the user presses Enter. Renders the user line into
+    /// pending_history (will land in terminal scrollback) and tracks it
+    /// for input history recall.
     pub fn add_user_message(&mut self, text: &str) {
-        self.messages.push(ChatMessage {
-            id: format!("user-{}", self.messages.len()),
-            role: "user".to_string(),
-            content: text.to_string(),
-            model_label: None,
-            tool_calls: vec![],
-            stats: None,
-        });
-        self.chat_scroll = 0;
+        self.user_inputs.push(text.to_string());
+        let lines = render_user_lines(text);
+        self.pending_history.push(lines);
         self.is_processing = true;
         self.activity.clear();
         self.status = "thinking...".to_string();
         self.start_time = Instant::now();
-        // Reset history walk on send.
         self.history_idx = None;
         self.history_draft.clear();
     }
@@ -159,6 +138,20 @@ impl App {
         self.detail_scroll = 0;
     }
 
+    /// Render the in-progress message (if any) and push to pending_history,
+    /// then clear messages. Called when stats arrive on a MessageUpdate.
+    fn flush_in_progress(&mut self) {
+        if let Some(msg) = self.messages.drain(..).next() {
+            let lines = render_assistant_lines(&msg);
+            self.pending_history.push(lines);
+        }
+    }
+
+    fn push_system(&mut self, text: String) {
+        let lines = render_system_lines(&text);
+        self.pending_history.push(lines);
+    }
+
     pub fn handle_backend_event(&mut self, event: BackendEvent) {
         match event {
             BackendEvent::Ready { mode, status, git_info, resumed, resumed_session_id, resumed_message_count, .. } => {
@@ -168,29 +161,29 @@ impl App {
                 if resumed {
                     let id = resumed_session_id.unwrap_or_default();
                     let count = resumed_message_count.unwrap_or(0);
-                    self.messages.push(ChatMessage {
-                        id: format!("sys-resume-{}", self.messages.len()),
-                        role: "system".to_string(),
-                        content: format!("Resumed session {} ({} messages).", id.chars().take(8).collect::<String>(), count),
-                        model_label: None,
-                        tool_calls: vec![],
-                        stats: None,
-                    });
+                    self.push_system(format!(
+                        "Resumed session {} ({} messages).",
+                        id.chars().take(8).collect::<String>(),
+                        count,
+                    ));
                 }
             }
             BackendEvent::Message { id, role, content, model_label } => {
-                self.messages.push(ChatMessage {
-                    id: id.clone(),
-                    role,
-                    content,
-                    model_label: model_label.clone(),
-                    tool_calls: vec![],
-                    stats: None,
-                });
-                if model_label.is_some() {
-                    self.working_id = Some(id);
+                if role == "assistant" {
+                    self.messages.clear();
+                    self.messages.push(ChatMessage {
+                        id: id.clone(),
+                        content,
+                        model_label: model_label.clone(),
+                        tool_calls: vec![],
+                        stats: None,
+                    });
+                    if model_label.is_some() {
+                        self.working_id = Some(id);
+                    }
+                } else if role == "system" {
+                    self.push_system(content);
                 }
-                self.chat_scroll = 0;
             }
             BackendEvent::MessageUpdate { id, content, model_label, tool_calls, stats } => {
                 if let Some(msg) = self.messages.iter_mut().find(|m| m.id == id) {
@@ -200,19 +193,17 @@ impl App {
                     if let Some(s) = stats {
                         self.session_cost += s.cost_usd;
                         msg.stats = Some(s);
-                        // Message complete — update model label
                         if let Some(ref label) = msg.model_label {
                             self.model = label.clone();
                         }
                         self.is_processing = false;
                         self.working_id = None;
                         self.status = String::new();
+                        self.flush_in_progress();
                     }
                 }
-                self.chat_scroll = 0;
             }
             BackendEvent::ToolCall { name, args, is_error } => {
-                // Add to working message's tool calls
                 if let Some(ref wid) = self.working_id {
                     if let Some(msg) = self.messages.iter_mut().find(|m| m.id == *wid) {
                         msg.tool_calls.push(ToolCallInfo {
@@ -233,14 +224,7 @@ impl App {
                 self.activity.push((activity_type, text));
             }
             BackendEvent::Error { message } => {
-                self.messages.push(ChatMessage {
-                    id: format!("err-{}", self.messages.len()),
-                    role: "system".to_string(),
-                    content: format!("Error: {message}"),
-                    model_label: None,
-                    tool_calls: vec![],
-                    stats: None,
-                });
+                self.push_system(format!("Error: {message}"));
                 self.is_processing = false;
                 self.status = String::new();
             }
@@ -249,25 +233,119 @@ impl App {
             }
             BackendEvent::PermissionTimeout { id, tool } => {
                 self.pending_permissions.retain(|p| p.id != id);
-                self.messages.push(ChatMessage {
-                    id: format!("perm-timeout-{}", self.messages.len()),
-                    role: "system".to_string(),
-                    content: format!("Permission request for {tool} timed out and was denied"),
-                    model_label: None,
-                    tool_calls: vec![],
-                    stats: None,
-                });
+                self.push_system(format!("Permission request for {tool} timed out and was denied"));
             }
             BackendEvent::CommandResult { output } => {
-                self.messages.push(ChatMessage {
-                    id: format!("cmd-{}", self.messages.len()),
-                    role: "system".to_string(),
-                    content: output,
-                    model_label: None,
-                    tool_calls: vec![],
-                    stats: None,
-                });
+                self.push_system(output);
             }
         }
+    }
+}
+
+// ── Renderers (also used by ui.rs for the in-progress preview) ──────
+
+const PINK: Color = Color::Rgb(255, 20, 147);
+const BODY: Color = Color::Rgb(210, 210, 210);
+
+pub fn render_user_lines(text: &str) -> Vec<Line<'static>> {
+    let mut out = vec![Line::from("")];
+    let style = Style::default().fg(PINK).add_modifier(Modifier::BOLD);
+    let prefix = Span::styled("❯ ", style);
+    let mut first = true;
+    for line in text.lines() {
+        if first {
+            out.push(Line::from(vec![prefix.clone(), Span::styled(line.to_string(), style)]));
+            first = false;
+        } else {
+            out.push(Line::from(Span::styled(format!("  {}", line), style)));
+        }
+    }
+    if first {
+        out.push(Line::from(prefix));
+    }
+    out
+}
+
+pub fn render_system_lines(text: &str) -> Vec<Line<'static>> {
+    let mut out = vec![Line::from("")];
+    for line in text.lines() {
+        out.push(Line::from(Span::styled(
+            line.to_string(),
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    out
+}
+
+pub fn render_assistant_lines(msg: &ChatMessage) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = vec![Line::from("")];
+
+    let label = msg.model_label.clone().unwrap_or_else(|| "assistant".to_string());
+    out.push(Line::from(vec![
+        Span::styled("● ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::styled(label, Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+    ]));
+
+    for tc in &msg.tool_calls {
+        let color = if tc.is_error { Color::Red } else { Color::Cyan };
+        out.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("⎿ {}", tc.name), Style::default().fg(color)),
+            Span::styled(format!("({})", tc.args), Style::default().fg(Color::DarkGray)),
+        ]));
+        if let Some(ref diff) = tc.diff {
+            push_diff_lines(&mut out, diff, 10, "    ");
+        }
+    }
+
+    if !msg.content.is_empty() {
+        for line in msg.content.lines() {
+            out.push(Line::from(Span::styled(
+                format!("  {}", line),
+                Style::default().fg(BODY),
+            )));
+        }
+    }
+
+    if let Some(ref stats) = msg.stats {
+        let models = stats.models.join(", ");
+        let mut parts = format!(
+            "  ▸ {}in / {}out · ${:.4} · {}",
+            stats.input_tokens, stats.output_tokens, stats.cost_usd, models
+        );
+        if stats.iterations > 1 {
+            parts.push_str(&format!(" · {} steps", stats.iterations));
+        }
+        if let Some(ref reason) = stats.route_reason {
+            parts.push_str(&format!(" · route: {}", reason));
+        }
+        out.push(Line::from(Span::styled(parts, Style::default().fg(Color::DarkGray))));
+    }
+
+    out
+}
+
+fn push_diff_lines(out: &mut Vec<Line<'static>>, diff: &str, max_lines: usize, indent: &str) {
+    let all: Vec<&str> = diff.lines().collect();
+    let show = all.len().min(max_lines);
+    for raw in all.iter().take(show) {
+        let style = if raw.starts_with("+++") || raw.starts_with("---") {
+            Style::default().fg(Color::DarkGray)
+        } else if raw.starts_with('+') {
+            Style::default().fg(Color::Green)
+        } else if raw.starts_with('-') {
+            Style::default().fg(Color::Red)
+        } else if raw.starts_with("@@") {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        out.push(Line::from(Span::styled(format!("{}{}", indent, raw), style)));
+    }
+    if all.len() > show {
+        out.push(Line::from(Span::styled(
+            format!("{}... {} more lines (^O for full diff)", indent, all.len() - show),
+            Style::default().fg(Color::DarkGray),
+        )));
     }
 }

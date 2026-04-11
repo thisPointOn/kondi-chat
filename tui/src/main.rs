@@ -4,17 +4,20 @@ mod ui;
 
 use std::io;
 use crossterm::{
-    event::{self, DisableMouseCapture, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind},
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-    execute,
+    event::{self, Event, KeyCode, KeyModifiers},
+    terminal::{disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{backend::CrosstermBackend, Terminal, TerminalOptions, Viewport};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command as TokioCommand;
 use std::process::Stdio;
 
 use app::App;
 use protocol::{BackendEvent, TuiCommand};
+
+/// Height of the live inline viewport (status + in-progress + input + model).
+/// 18 rows is enough for a roomy compose area + 8 lines of streaming preview.
+const VIEWPORT_HEIGHT: u16 = 18;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -74,79 +77,43 @@ async fn main() -> io::Result<()> {
     let mut reader = BufReader::new(stdout).lines();
     let mut writer = stdin;
 
-    // Setup terminal.
+    // Setup terminal — codex pattern.
     //
-    // We want THREE things at once:
-    //  1. drag-to-select text in the chat (handled by the terminal)
-    //  2. mouse wheel scrolls our chat
-    //  3. clicks on the in-app scrollbar work
-    //
-    // crossterm's EnableMouseCapture enables modes 1000+1002+1003+1006,
-    // which captures motion events too — that's what breaks selection,
-    // because the terminal stops getting drag events.
-    //
-    // The fix: emit ONLY the X10 + SGR enable sequences (1000 + 1006)
-    // by hand. Mode 1000 captures button press/release and wheel but
-    // NOT motion, so dragging is still owned by the terminal and
-    // selection works. The trade-off is that scrollbar *drag* won't
-    // work (only single clicks register); use the wheel or PgUp/PgDn
-    // for fast scrolling.
+    // We do NOT enter the alternate screen and do NOT capture mouse events.
+    // Instead we use Ratatui's inline viewport: a fixed-height region
+    // anchored at the bottom of the terminal that holds the live UI
+    // (status, in-progress message, input box, model indicator). Completed
+    // chat messages are pushed into the *normal* terminal scrollback via
+    // `terminal.insert_before`. The user's terminal then handles wheel
+    // scroll, drag-to-select, and copy natively, exactly like cat or less.
     enable_raw_mode()?;
-    let mut stderr = io::stderr();
-    execute!(stderr, EnterAlternateScreen, DisableMouseCapture)?;
-    // Enable click+wheel mouse, leave motion to the terminal.
-    use std::io::Write;
-    let _ = stderr.write_all(b"\x1b[?1000h\x1b[?1006h");
-    let _ = stderr.flush();
-    let backend = CrosstermBackend::new(stderr);
-    let mut terminal = Terminal::new(backend)?;
+    let backend = CrosstermBackend::new(io::stderr());
+    let mut terminal = Terminal::with_options(
+        backend,
+        TerminalOptions { viewport: Viewport::Inline(VIEWPORT_HEIGHT) },
+    )?;
 
     let mut app = App::new();
 
     loop {
+        // Drain anything the app pushed into the history queue (completed
+        // chat messages) into the terminal's normal scrollback BEFORE we
+        // redraw the inline viewport. Each item is one rendered message.
+        let pending = std::mem::take(&mut app.pending_history);
+        for item in pending {
+            let height = item.len() as u16;
+            if height == 0 { continue; }
+            terminal.insert_before(height, |buf| {
+                for (i, line) in item.iter().enumerate() {
+                    buf.set_line(0, i as u16, line, buf.area.width);
+                }
+            })?;
+        }
+
         terminal.draw(|f| ui::draw(f, &mut app))?;
 
-        // 16 ms ≈ 60 Hz. The previous 50 ms made mouse drags on the scrollbar
-        // feel snaggy because we sampled events at only ~20 Hz while terminal
-        // emulators send drag events at 60+ Hz.
         if crossterm::event::poll(std::time::Duration::from_millis(16))? {
             let evt = event::read()?;
-            if let Event::Mouse(MouseEvent { kind, column, row, .. }) = evt {
-                use crossterm::event::MouseButton;
-                match kind {
-                    MouseEventKind::ScrollUp => {
-                        if app.detail_view.is_some() {
-                            app.detail_scroll = app.detail_scroll.saturating_add(3);
-                        } else {
-                            app.chat_scroll = app.chat_scroll.saturating_add(3);
-                        }
-                    }
-                    MouseEventKind::ScrollDown => {
-                        if app.detail_view.is_some() {
-                            app.detail_scroll = app.detail_scroll.saturating_sub(3);
-                        } else {
-                            app.chat_scroll = app.chat_scroll.saturating_sub(3);
-                        }
-                    }
-                    MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left) => {
-                        // Click/drag on the scrollbar column (rightmost column
-                        // of the chat area). Translate y → chat_scroll.
-                        let term_w = terminal.size()?.width;
-                        if app.detail_view.is_none() && column + 1 >= term_w {
-                            let (chat_y, chat_h, max_scroll) = app.chat_scroll_meta;
-                            if max_scroll > 0 && chat_h > 0 && row >= chat_y && row < chat_y + chat_h {
-                                let rel = (row - chat_y) as usize;
-                                let denom = chat_h.saturating_sub(1) as usize;
-                                // Top of bar = oldest = max chat_scroll, bottom = newest = 0
-                                let from_top_ratio = rel as f32 / denom.max(1) as f32;
-                                let from_top = (from_top_ratio * max_scroll as f32).round() as usize;
-                                app.chat_scroll = max_scroll.saturating_sub(from_top);
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
             if let Event::Key(key) = evt {
                 // Spec 01 — when a permission dialog is open, intercept y/n/a.
                 let permission_open = !app.pending_permissions.is_empty();
@@ -206,81 +173,12 @@ async fn main() -> io::Result<()> {
                     (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
                         app.show_activity = !app.show_activity;
                     }
-                    (KeyCode::F(2), _) | (KeyCode::Char('m'), KeyModifiers::ALT) => {
-                        // Toggle the click+wheel mouse mode. Default is on
-                        // (mode 1000+1006) which leaves drag motion to the
-                        // terminal so selection still works. Off is a
-                        // safety hatch for terminals where the click mode
-                        // STILL interferes with selection.
-                        app.mouse_capture = !app.mouse_capture;
-                        if app.mouse_capture {
-                            let _ = terminal.backend_mut().write_all(b"\x1b[?1000h\x1b[?1006h");
-                            let _ = terminal.backend_mut().flush();
-                            app.status = "mouse: click+wheel on, drag-to-select on".to_string();
-                        } else {
-                            let _ = terminal.backend_mut().write_all(b"\x1b[?1000l\x1b[?1006l");
-                            let _ = terminal.backend_mut().flush();
-                            app.status = "mouse: fully off".to_string();
-                        }
-                    }
                     (KeyCode::Backspace, _) => { app.input.pop(); }
-                    (KeyCode::Up, _) => {
-                        if app.detail_view.is_some() {
-                            app.detail_scroll = app.detail_scroll.saturating_add(3);
-                        } else {
-                            // Bash-style input history recall.
-                            app.history_prev();
-                        }
-                    }
-                    (KeyCode::Down, _) => {
-                        if app.detail_view.is_some() {
-                            app.detail_scroll = app.detail_scroll.saturating_sub(3);
-                        } else {
-                            app.history_next();
-                        }
-                    }
-                    (KeyCode::PageUp, _) => {
-                        if app.detail_view.is_some() {
-                            app.detail_scroll = app.detail_scroll.saturating_add(10);
-                        } else {
-                            app.chat_scroll = app.chat_scroll.saturating_add(10);
-                        }
-                    }
-                    (KeyCode::PageDown, _) => {
-                        if app.detail_view.is_some() {
-                            app.detail_scroll = app.detail_scroll.saturating_sub(10);
-                        } else {
-                            app.chat_scroll = app.chat_scroll.saturating_sub(10);
-                        }
-                    }
-                    (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
-                        if app.detail_view.is_some() {
-                            app.detail_scroll = app.detail_scroll.saturating_add(10);
-                        } else {
-                            app.chat_scroll = app.chat_scroll.saturating_add(10);
-                        }
-                    }
-                    (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
-                        if app.detail_view.is_some() {
-                            app.detail_scroll = app.detail_scroll.saturating_sub(10);
-                        } else {
-                            app.chat_scroll = app.chat_scroll.saturating_sub(10);
-                        }
-                    }
-                    (KeyCode::Home, _) => {
-                        if app.detail_view.is_some() {
-                            app.detail_scroll = usize::MAX / 2;
-                        } else {
-                            app.chat_scroll = app.chat_scroll_meta.2;
-                        }
-                    }
-                    (KeyCode::End, _) => {
-                        if app.detail_view.is_some() {
-                            app.detail_scroll = 0;
-                        } else {
-                            app.chat_scroll = 0;
-                        }
-                    }
+                    // Bash-style input history. Wheel scroll, drag-select,
+                    // and copy are all owned by the terminal now, so the
+                    // arrow keys are free to recall history again.
+                    (KeyCode::Up, _) => { app.history_prev(); }
+                    (KeyCode::Down, _) => { app.history_next(); }
                     (KeyCode::Char(c), _) => { app.input.push(c); }
                     _ => {}
                 } }
@@ -304,11 +202,10 @@ async fn main() -> io::Result<()> {
         }
     }
 
-    // Disable our manual click+wheel mouse mode before tearing down.
-    let _ = terminal.backend_mut().write_all(b"\x1b[?1000l\x1b[?1006l");
-    let _ = terminal.backend_mut().flush();
+    // Inline viewport: just clear our viewport area and leave the
+    // scrollback intact so the chat history is still visible after exit.
+    terminal.clear()?;
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
     Ok(())
 }
