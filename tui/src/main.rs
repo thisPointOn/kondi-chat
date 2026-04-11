@@ -4,7 +4,7 @@ mod ui;
 
 use std::io;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind},
+    event::{self, DisableMouseCapture, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     execute,
 };
@@ -74,17 +74,30 @@ async fn main() -> io::Result<()> {
     let mut reader = BufReader::new(stdout).lines();
     let mut writer = stdin;
 
-    // Setup terminal. Mouse capture is OFF by default so the user can
-    // drag-select and copy text in the terminal natively. F2 toggles it
-    // back on when they want wheel scroll / scrollbar drag.
+    // Setup terminal.
     //
-    // DisableMouseCapture is called explicitly here as a safety reset:
-    // if a previous kondi-chat run crashed without cleaning up, the
-    // terminal is still in mouse-capture mode and selection wouldn't
-    // work even though the new code never enables it.
+    // We want THREE things at once:
+    //  1. drag-to-select text in the chat (handled by the terminal)
+    //  2. mouse wheel scrolls our chat
+    //  3. clicks on the in-app scrollbar work
+    //
+    // crossterm's EnableMouseCapture enables modes 1000+1002+1003+1006,
+    // which captures motion events too — that's what breaks selection,
+    // because the terminal stops getting drag events.
+    //
+    // The fix: emit ONLY the X10 + SGR enable sequences (1000 + 1006)
+    // by hand. Mode 1000 captures button press/release and wheel but
+    // NOT motion, so dragging is still owned by the terminal and
+    // selection works. The trade-off is that scrollbar *drag* won't
+    // work (only single clicks register); use the wheel or PgUp/PgDn
+    // for fast scrolling.
     enable_raw_mode()?;
     let mut stderr = io::stderr();
     execute!(stderr, EnterAlternateScreen, DisableMouseCapture)?;
+    // Enable click+wheel mouse, leave motion to the terminal.
+    use std::io::Write;
+    let _ = stderr.write_all(b"\x1b[?1000h\x1b[?1006h");
+    let _ = stderr.flush();
     let backend = CrosstermBackend::new(stderr);
     let mut terminal = Terminal::new(backend)?;
 
@@ -194,18 +207,20 @@ async fn main() -> io::Result<()> {
                         app.show_activity = !app.show_activity;
                     }
                     (KeyCode::F(2), _) | (KeyCode::Char('m'), KeyModifiers::ALT) => {
-                        // Toggle mouse capture. Default is OFF so text
-                        // selection works in the terminal; F2 turns it on
-                        // when the user wants the wheel + scrollbar drag.
-                        // Alt+M is kept as a fallback for terminals that
-                        // swallow F-keys.
+                        // Toggle the click+wheel mouse mode. Default is on
+                        // (mode 1000+1006) which leaves drag motion to the
+                        // terminal so selection still works. Off is a
+                        // safety hatch for terminals where the click mode
+                        // STILL interferes with selection.
                         app.mouse_capture = !app.mouse_capture;
                         if app.mouse_capture {
-                            let _ = execute!(terminal.backend_mut(), EnableMouseCapture);
-                            app.status = "mouse: on (wheel + scrollbar)".to_string();
+                            let _ = terminal.backend_mut().write_all(b"\x1b[?1000h\x1b[?1006h");
+                            let _ = terminal.backend_mut().flush();
+                            app.status = "mouse: click+wheel on, drag-to-select on".to_string();
                         } else {
-                            let _ = execute!(terminal.backend_mut(), DisableMouseCapture);
-                            app.status = "mouse: off (drag to select text)".to_string();
+                            let _ = terminal.backend_mut().write_all(b"\x1b[?1000l\x1b[?1006l");
+                            let _ = terminal.backend_mut().flush();
+                            app.status = "mouse: fully off".to_string();
                         }
                     }
                     (KeyCode::Backspace, _) => { app.input.pop(); }
@@ -238,6 +253,34 @@ async fn main() -> io::Result<()> {
                             app.chat_scroll = app.chat_scroll.saturating_sub(10);
                         }
                     }
+                    (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                        if app.detail_view.is_some() {
+                            app.detail_scroll = app.detail_scroll.saturating_add(10);
+                        } else {
+                            app.chat_scroll = app.chat_scroll.saturating_add(10);
+                        }
+                    }
+                    (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                        if app.detail_view.is_some() {
+                            app.detail_scroll = app.detail_scroll.saturating_sub(10);
+                        } else {
+                            app.chat_scroll = app.chat_scroll.saturating_sub(10);
+                        }
+                    }
+                    (KeyCode::Home, _) => {
+                        if app.detail_view.is_some() {
+                            app.detail_scroll = usize::MAX / 2;
+                        } else {
+                            app.chat_scroll = app.chat_scroll_meta.2;
+                        }
+                    }
+                    (KeyCode::End, _) => {
+                        if app.detail_view.is_some() {
+                            app.detail_scroll = 0;
+                        } else {
+                            app.chat_scroll = 0;
+                        }
+                    }
                     (KeyCode::Char(c), _) => { app.input.push(c); }
                     _ => {}
                 } }
@@ -261,6 +304,9 @@ async fn main() -> io::Result<()> {
         }
     }
 
+    // Disable our manual click+wheel mouse mode before tearing down.
+    let _ = terminal.backend_mut().write_all(b"\x1b[?1000l\x1b[?1006l");
+    let _ = terminal.backend_mut().flush();
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;

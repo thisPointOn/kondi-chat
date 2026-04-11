@@ -75,7 +75,7 @@ impl App {
             chat_scroll_meta: (0, 0, 0),
             history_idx: None,
             history_draft: String::new(),
-            mouse_capture: false,
+            mouse_capture: true,
             detail_scroll: 0,
             detail_view: None,
             show_activity: false,
