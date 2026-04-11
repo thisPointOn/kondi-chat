@@ -2,17 +2,17 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
     Frame,
 };
 
-use crate::app::{App, ChatMessage};
+use crate::app::App;
 
-pub fn draw(f: &mut Frame, app: &App) {
+pub fn draw(f: &mut Frame, app: &mut App) {
     // Detail view — full screen
-    if let Some(ref view) = app.detail_view {
-        draw_detail(f, app, view);
-        if let Some(p) = app.pending_permissions.first() { draw_permission_overlay(f, p, f.area()); }
+    if let Some(view) = app.detail_view.clone() {
+        draw_detail(f, app, &view);
+        if let Some(p) = app.pending_permissions.first().cloned() { draw_permission_overlay(f, &p, f.area()); }
         return;
     }
 
@@ -55,7 +55,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     // Spec 01 — permission dialog docked at the bottom of the chat area,
     // drawn last so it sits on top of the chat lines underneath it.
-    if let Some(p) = app.pending_permissions.first() { draw_permission_overlay(f, p, chunks[0]); }
+    if let Some(p) = app.pending_permissions.first().cloned() { draw_permission_overlay(f, &p, chunks[0]); }
 }
 
 fn draw_permission_overlay(f: &mut Frame, p: &crate::app::PermissionDialog, anchor: Rect) {
@@ -101,7 +101,7 @@ fn truncate(s: &str, n: usize) -> String {
     }
 }
 
-fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
+fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
     let mut lines: Vec<Line> = vec![];
 
     for msg in &app.messages {
@@ -226,16 +226,29 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
     let total = wrapped_lines.len() as u16;
     let visible = area.height;
     let max_scroll = total.saturating_sub(visible);
-    // Respect the user's scroll position even during processing — previously
-    // we snapped to bottom on every frame, which made manual scrolling
-    // impossible mid-turn.
     let user_scroll = (app.chat_scroll as u16).min(max_scroll);
     let scroll_y = max_scroll.saturating_sub(user_scroll);
 
+    // Stash chat geometry so the mouse handler in main.rs can translate
+    // a click on the scrollbar column into a chat_scroll value.
+    app.chat_scroll_meta = (area.y, area.height, max_scroll as usize);
+
     let para = Paragraph::new(Text::from(wrapped_lines))
         .scroll((scroll_y, 0));
-
     f.render_widget(para, area);
+
+    // Visible scrollbar on the right edge of the chat area. Position is
+    // current scroll-from-top in the wrapped buffer, content_length is
+    // the total wrapped line count. Click/drag handling lives in main.rs.
+    if max_scroll > 0 {
+        let mut sb_state = ScrollbarState::new(total as usize)
+            .position(scroll_y as usize)
+            .viewport_content_length(visible as usize);
+        let sb = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .style(Style::default().fg(Color::DarkGray))
+            .thumb_style(Style::default().fg(Color::Rgb(255, 20, 147)));
+        f.render_stateful_widget(sb, area, &mut sb_state);
+    }
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {

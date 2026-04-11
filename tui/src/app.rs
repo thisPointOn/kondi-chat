@@ -26,6 +26,10 @@ pub struct App {
     pub model: String,
     pub is_processing: bool,
     pub chat_scroll: usize,
+    /// Set by draw_chat each frame: (chat_area_y, chat_area_height, max_scroll).
+    /// Lets the mouse handler in main.rs translate a click on the scrollbar
+    /// column into a chat_scroll value.
+    pub chat_scroll_meta: (u16, u16, usize),
     pub detail_scroll: usize,
     pub detail_view: Option<String>, // "tools", "stats", "message"
     pub show_activity: bool,
@@ -59,6 +63,7 @@ impl App {
             model: "auto".to_string(),
             is_processing: false,
             chat_scroll: 0,
+            chat_scroll_meta: (0, 0, 0),
             detail_scroll: 0,
             detail_view: None,
             show_activity: false,

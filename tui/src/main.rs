@@ -84,11 +84,12 @@ async fn main() -> io::Result<()> {
     let mut app = App::new();
 
     loop {
-        terminal.draw(|f| ui::draw(f, &app))?;
+        terminal.draw(|f| ui::draw(f, &mut app))?;
 
         if crossterm::event::poll(std::time::Duration::from_millis(50))? {
             let evt = event::read()?;
-            if let Event::Mouse(MouseEvent { kind, .. }) = evt {
+            if let Event::Mouse(MouseEvent { kind, column, row, .. }) = evt {
+                use crossterm::event::MouseButton;
                 match kind {
                     MouseEventKind::ScrollUp => {
                         if app.detail_view.is_some() {
@@ -102,6 +103,22 @@ async fn main() -> io::Result<()> {
                             app.detail_scroll = app.detail_scroll.saturating_sub(3);
                         } else {
                             app.chat_scroll = app.chat_scroll.saturating_sub(3);
+                        }
+                    }
+                    MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left) => {
+                        // Click/drag on the scrollbar column (rightmost column
+                        // of the chat area). Translate y → chat_scroll.
+                        let term_w = terminal.size()?.width;
+                        if app.detail_view.is_none() && column + 1 >= term_w {
+                            let (chat_y, chat_h, max_scroll) = app.chat_scroll_meta;
+                            if max_scroll > 0 && chat_h > 0 && row >= chat_y && row < chat_y + chat_h {
+                                let rel = (row - chat_y) as usize;
+                                let denom = chat_h.saturating_sub(1) as usize;
+                                // Top of bar = oldest = max chat_scroll, bottom = newest = 0
+                                let from_top_ratio = rel as f32 / denom.max(1) as f32;
+                                let from_top = (from_top_ratio * max_scroll as f32).round() as usize;
+                                app.chat_scroll = max_scroll.saturating_sub(from_top);
+                            }
                         }
                     }
                     _ => {}
