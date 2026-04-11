@@ -86,7 +86,10 @@ async fn main() -> io::Result<()> {
     loop {
         terminal.draw(|f| ui::draw(f, &mut app))?;
 
-        if crossterm::event::poll(std::time::Duration::from_millis(50))? {
+        // 16 ms ≈ 60 Hz. The previous 50 ms made mouse drags on the scrollbar
+        // feel snaggy because we sampled events at only ~20 Hz while terminal
+        // emulators send drag events at 60+ Hz.
+        if crossterm::event::poll(std::time::Duration::from_millis(16))? {
             let evt = event::read()?;
             if let Event::Mouse(MouseEvent { kind, column, row, .. }) = evt {
                 use crossterm::event::MouseButton;
@@ -219,9 +222,11 @@ async fn main() -> io::Result<()> {
             }
         }
 
-        // Drain all available backend messages before next draw
+        // Drain whatever backend messages are immediately available, then
+        // move on. A non-zero timeout here adds a per-frame floor even when
+        // nothing is pending, which makes the scrollbar drag feel snaggy.
         loop {
-            match tokio::time::timeout(std::time::Duration::from_millis(10), reader.next_line()).await {
+            match tokio::time::timeout(std::time::Duration::from_millis(0), reader.next_line()).await {
                 Ok(Ok(Some(line))) => {
                     if let Ok(event) = serde_json::from_str::<BackendEvent>(&line) {
                         app.handle_backend_event(event);
