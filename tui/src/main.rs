@@ -74,10 +74,12 @@ async fn main() -> io::Result<()> {
     let mut reader = BufReader::new(stdout).lines();
     let mut writer = stdin;
 
-    // Setup terminal
+    // Setup terminal. Mouse capture is OFF by default so the user can
+    // drag-select and copy text in the terminal natively. F2 toggles it
+    // back on when they want wheel scroll / scrollbar drag.
     enable_raw_mode()?;
     let mut stderr = io::stderr();
-    execute!(stderr, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stderr, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stderr);
     let mut terminal = Terminal::new(backend)?;
 
@@ -186,16 +188,19 @@ async fn main() -> io::Result<()> {
                     (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
                         app.show_activity = !app.show_activity;
                     }
-                    (KeyCode::Char('m'), KeyModifiers::ALT) => {
-                        // Toggle mouse capture so the user can drag-select
-                        // text natively. When off, wheel/scrollbar are inert.
+                    (KeyCode::F(2), _) | (KeyCode::Char('m'), KeyModifiers::ALT) => {
+                        // Toggle mouse capture. Default is OFF so text
+                        // selection works in the terminal; F2 turns it on
+                        // when the user wants the wheel + scrollbar drag.
+                        // Alt+M is kept as a fallback for terminals that
+                        // swallow F-keys.
                         app.mouse_capture = !app.mouse_capture;
                         if app.mouse_capture {
                             let _ = execute!(terminal.backend_mut(), EnableMouseCapture);
-                            app.status = "mouse: on (scroll/scrollbar)".to_string();
+                            app.status = "mouse: on (wheel + scrollbar)".to_string();
                         } else {
                             let _ = execute!(terminal.backend_mut(), DisableMouseCapture);
-                            app.status = "mouse: off (drag to select)".to_string();
+                            app.status = "mouse: off (drag to select text)".to_string();
                         }
                     }
                     (KeyCode::Backspace, _) => { app.input.pop(); }

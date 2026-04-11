@@ -328,6 +328,23 @@ async function main() {
 
 // ── Submit handler (agent loop) ──────────────────────────────────────
 
+/**
+ * Classify a user message into a router phase. 'execute' picks a coding
+ * model via the budget profile's executionPreference; 'discuss' picks a
+ * reasoning/planning model. The intent router (LLM-based) will further
+ * refine this inside Router.select(), but the phase decides which
+ * preference list applies.
+ */
+function classifyPhase(input: string): 'execute' | 'discuss' {
+  const s = input.toLowerCase();
+  // Strong coding-intent verbs paired with code-y nouns / file extensions / language names.
+  if (/\b(write|make|create|build|implement|generate|add|fix|debug|refactor|optimize|update|change|modify|edit|remove|rewrite|port|translate)\b[^\n]{0,80}\b(code|script|function|class|method|file|test|module|app|component|endpoint|api|page|cli|tool|server|client|parser|wrapper|helper|util|util(?:s|ity)|service|model|database|schema|migration)\b/.test(s)) return 'execute';
+  if (/\bin\s+(python|javascript|typescript|rust|go(lang)?|java|c\+\+|c#|ruby|php|swift|kotlin|bash|shell|sql)\b/.test(s)) return 'execute';
+  if (/\.(py|js|ts|tsx|jsx|rs|go|java|cpp|cc|h|hpp|cs|rb|php|swift|kt|sh|sql|html|css|scss|json|yml|yaml|toml)\b/.test(s)) return 'execute';
+  if (/\b(write|make|create|build|implement)\s+(a|an|the)?\s*(python|js|ts|rust|go|bash|shell|sql)\b/.test(s)) return 'execute';
+  return 'discuss';
+}
+
 async function handleSubmit(
   input: string,
   session: Session,
@@ -397,14 +414,30 @@ async function handleSubmit(
   const msgId = `msg-${Date.now()}`;
   emit({ type: 'message', id: msgId, role: 'assistant', content: '', model_label: '...' });
 
+  // Classify the user's request once. The phase drives the budget profile's
+  // preference list inside the router (executionPreference vs planningPreference).
+  const phase = classifyPhase(input);
+  // Emit visible routing evidence as the very first activity line so the
+  // user can see "router classified this as a coding task" before any model
+  // is even called.
+  emit({
+    type: 'activity',
+    text: `router: phase=${phase} (${phase === 'execute' ? 'coding intent detected' : 'discussion / reasoning'})`,
+    activity_type: 'step',
+  });
+
   while (true) {
     const iteration = loopGuard.check().iteration;
-    const decision = await router.select('discuss', userMessage, undefined, iteration);
+    const decision = await router.select(phase, userMessage, undefined, iteration);
     respondingModel = decision.model.alias || decision.model.name;
     respondingProvider = decision.model.provider;
     respondingReason = decision.reason;
     emit({ type: 'status', text: `${respondingModel} thinking${iteration > 0 ? ` (step ${iteration + 1})` : ''}...` });
-    emit({ type: 'activity', text: `${respondingModel} — ${decision.reason}`, activity_type: 'step' });
+    emit({
+      type: 'activity',
+      text: `→ ${respondingModel} (${decision.tier}: ${decision.reason})`,
+      activity_type: 'step',
+    });
     emit({ type: 'message_update', id: msgId, model_label: respondingModel });
 
     const response = await callLLM({
