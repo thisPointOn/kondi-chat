@@ -237,14 +237,20 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
         .scroll((scroll_y, 0));
     f.render_widget(para, area);
 
-    // Visible scrollbar on the right edge of the chat area. Position is
-    // current scroll-from-top in the wrapped buffer, content_length is
-    // the total wrapped line count. Click/drag handling lives in main.rs.
+    // Visible scrollbar on the right edge of the chat area. Begin/end
+    // symbols are disabled so the thumb can occupy the full column — with
+    // the default ▲/▼ glyphs the track is two rows shorter than the chat
+    // area and dragging to the bottom row "snags" because the widget has
+    // no position to put the thumb there.
     if max_scroll > 0 {
         let mut sb_state = ScrollbarState::new(total as usize)
             .position(scroll_y as usize)
             .viewport_content_length(visible as usize);
         let sb = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_symbol(Some("│"))
+            .thumb_symbol("█")
             .style(Style::default().fg(Color::DarkGray))
             .thumb_style(Style::default().fg(Color::Rgb(255, 20, 147)));
         f.render_stateful_widget(sb, area, &mut sb_state);
