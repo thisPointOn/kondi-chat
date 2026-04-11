@@ -60,9 +60,11 @@ impl App {
     }
 
     pub fn new() -> Self {
+        let mut pending_history = vec![];
+        pending_history.push(splash_lines());
         Self {
             messages: vec![],
-            pending_history: vec![],
+            pending_history,
             user_inputs: vec![],
             history_idx: None,
             history_draft: String::new(),
@@ -335,6 +337,66 @@ pub fn render_assistant_lines(msg: &ChatMessage) -> Vec<Line<'static>> {
     }
 
     out
+}
+
+/// Pixelated K logo + "kondi" wordmark, rendered with truecolor block
+/// characters. The vertical bar plus two crossing diagonals form the K;
+/// each row uses a teal→deep-blue gradient that matches the source logo.
+pub fn splash_lines() -> Vec<Line<'static>> {
+    const ROWS: usize = 14;
+    const COLS: usize = 24;
+    let mid: usize = ROWS / 2; // 7 — where the diagonals meet the bar
+
+    let mut grid = vec![[false; COLS]; ROWS];
+    // Vertical bar (3 cells wide so it reads as a thick stroke).
+    for r in 0..ROWS {
+        for c in 0..3 { grid[r][c] = true; }
+    }
+    // Top diagonal: from (col 3, row mid) up-right to (col COLS-2, row 0).
+    for r in 0..=mid {
+        let span = COLS - 5;
+        let c = 3 + (mid - r) * span / mid;
+        for dc in 0..2 {
+            if c + dc < COLS { grid[r][c + dc] = true; }
+        }
+    }
+    // Bottom diagonal: from (col 3, row mid) down-right to (col COLS-2, row ROWS-1).
+    for r in mid..ROWS {
+        let span = COLS - 5;
+        let denom = ROWS - 1 - mid;
+        let c = 3 + (r - mid) * span / denom.max(1);
+        for dc in 0..2 {
+            if c + dc < COLS { grid[r][c + dc] = true; }
+        }
+    }
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(""));
+    for r in 0..ROWS {
+        let t = r as f32 / (ROWS - 1) as f32;
+        // teal (#4BC8C8) → deep purple-blue (#5840B4)
+        let red   = (75.0  + (88.0  - 75.0)  * t) as u8;
+        let green = (200.0 + (64.0  - 200.0) * t) as u8;
+        let blue  = (200.0 + (180.0 - 200.0) * t) as u8;
+        let color = Color::Rgb(red, green, blue);
+        let mut spans: Vec<Span<'static>> = Vec::with_capacity(COLS + 2);
+        spans.push(Span::raw("  "));
+        for c in 0..COLS {
+            if grid[r][c] {
+                spans.push(Span::styled("█", Style::default().fg(color)));
+            } else {
+                spans.push(Span::raw(" "));
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  kondi",
+        Style::default().fg(Color::Rgb(80, 200, 230)).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+    lines
 }
 
 fn push_diff_lines(out: &mut Vec<Line<'static>>, diff: &str, max_lines: usize, indent: &str) {
