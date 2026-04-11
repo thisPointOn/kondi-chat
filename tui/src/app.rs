@@ -35,6 +35,10 @@ pub struct App {
     /// whatever the user was typing before they started recalling.
     pub history_idx: Option<usize>,
     pub history_draft: String,
+    /// Mouse capture state. True = wheel + scrollbar drag work, terminal
+    /// can't drag-select. False = native terminal drag-select works,
+    /// wheel and scrollbar are inert. Toggled with Alt+M.
+    pub mouse_capture: bool,
     pub detail_scroll: usize,
     pub detail_view: Option<String>, // "tools", "stats", "message"
     pub show_activity: bool,
@@ -71,6 +75,7 @@ impl App {
             chat_scroll_meta: (0, 0, 0),
             history_idx: None,
             history_draft: String::new(),
+            mouse_capture: true,
             detail_scroll: 0,
             detail_view: None,
             show_activity: false,

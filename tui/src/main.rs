@@ -186,6 +186,18 @@ async fn main() -> io::Result<()> {
                     (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
                         app.show_activity = !app.show_activity;
                     }
+                    (KeyCode::Char('m'), KeyModifiers::ALT) => {
+                        // Toggle mouse capture so the user can drag-select
+                        // text natively. When off, wheel/scrollbar are inert.
+                        app.mouse_capture = !app.mouse_capture;
+                        if app.mouse_capture {
+                            let _ = execute!(terminal.backend_mut(), EnableMouseCapture);
+                            app.status = "mouse: on (scroll/scrollbar)".to_string();
+                        } else {
+                            let _ = execute!(terminal.backend_mut(), DisableMouseCapture);
+                            app.status = "mouse: off (drag to select)".to_string();
+                        }
+                    }
                     (KeyCode::Backspace, _) => { app.input.pop(); }
                     (KeyCode::Up, _) => {
                         if app.detail_view.is_some() {
