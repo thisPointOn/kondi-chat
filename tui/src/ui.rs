@@ -271,10 +271,9 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
         format!("{}_", app.input)
     };
 
-    // Off-white fill for the compose area — slightly dimmed from pure white
-    // so it doesn't glare. Tweak the RGB triple to taste; lower values get
-    // greyer, higher values get whiter.
-    let bg = Color::Rgb(230, 230, 230);
+    // Very dark grey fill — sits a hair above pure terminal black so the
+    // compose area is distinguishable but not glaring.
+    let bg = Color::Rgb(30, 30, 30);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color).bg(bg))
