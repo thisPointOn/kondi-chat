@@ -27,7 +27,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         }).sum();
         content_lines.max(1)
     };
-    let input_height = (input_lines as u16 + 2).min(11).max(6); // +2 for borders
+    let input_height = (input_lines as u16 + 2).min(9).max(4); // +2 for borders
 
     // Check if we need to show suggestions
     let suggestions = get_suggestions(&app.input, &app.model);
