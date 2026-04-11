@@ -61,9 +61,9 @@ const BUILTIN_PROFILES: Record<string, BudgetProfile> = {
     executionPreference: ['coding', 'reasoning'],
     reviewPreference: ['code-review', 'analysis', 'reasoning'],
     contextBudget: 60_000,
-    maxIterations: 20,
-    loopCostCap: 5.00,
-    loopIterationCap: 10,
+    maxIterations: 30,
+    loopCostCap: 10.00,
+    loopIterationCap: 30,
     promotionThreshold: 2,
     includeReflection: true,
     includeVerification: true,
@@ -77,9 +77,9 @@ const BUILTIN_PROFILES: Record<string, BudgetProfile> = {
     executionPreference: ['coding', 'fast-coding'],
     reviewPreference: ['code-review', 'analysis'],
     contextBudget: 30_000,
-    maxIterations: 15,
-    loopCostCap: 2.00,
-    loopIterationCap: 6,
+    maxIterations: 20,
+    loopCostCap: 3.00,
+    loopIterationCap: 20,
     promotionThreshold: 2,
     includeReflection: true,
     includeVerification: true,
@@ -93,9 +93,9 @@ const BUILTIN_PROFILES: Record<string, BudgetProfile> = {
     executionPreference: ['fast-coding', 'coding'],
     reviewPreference: [],
     contextBudget: 15_000,
-    maxIterations: 10,
-    loopCostCap: 0.50,
-    loopIterationCap: 3,
+    maxIterations: 12,
+    loopCostCap: 0.75,
+    loopIterationCap: 8,
     promotionThreshold: 3,
     includeReflection: false,
     includeVerification: true,
@@ -123,13 +123,16 @@ export class ProfileManager {
     this.active = { ...(this.getAll()[initial] || BUILTIN_PROFILES.balanced) };
   }
 
-  /** Write built-in profiles to disk so they're visible and editable */
+  /**
+   * Write built-in profiles to disk so they're visible and editable.
+   * Always overwrites — built-in files are owned by the code, not the user.
+   * Users who want to customize should copy to a new file under a different
+   * name (those are loaded as custom profiles and never overwritten).
+   */
   private ensureBuiltins(): void {
     for (const [name, profile] of Object.entries(BUILTIN_PROFILES)) {
       const path = join(this.profileDir, `${name}.json`);
-      if (!existsSync(path)) {
-        writeFileSync(path, JSON.stringify(profile, null, 2));
-      }
+      writeFileSync(path, JSON.stringify(profile, null, 2));
     }
   }
 

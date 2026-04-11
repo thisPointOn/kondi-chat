@@ -479,7 +479,30 @@ async function handleSubmit(
     loopGuard.recordIteration(iterCost, firstError);
     const guard = loopGuard.check();
     if (guard.shouldStop) {
-      finalContent = response.content || `Loop stopped: ${guard.stopReason || 'bounds reached'}`;
+      // Give the model one final no-tools iteration to summarize what it
+      // found. This is the difference between "Loop stopped: iteration
+      // limit" with zero useful output and a real summary of progress.
+      try {
+        emit({ type: 'status', text: `${respondingModel} summarizing (cap reached)...` });
+        const finalResponse = await callLLM({
+          provider: decision.model.provider,
+          model: decision.model.id,
+          systemPrompt,
+          messages: [
+            ...messages,
+            { role: 'user', content: `You have reached the iteration limit (${guard.stopReason || 'bounds reached'}). Do not call any more tools. Summarize what you found, what you produced, and what remains to be done, in 10 lines or fewer.` },
+          ],
+          maxOutputTokens: 2048,
+          cacheablePrefix,
+        });
+        totalInputTokens += finalResponse.inputTokens;
+        totalOutputTokens += finalResponse.outputTokens;
+        totalCost += estimateCost(finalResponse.model, finalResponse.inputTokens, finalResponse.outputTokens);
+        finalContent = (finalResponse.content || response.content || '').trim()
+          + `\n\n_(loop stopped: ${guard.stopReason || 'bounds reached'})_`;
+      } catch {
+        finalContent = (response.content || `(no final output)`) + `\n\n_(loop stopped: ${guard.stopReason || 'bounds reached'})_`;
+      }
       break;
     }
   }
