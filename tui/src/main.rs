@@ -77,9 +77,14 @@ async fn main() -> io::Result<()> {
     // Setup terminal. Mouse capture is OFF by default so the user can
     // drag-select and copy text in the terminal natively. F2 toggles it
     // back on when they want wheel scroll / scrollbar drag.
+    //
+    // DisableMouseCapture is called explicitly here as a safety reset:
+    // if a previous kondi-chat run crashed without cleaning up, the
+    // terminal is still in mouse-capture mode and selection wouldn't
+    // work even though the new code never enables it.
     enable_raw_mode()?;
     let mut stderr = io::stderr();
-    execute!(stderr, EnterAlternateScreen)?;
+    execute!(stderr, EnterAlternateScreen, DisableMouseCapture)?;
     let backend = CrosstermBackend::new(stderr);
     let mut terminal = Terminal::new(backend)?;
 
