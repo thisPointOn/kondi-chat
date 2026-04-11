@@ -266,11 +266,10 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
         format!("{}_", app.input)
     };
 
-    // Light grey fill for the compose area. Color::Indexed(236) is a soft
-    // dark-grey on a 256-color terminal that reads as "light" against the
-    // black default background; switch to Color::Gray for true light grey
-    // if the terminal palette feels too dark.
-    let bg = Color::Indexed(236);
+    // Off-white fill for the compose area — slightly dimmed from pure white
+    // so it doesn't glare. Tweak the RGB triple to taste; lower values get
+    // greyer, higher values get whiter.
+    let bg = Color::Rgb(230, 230, 230);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color).bg(bg))
