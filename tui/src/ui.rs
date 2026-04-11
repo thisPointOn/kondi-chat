@@ -12,7 +12,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     // Detail view — full screen
     if let Some(ref view) = app.detail_view {
         draw_detail(f, app, view);
-        if let Some(p) = app.pending_permissions.first() { draw_permission_overlay(f, p); }
+        if let Some(p) = app.pending_permissions.first() { draw_permission_overlay(f, p, f.area()); }
         return;
     }
 
@@ -53,16 +53,18 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_input(f, app, chunks[3]);
     draw_model_indicator(f, app, chunks[4]);
 
-    // Spec 01 — modal permission dialog overlay (drawn last, on top)
-    if let Some(p) = app.pending_permissions.first() { draw_permission_overlay(f, p); }
+    // Spec 01 — permission dialog docked at the bottom of the chat area,
+    // drawn last so it sits on top of the chat lines underneath it.
+    if let Some(p) = app.pending_permissions.first() { draw_permission_overlay(f, p, chunks[0]); }
 }
 
-fn draw_permission_overlay(f: &mut Frame, p: &crate::app::PermissionDialog) {
-    let area = f.area();
-    let w = area.width.saturating_sub(8).min(80);
+fn draw_permission_overlay(f: &mut Frame, p: &crate::app::PermissionDialog, anchor: Rect) {
+    // Anchor the dialog to the bottom of the chat area so the chat above
+    // it remains readable. Full width minus a small horizontal margin.
     let h: u16 = 9;
-    let x = area.x + (area.width.saturating_sub(w)) / 2;
-    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let w = anchor.width.saturating_sub(4).min(100);
+    let x = anchor.x + (anchor.width.saturating_sub(w)) / 2;
+    let y = anchor.y + anchor.height.saturating_sub(h);
     let dialog_area = Rect { x, y, width: w, height: h };
 
     // Clear the background
