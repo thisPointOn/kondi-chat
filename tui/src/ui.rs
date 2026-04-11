@@ -256,7 +256,8 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_input(f: &mut Frame, app: &App, area: Rect) {
-    let border_color = if app.is_processing { Color::DarkGray } else { Color::Blue };
+    // Neon pink (CSS deeppink) — keeps the dim grey while a turn is in flight.
+    let border_color = if app.is_processing { Color::DarkGray } else { Color::Rgb(255, 20, 147) };
     let display = if app.input.is_empty() && !app.is_processing {
         "Type a message... (Enter to send)".to_string()
     } else if app.is_processing && app.input.is_empty() {
