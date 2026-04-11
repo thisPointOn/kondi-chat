@@ -151,12 +151,14 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect) {
                     )));
                 }
 
-                // Response content
+                // Response content — slightly dimmed off-white so it doesn't
+                // burn against the dark terminal background.
                 if !msg.content.is_empty() && msg.content != "(max tool iterations reached)" {
+                    let body = Color::Rgb(210, 210, 210);
                     for line in msg.content.lines() {
                         lines.push(Line::from(Span::styled(
                             format!("  {line}"),
-                            Style::default().fg(Color::White),
+                            Style::default().fg(body),
                         )));
                     }
                 } else if !msg.tool_calls.is_empty() && msg.stats.is_some() {
