@@ -188,14 +188,29 @@ async fn main() -> io::Result<()> {
                         if app.detail_view.is_some() {
                             app.detail_scroll = app.detail_scroll.saturating_add(3);
                         } else {
-                            app.chat_scroll = app.chat_scroll.saturating_add(1);
+                            // Bash-style input history recall.
+                            app.history_prev();
                         }
                     }
                     (KeyCode::Down, _) => {
                         if app.detail_view.is_some() {
                             app.detail_scroll = app.detail_scroll.saturating_sub(3);
                         } else {
-                            app.chat_scroll = app.chat_scroll.saturating_sub(1);
+                            app.history_next();
+                        }
+                    }
+                    (KeyCode::PageUp, _) => {
+                        if app.detail_view.is_some() {
+                            app.detail_scroll = app.detail_scroll.saturating_add(10);
+                        } else {
+                            app.chat_scroll = app.chat_scroll.saturating_add(10);
+                        }
+                    }
+                    (KeyCode::PageDown, _) => {
+                        if app.detail_view.is_some() {
+                            app.detail_scroll = app.detail_scroll.saturating_sub(10);
+                        } else {
+                            app.chat_scroll = app.chat_scroll.saturating_sub(10);
                         }
                     }
                     (KeyCode::Char(c), _) => { app.input.push(c); }

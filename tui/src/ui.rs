@@ -274,7 +274,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
 
     // Right: keyboard hints
     let hints = Paragraph::new(Span::styled(
-        "Enter:send ^N:newline ^O:tools ^T:stats ^A:activity ↑↓:scroll ^C:exit",
+        "Enter:send ^N:newline ^O:tools ^T:stats ↑↓:history PgUp/Dn:scroll ^C:exit",
         Style::default().fg(Color::DarkGray),
     ));
     f.render_widget(hints, chunks[1]);

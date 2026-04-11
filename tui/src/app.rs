@@ -30,6 +30,11 @@ pub struct App {
     /// Lets the mouse handler in main.rs translate a click on the scrollbar
     /// column into a chat_scroll value.
     pub chat_scroll_meta: (u16, u16, usize),
+    /// Bash-style input history. None = not recalling. Some(i) = walking back
+    /// through past user messages (0 = most recent). history_draft preserves
+    /// whatever the user was typing before they started recalling.
+    pub history_idx: Option<usize>,
+    pub history_draft: String,
     pub detail_scroll: usize,
     pub detail_view: Option<String>, // "tools", "stats", "message"
     pub show_activity: bool,
@@ -64,6 +69,8 @@ impl App {
             is_processing: false,
             chat_scroll: 0,
             chat_scroll_meta: (0, 0, 0),
+            history_idx: None,
+            history_draft: String::new(),
             detail_scroll: 0,
             detail_view: None,
             show_activity: false,
@@ -73,6 +80,49 @@ impl App {
             session_cost: 0.0,
             pending_permissions: vec![],
             git_info: None,
+        }
+    }
+
+    /// Past user messages, newest first. Owned strings to avoid borrow
+    /// conflicts when callers also need &mut self.
+    fn user_history(&self) -> Vec<String> {
+        self.messages.iter().rev()
+            .filter(|m| m.role == "user")
+            .map(|m| m.content.clone())
+            .collect()
+    }
+
+    /// Bash-style: walk backwards through user history. On first press,
+    /// stash whatever was being typed so Down can restore it.
+    pub fn history_prev(&mut self) {
+        let hist = self.user_history();
+        if hist.is_empty() { return; }
+        let next = match self.history_idx {
+            None => {
+                self.history_draft = self.input.clone();
+                0
+            }
+            Some(i) => (i + 1).min(hist.len() - 1),
+        };
+        self.history_idx = Some(next);
+        self.input = hist[next].clone();
+    }
+
+    /// Bash-style: walk forward. Past the most recent entry, restore the draft.
+    pub fn history_next(&mut self) {
+        let hist = self.user_history();
+        if hist.is_empty() { return; }
+        match self.history_idx {
+            None => {}
+            Some(0) => {
+                self.history_idx = None;
+                self.input = std::mem::take(&mut self.history_draft);
+            }
+            Some(i) => {
+                let next = i - 1;
+                self.history_idx = Some(next);
+                self.input = hist[next].clone();
+            }
         }
     }
 
@@ -90,6 +140,9 @@ impl App {
         self.activity.clear();
         self.status = "thinking...".to_string();
         self.start_time = Instant::now();
+        // Reset history walk on send.
+        self.history_idx = None;
+        self.history_draft.clear();
     }
 
     pub fn toggle_detail(&mut self, view: &str) {
