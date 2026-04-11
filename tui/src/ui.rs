@@ -16,7 +16,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         return;
     }
 
-    // Calculate input box height based on content (min 3, max 8)
+    // Calculate input box height based on content. Min 6 / max 11 cells —
+    // ~3 rows taller than the previous 3/8 to give a roomier compose area.
     let input_lines = if app.input.is_empty() {
         1
     } else {
@@ -26,7 +27,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         }).sum();
         content_lines.max(1)
     };
-    let input_height = (input_lines as u16 + 2).min(8).max(3); // +2 for borders
+    let input_height = (input_lines as u16 + 2).min(11).max(6); // +2 for borders
 
     // Check if we need to show suggestions
     let suggestions = get_suggestions(&app.input, &app.model);
@@ -264,9 +265,19 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
         format!("{}_", app.input)
     };
 
+    // Light grey fill for the compose area. Color::Indexed(236) is a soft
+    // dark-grey on a 256-color terminal that reads as "light" against the
+    // black default background; switch to Color::Gray for true light grey
+    // if the terminal palette feels too dark.
+    let bg = Color::Indexed(236);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color).bg(bg))
+        .style(Style::default().bg(bg));
     let input = Paragraph::new(display)
         .wrap(Wrap { trim: false })
-        .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(border_color)));
+        .style(Style::default().bg(bg))
+        .block(block);
     f.render_widget(input, area);
 }
 
