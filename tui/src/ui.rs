@@ -67,10 +67,24 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
     if area.height == 0 { return; }
     let mut lines: Vec<Line> = Vec::new();
-    if let Some(msg) = app.messages.first() {
-        lines = render_assistant_lines(msg);
+
+    // Activity stream (router decisions, step announcements). Render these
+    // inline above the message so the user can see "router: phase=execute"
+    // and "→ gpt-5.4 (rules: balanced: coding)" land in real time. Tool
+    // activity lines are skipped because tool_calls already shows them on
+    // the message itself.
+    for (kind, text) in &app.activity {
+        if kind == "tool" { continue; }
+        lines.push(Line::from(Span::styled(
+            format!("  {}", text),
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::DIM),
+        )));
     }
-    if app.is_processing && app.messages.is_empty() {
+
+    if let Some(msg) = app.messages.first() {
+        lines.extend(render_assistant_lines(msg));
+    }
+    if app.is_processing && app.messages.is_empty() && app.activity.is_empty() {
         let spinner = app.spinner();
         lines.push(Line::from(Span::styled(
             format!("  {} working...", spinner),

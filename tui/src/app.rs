@@ -140,10 +140,22 @@ impl App {
 
     /// Render the in-progress message (if any) and push to pending_history,
     /// then clear messages. Called when stats arrive on a MessageUpdate.
+    /// Activity lines (router decisions, step announcements) are prepended
+    /// so they survive into terminal scrollback alongside the response.
     fn flush_in_progress(&mut self) {
         if let Some(msg) = self.messages.drain(..).next() {
-            let lines = render_assistant_lines(&msg);
+            let mut lines: Vec<Line<'static>> = Vec::new();
+            for (kind, text) in self.activity.drain(..) {
+                if kind == "tool" { continue; }
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", text),
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::DIM),
+                )));
+            }
+            lines.extend(render_assistant_lines(&msg));
             self.pending_history.push(lines);
+        } else {
+            self.activity.clear();
         }
     }
 
