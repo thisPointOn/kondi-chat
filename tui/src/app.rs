@@ -339,46 +339,23 @@ pub fn render_assistant_lines(msg: &ChatMessage) -> Vec<Line<'static>> {
     out
 }
 
-/// K logo matching the source image: three crossing organic strokes
-/// (left upward stroke, upper-right diagonal, lower-right diagonal)
-/// with a teal→deep-blue gradient. Uses the half-block trick for 2
-/// vertical pixels per cell. The shape matches the logo image: no
-/// vertical bar, three leaf-like strokes meeting at a central crossing.
+/// K logo rendered from the actual source image. Each cell pair is
+/// pre-computed from the 24×22 downsampled PNG using the half-block
+/// technique (▀ with fg = top pixel, bg = bottom pixel). Near-white
+/// pixels are treated as transparent (None). 11 cell rows + wordmark.
 pub fn splash_lines() -> Vec<Line<'static>> {
-    const PX_H: usize = 44;
-    const PX_W: usize = 40;
-    let mut grid = vec![vec![false; PX_W]; PX_H];
-
-    // Stroke 1: left backbone — slight lean from bottom-left to upper-center.
-    // In the image this is the thick stroke that goes from lower-left up.
-    thick_line(&mut grid, 7, 40, 13, 3, 5);
-
-    // Stroke 2: upper-right arm — from mid-left, crosses over stroke 1
-    // up and to the right toward upper-right corner.
-    thick_line(&mut grid, 3, 22, 36, 1, 4);
-
-    // Stroke 3: lower-right arm — from the crossing point area, sweeps
-    // down and to the right toward lower-right.
-    thick_line(&mut grid, 11, 20, 36, 41, 4);
-
-    // Render using half-block technique.
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(""));
-    for cell_row in 0..PX_H / 2 {
-        let top_r = cell_row * 2;
-        let bot_r = cell_row * 2 + 1;
-        let mut spans: Vec<Span<'static>> = Vec::with_capacity(PX_W + 2);
-        spans.push(Span::raw("  "));
-        for c in 0..PX_W {
-            let top = grid[top_r][c];
-            let bot = grid[bot_r][c];
-            let ct = grad(top_r as f32 / (PX_H - 1) as f32);
-            let cb = grad(bot_r as f32 / (PX_H - 1) as f32);
+    const W: usize = 24;
+    const CELL_ROWS: usize = 11;
+    let mut lines: Vec<Line<'static>> = vec![Line::from("")];
+    for cr in 0..CELL_ROWS {
+        let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
+        for c in 0..W {
+            let (top, bot) = PIXEL_PAIRS[cr * W + c];
             spans.push(match (top, bot) {
-                (false, false) => Span::raw(" "),
-                (true,  false) => Span::styled("▀", Style::default().fg(ct)),
-                (false, true)  => Span::styled("▄", Style::default().fg(cb)),
-                (true,  true)  => Span::styled("▀", Style::default().fg(ct).bg(cb)),
+                (None, None) => Span::raw(" "),
+                (Some(t), None) => Span::styled("\u{2580}", Style::default().fg(t)),
+                (None, Some(b)) => Span::styled("\u{2584}", Style::default().fg(b)),
+                (Some(t), Some(b)) => Span::styled("\u{2580}", Style::default().fg(t).bg(b)),
             });
         }
         lines.push(Line::from(spans));
@@ -392,47 +369,20 @@ pub fn splash_lines() -> Vec<Line<'static>> {
     lines
 }
 
-fn grad(t: f32) -> Color {
-    // Top: bright teal/cyan, bottom: deep indigo/purple.
-    let r = lerp(60.0,  90.0, t) as u8;
-    let g = lerp(210.0, 50.0, t) as u8;
-    let b = lerp(210.0, 190.0, t) as u8;
-    Color::Rgb(r, g, b)
-}
-
-fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
-
-/// Bresenham with a round-ish brush (circular stamp of radius thickness/2).
-fn thick_line(grid: &mut Vec<Vec<bool>>, x0: i32, y0: i32, x1: i32, y1: i32, thickness: i32) {
-    let dx = (x1 - x0).abs();
-    let dy = -(y1 - y0).abs();
-    let sx = if x0 < x1 { 1 } else { -1 };
-    let sy = if y0 < y1 { 1 } else { -1 };
-    let mut err = dx + dy;
-    let (mut x, mut y) = (x0, y0);
-    let r = thickness / 2;
-    let r2 = r * r;
-    let rows = grid.len() as i32;
-    let cols = grid[0].len() as i32;
-    loop {
-        // Circular stamp.
-        for dy2 in -r..=r {
-            for dx2 in -r..=r {
-                if dx2 * dx2 + dy2 * dy2 <= r2 {
-                    let xx = x + dx2;
-                    let yy = y + dy2;
-                    if xx >= 0 && yy >= 0 && yy < rows && xx < cols {
-                        grid[yy as usize][xx as usize] = true;
-                    }
-                }
-            }
-        }
-        if x == x1 && y == y1 { break; }
-        let e2 = 2 * err;
-        if e2 >= dy { err += dy; x += sx; }
-        if e2 <= dx { err += dx; y += sy; }
-    }
-}
+type CP = (Option<Color>, Option<Color>);
+const PIXEL_PAIRS: [CP; 264] = [
+    (None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),
+    (None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,Some(Color::Rgb(178,230,204))),(Some(Color::Rgb(225,242,236)),Some(Color::Rgb(116,198,167))),(Some(Color::Rgb(196,222,216)),Some(Color::Rgb(91,166,151))),(Some(Color::Rgb(237,243,242)),Some(Color::Rgb(229,237,236))),(None,None),(None,None),(None,None),(None,None),(None,None),(None,Some(Color::Rgb(215,231,234))),(None,Some(Color::Rgb(74,108,139))),(Some(Color::Rgb(212,216,224)),Some(Color::Rgb(48,64,103))),(None,None),(None,None),(None,None),(None,None),
+    (None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(Some(Color::Rgb(212,245,229)),Some(Color::Rgb(160,229,210))),(Some(Color::Rgb(141,221,182)),Some(Color::Rgb(103,202,190))),(Some(Color::Rgb(97,194,172)),Some(Color::Rgb(75,186,175))),(Some(Color::Rgb(136,202,190)),Some(Color::Rgb(175,221,217))),(None,None),(None,None),(None,None),(None,Some(Color::Rgb(203,229,234))),(None,Some(Color::Rgb(93,173,187))),(Some(Color::Rgb(144,190,203)),Some(Color::Rgb(19,87,122))),(Some(Color::Rgb(29,81,119)),Some(Color::Rgb(39,62,106))),(Some(Color::Rgb(22,45,86)),Some(Color::Rgb(212,213,222))),(Some(Color::Rgb(210,211,216)),None),(None,None),(None,None),(None,None),(None,None),
+    (None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(Some(Color::Rgb(225,246,243)),Some(Color::Rgb(164,217,219))),(Some(Color::Rgb(93,194,193)),Some(Color::Rgb(53,155,172))),(Some(Color::Rgb(70,177,183)),Some(Color::Rgb(50,143,162))),(Some(Color::Rgb(63,163,168)),Some(Color::Rgb(80,144,164))),(Some(Color::Rgb(215,235,236)),None),(None,Some(Color::Rgb(185,218,229))),(Some(Color::Rgb(234,238,244)),Some(Color::Rgb(108,206,212))),(Some(Color::Rgb(148,210,218)),Some(Color::Rgb(84,197,197))),(Some(Color::Rgb(80,183,190)),Some(Color::Rgb(39,122,147))),(Some(Color::Rgb(30,110,135)),Some(Color::Rgb(80,116,145))),(Some(Color::Rgb(57,92,126)),Some(Color::Rgb(231,233,238))),(Some(Color::Rgb(218,221,230)),None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),
+    (None,None),(None,None),(None,None),(None,None),(None,None),(None,Some(Color::Rgb(206,224,230))),(Some(Color::Rgb(91,162,180)),Some(Color::Rgb(39,98,147))),(Some(Color::Rgb(44,121,155)),Some(Color::Rgb(35,77,136))),(Some(Color::Rgb(27,93,132)),Some(Color::Rgb(49,89,132))),(Some(Color::Rgb(103,130,163)),Some(Color::Rgb(144,209,213))),(Some(Color::Rgb(178,230,234)),Some(Color::Rgb(169,250,240))),(Some(Color::Rgb(121,228,221)),Some(Color::Rgb(92,190,201))),(Some(Color::Rgb(94,197,199)),Some(Color::Rgb(61,132,163))),(Some(Color::Rgb(40,118,152)),Some(Color::Rgb(168,188,205))),(Some(Color::Rgb(115,143,171)),None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),
+    (None,None),(None,None),(None,None),(None,None),(None,None),(Some(Color::Rgb(134,158,186)),Some(Color::Rgb(59,69,123))),(Some(Color::Rgb(18,40,116)),Some(Color::Rgb(35,68,116))),(Some(Color::Rgb(58,95,139)),Some(Color::Rgb(74,180,200))),(Some(Color::Rgb(106,206,212)),Some(Color::Rgb(89,206,222))),(Some(Color::Rgb(145,246,244)),Some(Color::Rgb(75,146,180))),(Some(Color::Rgb(82,176,201)),Some(Color::Rgb(22,52,75))),(Some(Color::Rgb(23,82,123)),Some(Color::Rgb(18,19,51))),(Some(Color::Rgb(78,92,133)),Some(Color::Rgb(24,63,124))),(None,Some(Color::Rgb(87,148,182))),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),
+    (None,None),(None,None),(None,None),(None,None),(Some(Color::Rgb(197,193,205)),Some(Color::Rgb(118,121,144))),(Some(Color::Rgb(19,35,89)),Some(Color::Rgb(21,56,140))),(Some(Color::Rgb(50,124,175)),Some(Color::Rgb(48,97,165))),(Some(Color::Rgb(60,154,193)),Some(Color::Rgb(11,35,75))),(Some(Color::Rgb(76,118,149)),Some(Color::Rgb(138,133,146))),(Some(Color::Rgb(196,197,206)),None),(Some(Color::Rgb(199,193,194)),None),(Some(Color::Rgb(22,23,67)),Some(Color::Rgb(186,187,206))),(Some(Color::Rgb(39,55,113)),Some(Color::Rgb(21,19,99))),(Some(Color::Rgb(39,105,156)),Some(Color::Rgb(62,80,154))),(Some(Color::Rgb(106,185,207)),Some(Color::Rgb(52,124,184))),(None,Some(Color::Rgb(127,200,227))),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),
+    (None,None),(None,None),(None,None),(None,Some(Color::Rgb(188,191,217))),(Some(Color::Rgb(55,68,139)),Some(Color::Rgb(15,20,97))),(Some(Color::Rgb(26,49,126)),Some(Color::Rgb(32,24,82))),(Some(Color::Rgb(25,30,79)),Some(Color::Rgb(20,12,95))),(Some(Color::Rgb(20,14,79)),Some(Color::Rgb(84,82,151))),(Some(Color::Rgb(215,215,226)),None),(None,None),(None,None),(None,None),(Some(Color::Rgb(160,161,194)),None),(Some(Color::Rgb(24,27,125)),Some(Color::Rgb(137,131,183))),(Some(Color::Rgb(70,113,188)),Some(Color::Rgb(32,45,149))),(Some(Color::Rgb(62,142,214)),Some(Color::Rgb(84,148,222))),(Some(Color::Rgb(141,202,241)),Some(Color::Rgb(76,152,234))),(None,Some(Color::Rgb(146,199,246))),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),
+    (None,None),(None,None),(None,Some(Color::Rgb(237,235,240))),(Some(Color::Rgb(112,106,154)),Some(Color::Rgb(51,21,89))),(Some(Color::Rgb(23,2,72)),Some(Color::Rgb(37,0,83))),(Some(Color::Rgb(48,24,103)),Some(Color::Rgb(37,0,90))),(Some(Color::Rgb(29,4,105)),Some(Color::Rgb(145,126,171))),(Some(Color::Rgb(192,186,214)),None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(Some(Color::Rgb(134,115,186)),None),(Some(Color::Rgb(48,40,169)),Some(Color::Rgb(156,131,199))),(Some(Color::Rgb(103,128,227)),Some(Color::Rgb(61,26,175))),(Some(Color::Rgb(95,147,239)),Some(Color::Rgb(85,64,211))),(Some(Color::Rgb(146,196,248)),Some(Color::Rgb(82,105,230))),(None,Some(Color::Rgb(124,153,241))),(None,Some(Color::Rgb(228,234,254))),(None,None),(None,None),(None,None),
+    (None,None),(None,None),(Some(Color::Rgb(184,173,195)),None),(Some(Color::Rgb(58,31,93)),None),(Some(Color::Rgb(105,79,135)),None),(Some(Color::Rgb(186,173,198)),None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(Some(Color::Rgb(211,199,230)),None),(Some(Color::Rgb(123,97,197)),None),(Some(Color::Rgb(91,60,189)),None),(Some(Color::Rgb(76,56,188)),Some(Color::Rgb(240,234,241))),(Some(Color::Rgb(120,111,209)),None),(Some(Color::Rgb(238,237,250)),None),(None,None),(None,None),
+    (None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),(None,None),
+];
 
 fn push_diff_lines(out: &mut Vec<Line<'static>>, diff: &str, max_lines: usize, indent: &str) {
     let all: Vec<&str> = diff.lines().collect();
