@@ -359,7 +359,6 @@ pub fn splash_lines() -> Vec<Line<'static>> {
     let text_start = BH / 2 - 2;
 
     let mut lines: Vec<Line<'static>> = vec![
-        Line::from(""),
         rule_line.clone(),
     ];
     let cyan = Color::Rgb(80, 200, 230);
@@ -382,7 +381,6 @@ pub fn splash_lines() -> Vec<Line<'static>> {
         lines.push(Line::from(spans));
     }
     lines.push(rule_line);
-    lines.push(Line::from(""));
     lines
 }
 
