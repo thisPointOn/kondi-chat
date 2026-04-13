@@ -339,54 +339,53 @@ pub fn render_assistant_lines(msg: &ChatMessage) -> Vec<Line<'static>> {
     out
 }
 
-/// Pixelated K logo + "kondi" wordmark, rendered with truecolor block
-/// characters. The vertical bar plus two crossing diagonals form the K;
-/// each row uses a teal→deep-blue gradient that matches the source logo.
+/// High-resolution K logo + "kondi" wordmark. Uses the half-block trick
+/// (`▀` with foreground = top pixel and background = bottom pixel) to fit
+/// two vertical pixels per terminal cell. The pixel grid is 40 rows tall
+/// so it renders in 20 cell rows. Two thick Bresenham diagonals plus a
+/// thick vertical bar form the K, with a teal→deep-blue vertical gradient
+/// matching the source image.
 pub fn splash_lines() -> Vec<Line<'static>> {
-    const ROWS: usize = 14;
-    const COLS: usize = 24;
-    let mid: usize = ROWS / 2; // 7 — where the diagonals meet the bar
+    const PX_ROWS: usize = 40;
+    const PX_COLS: usize = 46;
+    let mut grid = vec![[false; PX_COLS]; PX_ROWS];
+    let mid = PX_ROWS / 2; // 20
 
-    let mut grid = vec![[false; COLS]; ROWS];
-    // Vertical bar (3 cells wide so it reads as a thick stroke).
-    for r in 0..ROWS {
-        for c in 0..3 { grid[r][c] = true; }
-    }
-    // Top diagonal: from (col 3, row mid) up-right to (col COLS-2, row 0).
-    for r in 0..=mid {
-        let span = COLS - 5;
-        let c = 3 + (mid - r) * span / mid;
-        for dc in 0..2 {
-            if c + dc < COLS { grid[r][c + dc] = true; }
-        }
-    }
-    // Bottom diagonal: from (col 3, row mid) down-right to (col COLS-2, row ROWS-1).
-    for r in mid..ROWS {
-        let span = COLS - 5;
-        let denom = ROWS - 1 - mid;
-        let c = 3 + (r - mid) * span / denom.max(1);
-        for dc in 0..2 {
-            if c + dc < COLS { grid[r][c + dc] = true; }
+    // Vertical bar — 5 pixels wide.
+    let bar_x = 4usize;
+    let bar_w = 5usize;
+    for r in 0..PX_ROWS {
+        for c in bar_x..bar_x + bar_w {
+            grid[r][c] = true;
         }
     }
 
+    // Diagonals use a thick Bresenham line so the strokes have weight.
+    let start_x = (bar_x + bar_w - 1) as i32;
+    let end_x = (PX_COLS - 4) as i32;
+    draw_thick_line(&mut grid, start_x, mid as i32, end_x, 0, 4);
+    draw_thick_line(&mut grid, start_x, mid as i32, end_x, (PX_ROWS - 1) as i32, 4);
+
+    // Render row pairs as half-blocks.
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from(""));
-    for r in 0..ROWS {
-        let t = r as f32 / (ROWS - 1) as f32;
-        // teal (#4BC8C8) → deep purple-blue (#5840B4)
-        let red   = (75.0  + (88.0  - 75.0)  * t) as u8;
-        let green = (200.0 + (64.0  - 200.0) * t) as u8;
-        let blue  = (200.0 + (180.0 - 200.0) * t) as u8;
-        let color = Color::Rgb(red, green, blue);
-        let mut spans: Vec<Span<'static>> = Vec::with_capacity(COLS + 2);
+    for cell_row in 0..PX_ROWS / 2 {
+        let top_r = cell_row * 2;
+        let bot_r = cell_row * 2 + 1;
+        let mut spans: Vec<Span<'static>> = Vec::with_capacity(PX_COLS + 2);
         spans.push(Span::raw("  "));
-        for c in 0..COLS {
-            if grid[r][c] {
-                spans.push(Span::styled("█", Style::default().fg(color)));
-            } else {
-                spans.push(Span::raw(" "));
-            }
+        for c in 0..PX_COLS {
+            let top = grid[top_r][c];
+            let bot = grid[bot_r][c];
+            let color_top = gradient_color(top_r as f32 / (PX_ROWS - 1) as f32);
+            let color_bot = gradient_color(bot_r as f32 / (PX_ROWS - 1) as f32);
+            let span = match (top, bot) {
+                (false, false) => Span::raw(" "),
+                (true,  false) => Span::styled("▀", Style::default().fg(color_top)),
+                (false, true)  => Span::styled("▄", Style::default().fg(color_bot)),
+                (true,  true)  => Span::styled("▀", Style::default().fg(color_top).bg(color_bot)),
+            };
+            spans.push(span);
         }
         lines.push(Line::from(spans));
     }
@@ -397,6 +396,48 @@ pub fn splash_lines() -> Vec<Line<'static>> {
     )));
     lines.push(Line::from(""));
     lines
+}
+
+fn gradient_color(t: f32) -> Color {
+    // teal (#4BC8C8) → deep purple-blue (#5840B4)
+    let r = (75.0  + (88.0  - 75.0)  * t) as u8;
+    let g = (200.0 + (64.0  - 200.0) * t) as u8;
+    let b = (200.0 + (180.0 - 200.0) * t) as u8;
+    Color::Rgb(r, g, b)
+}
+
+/// Bresenham line with square brush of `thickness`×`thickness` pixels at
+/// every step, so the resulting stroke has visible weight.
+fn draw_thick_line(
+    grid: &mut Vec<[bool; 46]>,
+    x0: i32, y0: i32, x1: i32, y1: i32, thickness: i32,
+) {
+    let dx = (x1 - x0).abs();
+    let dy = -(y1 - y0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+    let mut x = x0;
+    let mut y = y0;
+    let half = thickness / 2;
+    loop {
+        for ty in 0..thickness {
+            for tx in 0..thickness {
+                let xx = x + tx - half;
+                let yy = y + ty - half;
+                if xx >= 0 && yy >= 0
+                    && (yy as usize) < grid.len()
+                    && (xx as usize) < grid[0].len()
+                {
+                    grid[yy as usize][xx as usize] = true;
+                }
+            }
+        }
+        if x == x1 && y == y1 { break; }
+        let e2 = 2 * err;
+        if e2 >= dy { err += dy; x += sx; }
+        if e2 <= dx { err += dx; y += sy; }
+    }
 }
 
 fn push_diff_lines(out: &mut Vec<Line<'static>>, diff: &str, max_lines: usize, indent: &str) {
