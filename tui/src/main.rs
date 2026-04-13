@@ -94,26 +94,33 @@ async fn main() -> io::Result<()> {
     )?;
 
     let mut app = App::new();
+    let mut needs_draw = true;
 
     loop {
-        // Drain anything the app pushed into the history queue (completed
-        // chat messages) into the terminal's normal scrollback BEFORE we
-        // redraw the inline viewport. Each item is one rendered message.
-        let pending = std::mem::take(&mut app.pending_history);
-        for item in pending {
-            let height = item.len() as u16;
-            if height == 0 { continue; }
-            terminal.insert_before(height, |buf| {
-                for (i, line) in item.iter().enumerate() {
-                    buf.set_line(0, i as u16, line, buf.area.width);
-                }
-            })?;
+        if needs_draw {
+            // Drain completed messages into normal terminal scrollback.
+            let pending = std::mem::take(&mut app.pending_history);
+            for item in pending {
+                let height = item.len() as u16;
+                if height == 0 { continue; }
+                terminal.insert_before(height, |buf| {
+                    for (i, line) in item.iter().enumerate() {
+                        buf.set_line(0, i as u16, line, buf.area.width);
+                    }
+                })?;
+            }
+            terminal.draw(|f| ui::draw(f, &mut app))?;
+            needs_draw = false;
         }
 
-        terminal.draw(|f| ui::draw(f, &mut app))?;
-
-        if crossterm::event::poll(std::time::Duration::from_millis(16))? {
+        // When idle (not processing): poll with a long timeout so the
+        // terminal stays quiet and the user can highlight / copy text
+        // without escape-sequence interference.
+        // When processing: shorter timeout so the spinner animates.
+        let poll_ms = if app.is_processing { 100 } else { 500 };
+        if crossterm::event::poll(std::time::Duration::from_millis(poll_ms))? {
             let evt = event::read()?;
+            needs_draw = true; // any event → redraw
             if let Event::Key(key) = evt {
                 // Spec 01 — when a permission dialog is open, intercept y/n/a.
                 let permission_open = !app.pending_permissions.is_empty();
@@ -185,21 +192,23 @@ async fn main() -> io::Result<()> {
             }
         }
 
-        // Drain whatever backend messages are immediately available, then
-        // move on. A non-zero timeout here adds a per-frame floor even when
-        // nothing is pending, which makes the scrollbar drag feel snaggy.
+        // Drain whatever backend messages are immediately available.
         loop {
             match tokio::time::timeout(std::time::Duration::from_millis(0), reader.next_line()).await {
                 Ok(Ok(Some(line))) => {
                     if let Ok(event) = serde_json::from_str::<BackendEvent>(&line) {
                         app.handle_backend_event(event);
+                        needs_draw = true;
                     }
                 }
-                Ok(Ok(None)) => { /* backend closed — will exit on next draw check */ break; }
+                Ok(Ok(None)) => break,
                 Ok(Err(_)) => break,
-                Err(_) => break, // No more messages available right now
+                Err(_) => break,
             }
         }
+
+        // Spinner tick: if processing and poll timed out, still redraw.
+        if app.is_processing { needs_draw = true; }
     }
 
     // Inline viewport: just clear our viewport area and leave the
