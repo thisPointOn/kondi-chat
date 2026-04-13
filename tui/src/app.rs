@@ -339,53 +339,47 @@ pub fn render_assistant_lines(msg: &ChatMessage) -> Vec<Line<'static>> {
     out
 }
 
-/// High-resolution K logo + "kondi" wordmark. Uses the half-block trick
-/// (`▀` with foreground = top pixel and background = bottom pixel) to fit
-/// two vertical pixels per terminal cell. The pixel grid is 40 rows tall
-/// so it renders in 20 cell rows. Two thick Bresenham diagonals plus a
-/// thick vertical bar form the K, with a teal→deep-blue vertical gradient
-/// matching the source image.
+/// K logo matching the source image: three crossing organic strokes
+/// (left upward stroke, upper-right diagonal, lower-right diagonal)
+/// with a teal→deep-blue gradient. Uses the half-block trick for 2
+/// vertical pixels per cell. The shape matches the logo image: no
+/// vertical bar, three leaf-like strokes meeting at a central crossing.
 pub fn splash_lines() -> Vec<Line<'static>> {
-    const PX_ROWS: usize = 40;
-    const PX_COLS: usize = 46;
-    let mut grid = vec![[false; PX_COLS]; PX_ROWS];
-    let mid = PX_ROWS / 2; // 20
+    const PX_H: usize = 44;
+    const PX_W: usize = 40;
+    let mut grid = vec![vec![false; PX_W]; PX_H];
 
-    // Vertical bar — 5 pixels wide.
-    let bar_x = 4usize;
-    let bar_w = 5usize;
-    for r in 0..PX_ROWS {
-        for c in bar_x..bar_x + bar_w {
-            grid[r][c] = true;
-        }
-    }
+    // Stroke 1: left backbone — slight lean from bottom-left to upper-center.
+    // In the image this is the thick stroke that goes from lower-left up.
+    thick_line(&mut grid, 7, 40, 13, 3, 5);
 
-    // Diagonals use a thick Bresenham line so the strokes have weight.
-    let start_x = (bar_x + bar_w - 1) as i32;
-    let end_x = (PX_COLS - 4) as i32;
-    draw_thick_line(&mut grid, start_x, mid as i32, end_x, 0, 4);
-    draw_thick_line(&mut grid, start_x, mid as i32, end_x, (PX_ROWS - 1) as i32, 4);
+    // Stroke 2: upper-right arm — from mid-left, crosses over stroke 1
+    // up and to the right toward upper-right corner.
+    thick_line(&mut grid, 3, 22, 36, 1, 4);
 
-    // Render row pairs as half-blocks.
+    // Stroke 3: lower-right arm — from the crossing point area, sweeps
+    // down and to the right toward lower-right.
+    thick_line(&mut grid, 11, 20, 36, 41, 4);
+
+    // Render using half-block technique.
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from(""));
-    for cell_row in 0..PX_ROWS / 2 {
+    for cell_row in 0..PX_H / 2 {
         let top_r = cell_row * 2;
         let bot_r = cell_row * 2 + 1;
-        let mut spans: Vec<Span<'static>> = Vec::with_capacity(PX_COLS + 2);
+        let mut spans: Vec<Span<'static>> = Vec::with_capacity(PX_W + 2);
         spans.push(Span::raw("  "));
-        for c in 0..PX_COLS {
+        for c in 0..PX_W {
             let top = grid[top_r][c];
             let bot = grid[bot_r][c];
-            let color_top = gradient_color(top_r as f32 / (PX_ROWS - 1) as f32);
-            let color_bot = gradient_color(bot_r as f32 / (PX_ROWS - 1) as f32);
-            let span = match (top, bot) {
+            let ct = grad(top_r as f32 / (PX_H - 1) as f32);
+            let cb = grad(bot_r as f32 / (PX_H - 1) as f32);
+            spans.push(match (top, bot) {
                 (false, false) => Span::raw(" "),
-                (true,  false) => Span::styled("▀", Style::default().fg(color_top)),
-                (false, true)  => Span::styled("▄", Style::default().fg(color_bot)),
-                (true,  true)  => Span::styled("▀", Style::default().fg(color_top).bg(color_bot)),
-            };
-            spans.push(span);
+                (true,  false) => Span::styled("▀", Style::default().fg(ct)),
+                (false, true)  => Span::styled("▄", Style::default().fg(cb)),
+                (true,  true)  => Span::styled("▀", Style::default().fg(ct).bg(cb)),
+            });
         }
         lines.push(Line::from(spans));
     }
@@ -398,38 +392,38 @@ pub fn splash_lines() -> Vec<Line<'static>> {
     lines
 }
 
-fn gradient_color(t: f32) -> Color {
-    // teal (#4BC8C8) → deep purple-blue (#5840B4)
-    let r = (75.0  + (88.0  - 75.0)  * t) as u8;
-    let g = (200.0 + (64.0  - 200.0) * t) as u8;
-    let b = (200.0 + (180.0 - 200.0) * t) as u8;
+fn grad(t: f32) -> Color {
+    // Top: bright teal/cyan, bottom: deep indigo/purple.
+    let r = lerp(60.0,  90.0, t) as u8;
+    let g = lerp(210.0, 50.0, t) as u8;
+    let b = lerp(210.0, 190.0, t) as u8;
     Color::Rgb(r, g, b)
 }
 
-/// Bresenham line with square brush of `thickness`×`thickness` pixels at
-/// every step, so the resulting stroke has visible weight.
-fn draw_thick_line(
-    grid: &mut Vec<[bool; 46]>,
-    x0: i32, y0: i32, x1: i32, y1: i32, thickness: i32,
-) {
+fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
+
+/// Bresenham with a round-ish brush (circular stamp of radius thickness/2).
+fn thick_line(grid: &mut Vec<Vec<bool>>, x0: i32, y0: i32, x1: i32, y1: i32, thickness: i32) {
     let dx = (x1 - x0).abs();
     let dy = -(y1 - y0).abs();
     let sx = if x0 < x1 { 1 } else { -1 };
     let sy = if y0 < y1 { 1 } else { -1 };
     let mut err = dx + dy;
-    let mut x = x0;
-    let mut y = y0;
-    let half = thickness / 2;
+    let (mut x, mut y) = (x0, y0);
+    let r = thickness / 2;
+    let r2 = r * r;
+    let rows = grid.len() as i32;
+    let cols = grid[0].len() as i32;
     loop {
-        for ty in 0..thickness {
-            for tx in 0..thickness {
-                let xx = x + tx - half;
-                let yy = y + ty - half;
-                if xx >= 0 && yy >= 0
-                    && (yy as usize) < grid.len()
-                    && (xx as usize) < grid[0].len()
-                {
-                    grid[yy as usize][xx as usize] = true;
+        // Circular stamp.
+        for dy2 in -r..=r {
+            for dx2 in -r..=r {
+                if dx2 * dx2 + dy2 * dy2 <= r2 {
+                    let xx = x + dx2;
+                    let yy = y + dy2;
+                    if xx >= 0 && yy >= 0 && yy < rows && xx < cols {
+                        grid[yy as usize][xx as usize] = true;
+                    }
                 }
             }
         }
