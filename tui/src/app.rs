@@ -348,12 +348,7 @@ pub fn splash_lines() -> Vec<Line<'static>> {
 
     // "kondi" in large block letters beside the K logo. 5 rows tall to
     // roughly match the logo height. Each letter is ~6 cols wide.
-    let big_text: [&str; 3] = [
-        " █ █ ██ █▄█ █▀▄ █",
-        " ██  █▄ █ █ █ █ █",
-        " █ █ ██ █ █ █▀  █",
-    ];
-    let text_start = BH / 2 - 1;
+    let text_start = BH / 2;
 
     let mut lines: Vec<Line<'static>> = vec![
         rule_line.clone(),
@@ -368,10 +363,9 @@ pub fn splash_lines() -> Vec<Line<'static>> {
                 None => spans.push(Span::raw(ch)),
             }
         }
-        let text_row = row as isize - text_start as isize;
-        if text_row >= 0 && (text_row as usize) < big_text.len() {
+        if row == text_start {
             spans.push(Span::styled(
-                big_text[text_row as usize].to_string(),
+                "  kondi",
                 Style::default().fg(cyan).add_modifier(Modifier::BOLD),
             ));
         }
