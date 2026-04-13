@@ -342,7 +342,13 @@ pub fn render_assistant_lines(msg: &ChatMessage) -> Vec<Line<'static>> {
 /// K logo: 60x52 pixels in 30x13 braille cells. Slightly larger than
 /// the previous 24x11 so the dots read as bigger pixels.
 pub fn splash_lines() -> Vec<Line<'static>> {
-    let mut lines: Vec<Line<'static>> = vec![Line::from("")];
+    let rule = "─".repeat(BW + 2);
+    let mut lines: Vec<Line<'static>> = vec![
+        Line::from(""),
+        Line::from(Span::styled(format!(" {}", rule), Style::default().fg(Color::White))),
+    ];
+    // The "ondi" text goes on the row vertically centered beside the K.
+    let mid_row = BH / 2;
     for row in 0..BH {
         let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
         for col in 0..BW {
@@ -352,12 +358,15 @@ pub fn splash_lines() -> Vec<Line<'static>> {
                 None => spans.push(Span::raw(ch)),
             }
         }
+        if row == mid_row {
+            spans.push(Span::styled(
+                "  ondi",
+                Style::default().fg(Color::Rgb(80, 200, 230)).add_modifier(Modifier::BOLD),
+            ));
+        }
         lines.push(Line::from(spans));
     }
-    lines.push(Line::from(Span::styled(
-        " kondi",
-        Style::default().fg(Color::Rgb(80, 200, 230)).add_modifier(Modifier::BOLD),
-    )));
+    lines.push(Line::from(Span::styled(format!(" {}", rule), Style::default().fg(Color::White))));
     lines.push(Line::from(""));
     lines
 }
