@@ -348,15 +348,12 @@ pub fn splash_lines() -> Vec<Line<'static>> {
 
     // "kondi" in large block letters beside the K logo. 5 rows tall to
     // roughly match the logo height. Each letter is ~6 cols wide.
-    let big_text: [&str; 5] = [
-        " █  █  ████  █   █ ████  █ ",
-        " █ █   █  █  ██  █ █   █ █ ",
-        " ██    █  █  █ █ █ █   █ █ ",
-        " █ █   █  █  █  ██ █   █ █ ",
-        " █  █  ████  █   █ ████  █ ",
+    let big_text: [&str; 3] = [
+        " █ █ ██ █▄█ █▀▄ █",
+        " ██  █▄ █ █ █ █ █",
+        " █ █ ██ █ █ █▀  █",
     ];
-    // Center the text vertically in the logo. Logo is BH rows; text is 5.
-    let text_start = BH / 2 - 2;
+    let text_start = BH / 2 - 1;
 
     let mut lines: Vec<Line<'static>> = vec![
         rule_line.clone(),
