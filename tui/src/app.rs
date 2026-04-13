@@ -342,13 +342,27 @@ pub fn render_assistant_lines(msg: &ChatMessage) -> Vec<Line<'static>> {
 /// K logo: 60x52 pixels in 30x13 braille cells. Slightly larger than
 /// the previous 24x11 so the dots read as bigger pixels.
 pub fn splash_lines() -> Vec<Line<'static>> {
-    let rule = "─".repeat(BW + 2);
+    // Full-span rules: 120 cols covers any reasonable terminal width.
+    let rule_style = Style::default().fg(Color::White);
+    let rule_line = Line::from(Span::styled("─".repeat(120), rule_style));
+
+    // "kondi" in large block letters beside the K logo. 5 rows tall to
+    // roughly match the logo height. Each letter is ~6 cols wide.
+    let big_text: [&str; 5] = [
+        " █  █  ████  █   █ ████  █ ",
+        " █ █   █  █  ██  █ █   █ █ ",
+        " ██    █  █  █ █ █ █   █ █ ",
+        " █ █   █  █  █  ██ █   █ █ ",
+        " █  █  ████  █   █ ████  █ ",
+    ];
+    // Center the text vertically in the logo. Logo is BH rows; text is 5.
+    let text_start = BH / 2 - 2;
+
     let mut lines: Vec<Line<'static>> = vec![
         Line::from(""),
-        Line::from(Span::styled(format!(" {}", rule), Style::default().fg(Color::White))),
+        rule_line.clone(),
     ];
-    // The "ondi" text goes on the row vertically centered beside the K.
-    let mid_row = BH / 2;
+    let cyan = Color::Rgb(80, 200, 230);
     for row in 0..BH {
         let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
         for col in 0..BW {
@@ -358,15 +372,16 @@ pub fn splash_lines() -> Vec<Line<'static>> {
                 None => spans.push(Span::raw(ch)),
             }
         }
-        if row == mid_row {
+        let text_row = row as isize - text_start as isize;
+        if text_row >= 0 && (text_row as usize) < big_text.len() {
             spans.push(Span::styled(
-                "  ondi",
-                Style::default().fg(Color::Rgb(80, 200, 230)).add_modifier(Modifier::BOLD),
+                big_text[text_row as usize].to_string(),
+                Style::default().fg(cyan).add_modifier(Modifier::BOLD),
             ));
         }
         lines.push(Line::from(spans));
     }
-    lines.push(Line::from(Span::styled(format!(" {}", rule), Style::default().fg(Color::White))));
+    lines.push(rule_line);
     lines.push(Line::from(""));
     lines
 }
