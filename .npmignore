@@ -1,0 +1,9 @@
+tui/src/
+tui/target/debug/
+specs/
+test/
+.github/
+homebrew/
+*.log
+.kondi-chat/
+.env

@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Resolve the project root (where package.json lives)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+VERSION="0.1.0"
+
+if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
+  echo "kondi-chat $VERSION"
+  exit 0
+fi
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  cat <<HELP
+kondi-chat $VERSION
+Multi-model AI coding CLI with intelligent routing and council deliberation.
+
+Usage:
+  kondi-chat [options]
+
+Options:
+  --help, -h       Show this help message
+  --version, -V    Show version number
+
+If the Rust TUI binary is available, it will be used. Otherwise, the Node
+backend runs directly via tsx.
+HELP
+  exit 0
+fi
+
+TUI_BINARY="$PROJECT_ROOT/tui/target/release/kondi-tui"
+
+if [[ -x "$TUI_BINARY" ]]; then
+  exec "$TUI_BINARY" "$@"
+else
+  exec npx tsx "$PROJECT_ROOT/src/cli/backend.ts" "$@"
+fi
