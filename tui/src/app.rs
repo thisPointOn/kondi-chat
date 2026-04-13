@@ -343,7 +343,7 @@ pub fn render_assistant_lines(msg: &ChatMessage) -> Vec<Line<'static>> {
 /// the previous 24x11 so the dots read as bigger pixels.
 pub fn splash_lines() -> Vec<Line<'static>> {
     // Full-span rules: 120 cols covers any reasonable terminal width.
-    let rule_style = Style::default().fg(Color::White);
+    let rule_style = Style::default().fg(Color::Rgb(255, 20, 147));
     let rule_line = Line::from(Span::styled("─".repeat(120), rule_style));
 
     // "kondi" in large block letters beside the K logo. 5 rows tall to
