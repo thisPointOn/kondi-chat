@@ -231,8 +231,9 @@ impl App {
                 }
                 self.activity.push(("tool".to_string(), format!("{name}({args})")));
             }
-            BackendEvent::Status { text } => {
+            BackendEvent::Status { text, git_info } => {
                 self.status = text;
+                if let Some(g) = git_info { self.git_info = Some(g); }
             }
             BackendEvent::Activity { text, activity_type } => {
                 self.activity.push((activity_type, text));

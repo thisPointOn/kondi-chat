@@ -38,7 +38,7 @@ pub enum BackendEvent {
     ToolCall { name: String, args: String, is_error: bool },
 
     #[serde(rename = "status")]
-    Status { text: String },
+    Status { text: String, git_info: Option<GitInfo> },
 
     #[serde(rename = "activity")]
     Activity { text: String, activity_type: String },

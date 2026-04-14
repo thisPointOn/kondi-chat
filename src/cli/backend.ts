@@ -153,6 +153,24 @@ async function main() {
     gitCtx = detectGitRepo(workingDir);
     contextManager.setGitContextText(formatGitContextForPrompt(gitCtx));
   };
+  // Push a git_info status event to the TUI so it can update the status bar.
+  const emitGitInfo = () => {
+    if (!gitCtx.isGitRepo) return;
+    emit({
+      type: 'status',
+      text: '', // clear any stale status text
+      git_info: {
+        branch: gitCtx.branch,
+        dirty_count: gitCtx.dirtyCount + gitCtx.untrackedCount,
+        last_commit: gitCtx.lastCommitHash,
+      },
+    });
+  };
+  // Refresh git status every 5 seconds so external changes (editor saves,
+  // git commands in another terminal) show up without waiting for a turn.
+  if (gitCtx.isGitRepo) {
+    setInterval(() => { refreshGit(); emitGitInfo(); }, 5000);
+  }
   for (const tool of GIT_TOOLS) {
     toolManager.registerTool(tool, async (args, _toolCtx) => {
       const res = await executeGitTool(tool.name, args, workingDir, gitCtx);
@@ -297,6 +315,8 @@ async function main() {
     if (cmd.type === 'command') {
       const output = await handleCommand(cmd.text, session, contextManager, ledger, registry, collector, toolCtx, mcpClient, toolManager, workingDir, profiles, router, councilProfiles, councilPath, analytics, checkpointManager, sessionStore, rateLimiter, pendingImages, telemetry);
       emit({ type: 'command_result', output });
+      refreshGit();
+      emitGitInfo();
       return;
     }
 
