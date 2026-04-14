@@ -5,3 +5,11 @@ dist/
 *.log
 specs/
 marketing/
+
+# Python scraper utilities
+README_SCRAPER.md
+requirements.txt
+scrape_and_count.py
+word_counter.py
+scroll-test.txt
+ROADMAP.md
