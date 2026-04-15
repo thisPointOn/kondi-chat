@@ -49,6 +49,13 @@ pub struct App {
     pub session_cost: f64,
     pub pending_permissions: Vec<PermissionDialog>,
     pub git_info: Option<GitInfo>,
+    /// Most recent completed assistant message body — used by Ctrl+Y to copy.
+    pub last_assistant_content: Option<String>,
+    /// Persistent clipboard handle. On X11 arboard serves the selection
+    /// from a background thread owned by this struct; if we drop it after
+    /// each copy the contents disappear instantly. Kept alive for the
+    /// lifetime of the TUI so pastes work.
+    clipboard: Option<arboard::Clipboard>,
 }
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -82,6 +89,8 @@ impl App {
             session_cost: 0.0,
             pending_permissions: vec![],
             git_info: None,
+            last_assistant_content: None,
+            clipboard: arboard::Clipboard::new().ok(),
         }
     }
 
@@ -130,6 +139,36 @@ impl App {
         self.start_time = Instant::now();
         self.history_idx = None;
         self.history_draft.clear();
+    }
+
+    /// Copy the most recent completed assistant message to the system
+    /// clipboard. Shows a one-line system note describing the result so the
+    /// user has feedback that ^Y did something.
+    pub fn copy_last_response(&mut self) {
+        let Some(content) = self.last_assistant_content.clone() else {
+            self.push_system("Nothing to copy yet — wait for an assistant response.".into());
+            return;
+        };
+        // Lazily (re)initialize on failure so a transient clipboard hiccup
+        // doesn't leave the handle permanently broken.
+        if self.clipboard.is_none() {
+            self.clipboard = arboard::Clipboard::new().ok();
+        }
+        let Some(cb) = self.clipboard.as_mut() else {
+            self.push_system("Clipboard unavailable (no X11/Wayland display?).".into());
+            return;
+        };
+        match cb.set_text(content.clone()) {
+            Ok(()) => {
+                let chars = content.chars().count();
+                self.push_system(format!("Copied last response to clipboard ({chars} chars)."));
+            }
+            Err(e) => {
+                // Drop the handle so the next call retries with a fresh one.
+                self.clipboard = None;
+                self.push_system(format!("Clipboard copy failed: {e}"));
+            }
+        }
     }
 
     pub fn toggle_detail(&mut self, view: &str) {
@@ -212,6 +251,9 @@ impl App {
                         msg.stats = Some(s);
                         if let Some(ref label) = msg.model_label {
                             self.model = label.clone();
+                        }
+                        if !msg.content.is_empty() {
+                            self.last_assistant_content = Some(msg.content.clone());
                         }
                         self.is_processing = false;
                         self.working_id = None;
@@ -297,6 +339,139 @@ pub fn render_system_lines(text: &str) -> Vec<Line<'static>> {
     out
 }
 
+/// Walk `content` line by line. When we hit a markdown table block, render
+/// it as a box-drawing table; otherwise emit the line as plain body text.
+fn render_markdown_body(out: &mut Vec<Line<'static>>, content: &str) {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        if let Some(end) = detect_table_at(&lines, i) {
+            let table_rows = parse_table(&lines[i..end]);
+            render_table(out, &table_rows);
+            i = end;
+        } else {
+            out.push(Line::from(Span::styled(
+                format!("  {}", lines[i]),
+                Style::default().fg(BODY),
+            )));
+            i += 1;
+        }
+    }
+}
+
+/// If lines[start..] begins a markdown table, return the exclusive end index.
+/// Requirements: header row (starts with `|`), separator row (only `|`, `-`,
+/// `:`, and whitespace), then zero or more data rows starting with `|`.
+fn detect_table_at(lines: &[&str], start: usize) -> Option<usize> {
+    if start + 1 >= lines.len() { return None; }
+    let header = lines[start].trim_start();
+    if !header.starts_with('|') || header.matches('|').count() < 2 { return None; }
+    let sep = lines[start + 1].trim_start();
+    if !sep.starts_with('|') { return None; }
+    let sep_body: String = sep.chars().filter(|c| !c.is_whitespace()).collect();
+    if !sep_body.chars().all(|c| matches!(c, '|' | '-' | ':')) { return None; }
+    if !sep_body.contains('-') { return None; }
+    // Walk forward consuming data rows.
+    let mut end = start + 2;
+    while end < lines.len() && lines[end].trim_start().starts_with('|') {
+        end += 1;
+    }
+    Some(end)
+}
+
+/// Split a markdown row like `| a | b | c |` into trimmed cell strings.
+fn parse_row(line: &str) -> Vec<String> {
+    let trimmed = line.trim().trim_start_matches('|').trim_end_matches('|');
+    trimmed.split('|').map(|c| c.trim().to_string()).collect()
+}
+
+/// Returns (header, data_rows). Skips the separator row.
+fn parse_table(lines: &[&str]) -> (Vec<String>, Vec<Vec<String>>) {
+    let header = parse_row(lines[0]);
+    let mut data: Vec<Vec<String>> = Vec::new();
+    for raw in &lines[2..] {
+        let mut row = parse_row(raw);
+        // Pad / trim to header width so the renderer doesn't index OOB.
+        while row.len() < header.len() { row.push(String::new()); }
+        row.truncate(header.len());
+        data.push(row);
+    }
+    (header, data)
+}
+
+fn render_table(out: &mut Vec<Line<'static>>, table: &(Vec<String>, Vec<Vec<String>>)) {
+    let (header, data) = table;
+    let cols = header.len();
+    if cols == 0 { return; }
+    let mut widths: Vec<usize> = header.iter().map(|h| h.chars().count()).collect();
+    for row in data {
+        for (i, cell) in row.iter().enumerate() {
+            let w = cell.chars().count();
+            if w > widths[i] { widths[i] = w; }
+        }
+    }
+    let pad = 1usize;
+    let cell_widths: Vec<usize> = widths.iter().map(|w| w + pad * 2).collect();
+
+    let header_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+    let border_style = Style::default().fg(Color::DarkGray);
+    let body_style = Style::default().fg(BODY);
+
+    // Top border
+    out.push(Line::from(Span::styled(
+        format!("  {}", border_row(&cell_widths, '┌', '┬', '┐')),
+        border_style,
+    )));
+    // Header row
+    out.push(content_row(header, &widths, pad, header_style, border_style));
+    // Separator
+    out.push(Line::from(Span::styled(
+        format!("  {}", border_row(&cell_widths, '├', '┼', '┤')),
+        border_style,
+    )));
+    // Data rows
+    for row in data {
+        out.push(content_row(row, &widths, pad, body_style, border_style));
+    }
+    // Bottom border
+    out.push(Line::from(Span::styled(
+        format!("  {}", border_row(&cell_widths, '└', '┴', '┘')),
+        border_style,
+    )));
+}
+
+fn border_row(cell_widths: &[usize], left: char, mid: char, right: char) -> String {
+    let mut s = String::new();
+    s.push(left);
+    for (i, w) in cell_widths.iter().enumerate() {
+        for _ in 0..*w { s.push('─'); }
+        s.push(if i + 1 == cell_widths.len() { right } else { mid });
+    }
+    s
+}
+
+fn content_row(
+    cells: &[String],
+    widths: &[usize],
+    pad: usize,
+    cell_style: Style,
+    border_style: Style,
+) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
+    spans.push(Span::styled("│", border_style));
+    for (i, cell) in cells.iter().enumerate() {
+        let cell_chars = cell.chars().count();
+        let extra = widths[i].saturating_sub(cell_chars);
+        let mut content = " ".repeat(pad);
+        content.push_str(cell);
+        for _ in 0..extra { content.push(' '); }
+        for _ in 0..pad { content.push(' '); }
+        spans.push(Span::styled(content, cell_style));
+        spans.push(Span::styled("│", border_style));
+    }
+    Line::from(spans)
+}
+
 pub fn render_assistant_lines(msg: &ChatMessage) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = vec![Line::from("")];
 
@@ -326,12 +501,7 @@ pub fn render_assistant_lines(msg: &ChatMessage) -> Vec<Line<'static>> {
     }
 
     if !msg.content.is_empty() {
-        for line in msg.content.lines() {
-            out.push(Line::from(Span::styled(
-                format!("  {}", line),
-                Style::default().fg(BODY),
-            )));
-        }
+        render_markdown_body(&mut out, &msg.content);
     }
 
     if let Some(ref stats) = msg.stats {

@@ -360,10 +360,12 @@ async function main() {
 function classifyPhase(input: string): 'execute' | 'discuss' {
   const s = input.toLowerCase();
   // Strong coding-intent verbs paired with code-y nouns / file extensions / language names.
-  if (/\b(write|make|create|build|implement|generate|add|fix|debug|refactor|optimize|update|change|modify|edit|remove|rewrite|port|translate)\b[^\n]{0,80}\b(code|script|function|class|method|file|test|module|app|component|endpoint|api|page|cli|tool|server|client|parser|wrapper|helper|util|util(?:s|ity)|service|model|database|schema|migration)\b/.test(s)) return 'execute';
+  if (/\b(write|make|create|build|implement|generate|add|fix|debug|refactor|optimize|update|change|modify|edit|remove|rewrite|port|translate|save|store|persist|dump|export|append)\b[^\n]{0,80}\b(code|script|function|class|method|file|test|module|app|component|endpoint|api|page|cli|tool|server|client|parser|wrapper|helper|util|util(?:s|ity)|service|model|database|schema|migration|response|answer|reply|output|log|notes?|disk|report|review|summary|transcript)\b/.test(s)) return 'execute';
   if (/\bin\s+(python|javascript|typescript|rust|go(lang)?|java|c\+\+|c#|ruby|php|swift|kotlin|bash|shell|sql)\b/.test(s)) return 'execute';
-  if (/\.(py|js|ts|tsx|jsx|rs|go|java|cpp|cc|h|hpp|cs|rb|php|swift|kt|sh|sql|html|css|scss|json|yml|yaml|toml)\b/.test(s)) return 'execute';
+  if (/\.(py|js|ts|tsx|jsx|rs|go|java|cpp|cc|h|hpp|cs|rb|php|swift|kt|sh|sql|html|css|scss|json|yml|yaml|toml|md|txt)\b/.test(s)) return 'execute';
   if (/\b(write|make|create|build|implement)\s+(a|an|the)?\s*(python|js|ts|rust|go|bash|shell|sql)\b/.test(s)) return 'execute';
+  // File-oriented imperative: "save X to disk/file" or "write X to <path>".
+  if (/\b(save|write|store|dump|export|persist|append)\b[^\n]{0,40}\b(to|as|into|in)\b[^\n]{0,80}\b(disk|file|folder|directory|path)\b/.test(s)) return 'execute';
   return 'discuss';
 }
 
@@ -602,6 +604,7 @@ async function handleSubmit(
   });
 
   emit({ type: 'status', text: '' });
+  toolCtx.permissionManager?.endTurn();
   await contextManager.maybeCompact();
   await contextManager.updateSessionState();
 }

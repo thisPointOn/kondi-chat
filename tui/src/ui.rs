@@ -8,6 +8,53 @@ use ratatui::{
 
 use crate::app::{render_assistant_lines, App};
 
+/// Wrap a list of styled `Line`s to a fixed display width.
+///
+/// Each input line is split on `\n`, then each segment is broken into
+/// fixed-width chunks. Per-span styling is collapsed to the first span's
+/// style so the wrap is fast and lossless for single-span body content
+/// (the common case for assistant message text). Multi-span lines like
+/// the assistant header (`● label`) are short and shouldn't trigger wrap
+/// in practice.
+pub fn wrap_lines_to_width(lines: &[Line<'_>], width: usize) -> Vec<Line<'static>> {
+    let w = width.max(1);
+    let mut out: Vec<Line<'static>> = Vec::new();
+    for line in lines {
+        // Fast path: if the line already fits, clone it through untouched so
+        // multi-span styling (splash colors, tool-call coloring, table
+        // borders) is preserved exactly. Only lines that actually need to
+        // wrap fall through to the lossy chunking path below.
+        let total_chars: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+        let has_newline = line.spans.iter().any(|s| s.content.contains('\n'));
+        if !has_newline && total_chars <= w {
+            let cloned: Vec<Span<'static>> = line.spans.iter().map(|s| {
+                Span::styled(s.content.clone().into_owned(), s.style)
+            }).collect();
+            out.push(Line::from(cloned));
+            continue;
+        }
+
+        let full: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        let style = line.spans.first().map(|s| s.style).unwrap_or_default();
+        if full.is_empty() {
+            out.push(Line::from(""));
+            continue;
+        }
+        for sub in full.split('\n') {
+            if sub.is_empty() {
+                out.push(Line::from(""));
+                continue;
+            }
+            let chars: Vec<char> = sub.chars().collect();
+            for chunk in chars.chunks(w) {
+                let s: String = chunk.iter().collect();
+                out.push(Line::from(Span::styled(s, style)));
+            }
+        }
+    }
+    out
+}
+
 pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some(view) = app.detail_view.clone() {
         draw_detail(f, app, &view);
@@ -93,27 +140,7 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
     }
 
     // Pre-wrap so we can compute exact line count and anchor to the bottom.
-    let width = area.width as usize;
-    let mut wrapped: Vec<Line> = Vec::new();
-    for line in &lines {
-        let full: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        let style = line.spans.first().map(|s| s.style).unwrap_or_default();
-        if full.is_empty() {
-            wrapped.push(Line::from(""));
-        } else {
-            for sub in full.split('\n') {
-                if sub.is_empty() {
-                    wrapped.push(Line::from(""));
-                } else {
-                    let chars: Vec<char> = sub.chars().collect();
-                    for chunk in chars.chunks(width.max(1)) {
-                        let s: String = chunk.iter().collect();
-                        wrapped.push(Line::from(Span::styled(s, style)));
-                    }
-                }
-            }
-        }
-    }
+    let wrapped = wrap_lines_to_width(&lines, area.width as usize);
 
     let total = wrapped.len() as u16;
     let scroll_y = total.saturating_sub(area.height);
@@ -201,7 +228,7 @@ fn draw_model_indicator(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_permission_overlay(f: &mut Frame, p: &crate::app::PermissionDialog, anchor: Rect) {
-    let h: u16 = 9;
+    let h: u16 = 10;
     let w = anchor.width.saturating_sub(4).min(100);
     let x = anchor.x + (anchor.width.saturating_sub(w)) / 2;
     let y = anchor.y + anchor.height.saturating_sub(h);
@@ -220,8 +247,12 @@ fn draw_permission_overlay(f: &mut Frame, p: &crate::app::PermissionDialog, anch
         Line::from(Span::raw(format!(" {}", truncate(&p.summary, (w as usize).saturating_sub(2))))),
         Line::from(""),
         Line::from(Span::styled(
-            " [y] approve   [n] deny   [a] approve all (this session)",
+            " [y/⏎] approve   [n] deny   [a] same cmd (session)",
             Style::default().fg(Color::Cyan),
+        )),
+        Line::from(Span::styled(
+            " [t] yolo — approve everything for the rest of this turn",
+            Style::default().fg(Color::Magenta),
         )),
     ];
 

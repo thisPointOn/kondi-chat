@@ -99,12 +99,17 @@ async fn main() -> io::Result<()> {
     loop {
         if needs_draw {
             // Drain completed messages into normal terminal scrollback.
+            // insert_before's `set_line` does not wrap, so we must pre-wrap
+            // every line to the terminal width or long content gets clipped
+            // at the right edge instead of flowing onto the next row.
+            let term_width = terminal.size()?.width as usize;
             let pending = std::mem::take(&mut app.pending_history);
             for item in pending {
-                let height = item.len() as u16;
+                let wrapped = ui::wrap_lines_to_width(&item, term_width);
+                let height = wrapped.len() as u16;
                 if height == 0 { continue; }
                 terminal.insert_before(height, |buf| {
-                    for (i, line) in item.iter().enumerate() {
+                    for (i, line) in wrapped.iter().enumerate() {
                         buf.set_line(0, i as u16, line, buf.area.width);
                     }
                 })?;
@@ -127,9 +132,10 @@ async fn main() -> io::Result<()> {
                 if permission_open {
                     let pending_id = app.pending_permissions[0].id.clone();
                     let decision: Option<&str> = match (key.code, key.modifiers) {
-                        (KeyCode::Char('y'), _) | (KeyCode::Char('Y'), _) => Some("approved"),
+                        (KeyCode::Char('y'), _) | (KeyCode::Char('Y'), _) | (KeyCode::Enter, _) => Some("approved"),
                         (KeyCode::Char('n'), _) | (KeyCode::Char('N'), _) | (KeyCode::Esc, _) => Some("denied"),
                         (KeyCode::Char('a'), _) | (KeyCode::Char('A'), _) => Some("approved-session"),
+                        (KeyCode::Char('t'), _) | (KeyCode::Char('T'), _) => Some("approved-turn"),
                         (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                             send_command(&mut writer, TuiCommand::Quit).await;
                             break;
@@ -179,6 +185,9 @@ async fn main() -> io::Result<()> {
                     }
                     (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
                         app.toggle_detail("reasoning");
+                    }
+                    (KeyCode::Char('y'), KeyModifiers::CONTROL) => {
+                        app.copy_last_response();
                     }
                     (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
                         app.show_activity = !app.show_activity;

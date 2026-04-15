@@ -14,7 +14,7 @@ function isPathSafe(base: string, fullPath: string): boolean {
   const rel = relative(base, fullPath);
   return !rel.startsWith('..') && !resolve(fullPath).includes('\0');
 }
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import type { ToolDefinition, Session, TaskKind } from '../types.ts';
 import type { Ledger } from '../audit/ledger.ts';
 import { runPipeline, type PipelineConfig } from './pipeline.ts';
@@ -402,22 +402,38 @@ function toolSearchCode(
 
   // process.stderr.write(`[tool] search_code: "${pattern}" in ${relPath}\n`);
 
-  // Sanitize glob to prevent command injection
+  // Sanitize glob (defense-in-depth even though execFileSync skips the shell).
   const safeGlob = glob ? glob.replace(/[^a-zA-Z0-9.*?_\-\/]/g, '') : '';
-  const globArg = safeGlob ? `--include=${JSON.stringify(safeGlob)}` : '';
-  const cmd = `grep -rn ${globArg} --exclude-dir=node_modules --exclude-dir=.git -e ${JSON.stringify(pattern)} ${JSON.stringify(searchPath)} | head -50`;
+  const grepArgs: string[] = [
+    '-rnE',                       // recursive, line numbers, extended regex
+    '--exclude-dir=node_modules',
+    '--exclude-dir=.git',
+  ];
+  if (safeGlob) grepArgs.push(`--include=${safeGlob}`);
+  grepArgs.push('-e', pattern, searchPath);
 
   try {
-    const output = execSync(cmd, {
+    const raw = execFileSync('grep', grepArgs, {
       encoding: 'utf-8',
       timeout: 15_000,
       cwd: ctx.workingDir,
-    }).trim();
-    return { content: output || 'No matches found.' };
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    const lines = raw.split('\n');
+    const head = lines.slice(0, 50).join('\n').trim();
+    return { content: head || 'No matches found.' };
   } catch (error: any) {
-    // grep returns exit code 1 for no matches
+    // grep returns exit code 1 for no matches.
     if (error.status === 1) {
       return { content: 'No matches found.' };
+    }
+    // Exit 2 = invalid regex / IO error. Surface a useful message rather
+    // than the raw shell complaint so the model can correct its pattern.
+    if (error.status === 2) {
+      return {
+        content: `Invalid regex: ${pattern} — grep -E rejected it. Try escaping special chars or use search_files for a literal lookup.`,
+        isError: true,
+      };
     }
     return { content: `Search error: ${error.message}`, isError: true };
   }

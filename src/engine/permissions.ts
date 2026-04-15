@@ -16,7 +16,7 @@ import { dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 
 export type PermissionTier = 'auto-approve' | 'confirm' | 'always-confirm';
-export type PermissionDecision = 'approved' | 'denied' | 'approved-session';
+export type PermissionDecision = 'approved' | 'denied' | 'approved-session' | 'approved-turn';
 
 export interface PermissionConfig {
   defaultTier: PermissionTier;
@@ -89,6 +89,12 @@ export class PermissionManager {
   private sessionApprovals = new Set<string>();
   /** Auto-generated sequential id */
   private nextId = 0;
+  /**
+   * Yolo-for-this-turn: approve every confirm-tier tool call until the
+   * backend declares the turn over via endTurn(). always-confirm tools
+   * (rm -rf, sudo, force-push to main, …) are NEVER bypassed.
+   */
+  private turnApproveAll = false;
 
   constructor(configPath: string, skipPermissions = false) {
     this.skip = skipPermissions;
@@ -135,6 +141,9 @@ export class PermissionManager {
     const tier = this.check(tool, args);
     if (tier === 'auto-approve') return 'approved';
 
+    // Yolo-for-this-turn covers everything except always-confirm.
+    if (tier !== 'always-confirm' && this.turnApproveAll) return 'approved';
+
     const fp = fingerprint(tool, args);
     if (tier !== 'always-confirm' && this.sessionApprovals.has(fp)) return 'approved';
 
@@ -159,6 +168,9 @@ export class PermissionManager {
       if (decision === 'approved-session' && tier !== 'always-confirm') {
         this.sessionApprovals.add(fp);
       }
+      if (decision === 'approved-turn' && tier !== 'always-confirm') {
+        this.turnApproveAll = true;
+      }
       return decision;
     });
   }
@@ -170,6 +182,11 @@ export class PermissionManager {
     clearTimeout(p.timeout);
     this.pending.delete(id);
     p.resolve(decision);
+  }
+
+  /** Backend calls this when the assistant turn completes — clears yolo. */
+  endTurn(): void {
+    this.turnApproveAll = false;
   }
 }
 

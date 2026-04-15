@@ -675,13 +675,14 @@ function geminiMessages(messages: LLMMessage[]): any[] {
 
 const MAX_RETRIES = 2;
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504, 529]);
-// Per-call LLM timeout. 60s is still generous for simple questions and
-// caps the worst-case "stuck in working..." duration before a retry kicks in.
-// The previous 120s meant a single hung connection tied the UI up for two
-// full minutes before the first retry.
+// Per-call LLM timeout. Reasoning models (GLM-5.x, o-series, R1) routinely
+// burn 60–180s of hidden CoT before producing a visible byte, so the cap
+// has to accommodate them. Non-reasoning models still return in seconds;
+// raising the ceiling just removes a false-positive timeout, it doesn't
+// slow anything down.
 // Spec 13 — per-call timeout and per-turn wall-clock cap.
-const LLM_TIMEOUT_MS = 60_000;
-const TURN_WALL_CLOCK_MS = 180_000;
+const LLM_TIMEOUT_MS = 240_000;
+const TURN_WALL_CLOCK_MS = 600_000;
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
