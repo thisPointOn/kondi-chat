@@ -13,6 +13,18 @@ import type {
 } from '../types.ts';
 import { getRateLimiter, RateLimitOverflowError } from './rate-limiter.ts';
 import { estimateTokens } from '../context/budget.ts';
+import { LlmCallError, type ErrorSeverity } from '../engine/errors.ts';
+
+/**
+ * Classify an HTTP status as recoverable (worth retrying) vs. fatal.
+ * 5xx + throttling codes are recoverable; everything else is treated as
+ * a hard failure (wrong key, bad request, unknown model, …).
+ */
+function severityForStatus(status: number): ErrorSeverity {
+  if (status === 429) return 'recoverable';
+  if (status >= 500 && status < 600) return 'recoverable';
+  return 'fatal';
+}
 
 // ---------------------------------------------------------------------------
 // SSE stream parser
@@ -168,7 +180,10 @@ async function callAnthropic(
 
   if (!resp.ok) {
     const text = await resp.text();
-    throw new Error(`Anthropic API ${resp.status}: ${text.substring(0, 500)}`);
+    throw new LlmCallError(
+      `Anthropic API ${resp.status}: ${text.substring(0, 500)}`,
+      { provider: 'anthropic', model, status: resp.status, severity: severityForStatus(resp.status) },
+    );
   }
 
   // Streaming path
@@ -396,7 +411,10 @@ async function callOpenAICompatible(
 
   if (!resp.ok) {
     const text = await resp.text();
-    throw new Error(`${provider} API ${resp.status}: ${text.substring(0, 500)}`);
+    throw new LlmCallError(
+      `${provider} API ${resp.status}: ${text.substring(0, 500)}`,
+      { provider, model, status: resp.status, severity: severityForStatus(resp.status) },
+    );
   }
 
   // Streaming path
@@ -607,7 +625,10 @@ async function callGemini(
 
   if (!resp.ok) {
     const text = await resp.text();
-    throw new Error(`Gemini API ${resp.status}: ${text.substring(0, 500)}`);
+    throw new LlmCallError(
+      `Gemini API ${resp.status}: ${text.substring(0, 500)}`,
+      { provider: 'google', model, status: resp.status, severity: severityForStatus(resp.status) },
+    );
   }
 
   const data: any = await resp.json();
@@ -741,7 +762,10 @@ export async function callLLM(req: LLMRequest): Promise<LLMResponse> {
       'google': 'GOOGLE_API_KEY',
       'nvidia-router': 'NVIDIA_API_KEY',
     };
-    throw new Error(`No API key for "${provider}". Set ${envVars[provider] || 'API_KEY'} in environment or .env file.`);
+    throw new LlmCallError(
+      `No API key for "${provider}". Set ${envVars[provider] || 'API_KEY'} in environment or .env file.`,
+      { provider, model, severity: 'fatal' },
+    );
   }
 
   // Try the requested model first
@@ -762,7 +786,10 @@ export async function callLLM(req: LLMRequest): Promise<LLMResponse> {
         catch (e) {
           if (e instanceof RateLimitOverflowError) {
             // Surface as retryable error so the existing fallback kicks in.
-            throw new Error(`API 503: ${e.message}`);
+            throw new LlmCallError(
+              `API 503: ${e.message}`,
+              { provider, model, status: 503, severity: 'recoverable', cause: e },
+            );
           }
           throw e;
         }
@@ -774,8 +801,15 @@ export async function callLLM(req: LLMRequest): Promise<LLMResponse> {
       return response;
     } catch (error) {
       lastError = error as Error;
-      const statusMatch = lastError.message.match(/API (\d+):/);
-      const statusCode = statusMatch ? parseInt(statusMatch[1]) : 0;
+      // Prefer the typed status from LlmCallError; fall back to parsing
+      // the message for legacy errors (anything thrown as bare Error).
+      let statusCode = 0;
+      if (lastError instanceof LlmCallError && typeof lastError.status === 'number') {
+        statusCode = lastError.status;
+      } else {
+        const statusMatch = lastError.message.match(/API (\d+):/);
+        if (statusMatch) statusCode = parseInt(statusMatch[1]);
+      }
       const retryAfter = parseRetryAfter(lastError.message);
       const isTimeout = /timeout after/.test(lastError.message);
       const retryable = RETRYABLE_STATUS_CODES.has(statusCode) || isTimeout;
@@ -861,6 +895,9 @@ function callProvider(
       return callOpenAICompatible('http://localhost:11434/v1', 'ollama', model, provider, req);
 
     default:
-      throw new Error(`Unknown provider "${provider}". Supported: anthropic, openai, deepseek, xai, zai, google, ollama, nvidia-router`);
+      throw new LlmCallError(
+        `Unknown provider "${provider}". Supported: anthropic, openai, deepseek, xai, zai, google, ollama, nvidia-router`,
+        { provider, model, severity: 'fatal' },
+      );
   }
 }

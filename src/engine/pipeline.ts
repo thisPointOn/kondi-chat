@@ -37,6 +37,16 @@ export interface PipelineConfig {
   workingDir: string;
   /** Run verification after execution? */
   autoVerify: boolean;
+  /**
+   * Optional event sink — if provided, the pipeline streams an
+   * `activity` event per phase as it runs. Threaded in from
+   * `ToolContext.emit` by `toolCreateTask` so the TUI can show
+   * "pipeline: dispatch → claude-sonnet …" / "pipeline: execute → gemini
+   * …" / "pipeline: verify → PASSED" in real time instead of blocking
+   * on a single opaque `create_task` tool call. Leaving this undefined
+   * preserves the silent behavior for any caller that wants it.
+   */
+  emit?: (event: Record<string, unknown>) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -99,10 +109,18 @@ export async function runPipeline(
     return { provider: config.provider, model: config.model, decision: undefined as any };
   };
 
+  const emit = config.emit;
+  emit?.({ type: 'activity', text: `pipeline: starting — "${userIntent.slice(0, 80)}"`, activity_type: 'step' });
+
   // -----------------------------------------------------------------------
   // Step 1: Dispatch — create task card
   // -----------------------------------------------------------------------
   const dispatchRoute = await route('dispatch', userIntent);
+  emit?.({
+    type: 'activity',
+    text: `pipeline: dispatch → ${dispatchRoute.model || '(fallback)'} (${dispatchRoute.decision?.reason || 'fallback'})`,
+    activity_type: 'step',
+  });
   let card, dispatchResponse;
   try {
     ({ card, response: dispatchResponse } = await createTaskCard(
@@ -147,6 +165,11 @@ export async function runPipeline(
     : '';
 
   const execRoute = await route('execute', card.goal, card.kind, card.failures);
+  emit?.({
+    type: 'activity',
+    text: `pipeline: execute → ${execRoute.model || '(fallback)'} (${execRoute.decision?.reason || 'fallback'})`,
+    activity_type: 'step',
+  });
   let executionResponse;
   try {
     executionResponse = await executeTaskCard(
@@ -175,14 +198,11 @@ export async function runPipeline(
     if (changes.length > 0) {
       const backupDir = join(config.workingDir, '.kondi-chat', 'backups', card.id);
       applyResult = applyChanges(config.workingDir, changes, backupDir);
-      // process.stderr.write(`  │  ╭─ apply\n`);
-      for (const f of applyResult.applied) {
-        // process.stderr.write(`  │  │  ${f.isNew ? '+' : '~'} ${f.path}\n`);
-      }
-      for (const s of applyResult.skipped) {
-        // process.stderr.write(`  │  │  ✗ ${s}\n`);
-      }
-      // process.stderr.write(`  │  ╰─ ${applyResult.applied.length} file(s) written\n`);
+      emit?.({
+        type: 'activity',
+        text: `pipeline: apply → ${applyResult.applied.length} file(s) written${applyResult.skipped.length > 0 ? `, ${applyResult.skipped.length} skipped` : ''}`,
+        activity_type: 'step',
+      });
     }
   }
 
@@ -193,9 +213,13 @@ export async function runPipeline(
 
   if (config.autoVerify && config.workingDir) {
     card.status = 'verifying';
-
-    // process.stderr.write(`  │  ╭─ verify (local)\n`);
+    emit?.({ type: 'activity', text: 'pipeline: verify → running tests/typecheck/lint', activity_type: 'step' });
     verification = verify(config.workingDir, session.repoMap);
+    emit?.({
+      type: 'activity',
+      text: `pipeline: verify → ${verification.passed ? 'PASSED' : 'FAILED'}`,
+      activity_type: 'step',
+    });
 
     const verifyOutput = [
       verification.testOutput ? `Tests: ${verification.passed ? 'PASS' : 'FAIL'}\n${verification.testOutput}` : '',
@@ -265,6 +289,11 @@ export async function runPipeline(
   // Step 4: Reflect — frontier summarizes what happened
   // -----------------------------------------------------------------------
   const reflectRoute = await route('reflect', card.goal);
+  emit?.({
+    type: 'activity',
+    text: `pipeline: reflect → ${reflectRoute.model || '(fallback)'} (${reflectRoute.decision?.reason || 'fallback'})`,
+    activity_type: 'step',
+  });
   let reflectionResponse: LLMResponse;
   try {
     reflectionResponse = await callLLM({
