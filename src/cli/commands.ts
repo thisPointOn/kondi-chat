@@ -90,7 +90,7 @@ export async function handleCommand(input: string, deps: CommandDeps): Promise<s
         // If there's no manual override, let the indicator reflect the
         // new profile name until the next turn resolves a concrete model.
         if (!router.rules.getOverride()) {
-          emit({ type: 'model_override', label: profiles.getActive().name });
+          emit({ type: 'model_override', label: profiles.getActive().name, pinned: false });
         }
         return `Mode: ${profiles.getActive().name}`;
       } catch (e) { return (e as Error).message; }
@@ -102,7 +102,7 @@ export async function handleCommand(input: string, deps: CommandDeps): Promise<s
         : 'Router: auto';
       if (alias === 'auto') {
         router.rules.setOverride(undefined);
-        emit({ type: 'model_override', label: profiles.getActive().name });
+        emit({ type: 'model_override', label: profiles.getActive().name, pinned: false });
         return 'Router: auto';
       }
       const model = registry.getByAlias(alias);
@@ -114,7 +114,7 @@ export async function handleCommand(input: string, deps: CommandDeps): Promise<s
         return `Unknown: ${alias}${hint}`;
       }
       router.rules.setOverride(model);
-      emit({ type: 'model_override', label: model.alias || model.id });
+      emit({ type: 'model_override', label: model.alias || model.id, pinned: true });
       return `Using: ${model.name} (@${model.alias})`;
     }
     case '/consultants': {

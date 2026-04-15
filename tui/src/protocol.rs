@@ -58,13 +58,18 @@ pub enum BackendEvent {
     #[serde(rename = "command_result")]
     CommandResult { output: String },
 
-    /// Backend tells the TUI the routing override (or profile) changed so
-    /// the model indicator at the bottom of the viewport can update
-    /// without waiting for the next turn. `label` is what the indicator
-    /// should show — an alias (e.g. "gemini"), "auto" when the override
-    /// is cleared, or a profile name.
+    /// Backend tells the TUI the routing state changed so the bottom
+    /// indicator can update without waiting for the next turn. `label`
+    /// is what to display — a model alias when pinned, or a profile
+    /// name when the router is doing its job. `pinned` tells the TUI
+    /// which label style to use: "routing disabled → @<alias>" vs.
+    /// "routing: <profile>".
     #[serde(rename = "model_override")]
-    ModelOverride { label: String },
+    ModelOverride {
+        label: String,
+        #[serde(default)]
+        pinned: bool,
+    },
 
     /// Spec 01 — ask the user to approve a tool call.
     #[serde(rename = "permission_request")]

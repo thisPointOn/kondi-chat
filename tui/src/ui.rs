@@ -284,15 +284,22 @@ fn draw_model_indicator(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
-    let last_stats = app.messages.iter().rev().find_map(|m| m.stats.as_ref());
-    let full_model = last_stats.and_then(|s| s.models.first()).cloned().unwrap_or_else(|| app.model.clone());
-    let provider = last_stats.and_then(|s| s.provider.clone()).unwrap_or_default();
-
-    let model = Paragraph::new(Span::styled(
-        format!(" {}{} @{}", if provider.is_empty() { String::new() } else { format!("{} / ", provider) }, full_model, app.model),
-        Style::default().fg(Color::DarkGray),
-    ));
-    f.render_widget(model, chunks[0]);
+    // Bottom indicator: tell the user at a glance whether the router is
+    // making model decisions (and which profile) or whether /use has
+    // pinned one specific model (in which case routing is effectively
+    // disabled for the duration of the override).
+    let spans: Vec<Span> = if app.routing_pinned {
+        vec![
+            Span::styled(" routing disabled → @", Style::default().fg(Color::Yellow)),
+            Span::styled(app.model.clone(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]
+    } else {
+        vec![
+            Span::styled(" routing: ", Style::default().fg(Color::Green)),
+            Span::styled(app.model.clone(), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        ]
+    };
+    f.render_widget(Paragraph::new(Line::from(spans)), chunks[0]);
 
     let cost = Paragraph::new(Span::styled(
         format!("session: ${:.4} ", app.session_cost),

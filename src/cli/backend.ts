@@ -274,6 +274,19 @@ async function main() {
     resumed_message_count: resumed ? session.messages.length : null,
   });
 
+  // Tell the TUI what the routing state is at startup so the bottom
+  // indicator renders correctly before the first turn arrives. If a
+  // prior session restored a /use override, we surface that; otherwise
+  // we show the profile name under "routing:".
+  {
+    const override = router.rules.getOverride();
+    if (override) {
+      emit({ type: 'model_override', label: override.alias || override.id, pinned: true });
+    } else {
+      emit({ type: 'model_override', label: profiles.getActive().name, pinned: false });
+    }
+  }
+
   // Telemetry-disabled startup banner removed — it rendered on every launch
   // and cluttered the status line. Users can discover /telemetry via /help.
 
