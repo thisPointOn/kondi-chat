@@ -36,7 +36,11 @@ import { ToolManager } from '../mcp/tool-manager.ts';
 import { CouncilProfileManager } from '../council/profiles.ts';
 import { executeCouncil } from '../council/tool.ts';
 import { RoutingCollector } from '../router/collector.ts';
-import type { ModelRegistry, ModelEntry } from '../router/registry.ts';
+import type { ModelRegistry } from '../router/registry.ts';
+import {
+  collapseOldToolResults, compactInLoop, pickCompressionModel, classifyPhase,
+} from './submit-helpers.ts';
+import { handleCommand } from './commands.ts';
 import { Analytics } from '../audit/analytics.ts';
 import { TelemetryEmitter } from '../audit/telemetry.ts';
 import { runFirstRunWizard, checkForUpdate, readActiveProfile, writeActiveProfile } from './wizard.ts';
@@ -386,7 +390,12 @@ async function main() {
         emitGitInfo();
         return;
       }
-      const output = await handleCommand(cmd.text, session, contextManager, ledger, registry, collector, toolCtx, mcpClient, toolManager, workingDir, profiles, router, councilProfiles, councilPath, analytics, checkpointManager, sessionStore, rateLimiter, pendingImages, telemetry);
+      const output = await handleCommand(cmd.text, {
+        session, contextManager, ledger, registry, collector, toolCtx,
+        workingDir, profiles, router, councilProfiles, councilPath,
+        analytics, checkpointManager, sessionStore, rateLimiter,
+        pendingImages, telemetry, emit,
+      });
       emit({ type: 'command_result', output });
       refreshGit();
       emitGitInfo();
@@ -428,110 +437,8 @@ async function main() {
  * refine this inside Router.select(), but the phase decides which
  * preference list applies.
  */
-/**
- * Stub tool results older than `keepLatest` iterations in place so they stop
- * costing input tokens on every subsequent LLM call inside an agent loop.
- *
- * Rationale: the ledger showed one user turn going 10k → 23k input tokens as
- * `read_file` / `search_code` results piled up in the messages array. Most
- * of that content is no longer load-bearing two iterations later — the model
- * has already read whatever mattered and moved on. We keep the last
- * `keepLatest` tool turns verbatim and collapse older ones into one-line
- * placeholders. Errors are never stubbed. `messages` is mutated in place;
- * it's a local buffer to handleSubmit, so there's no cross-turn leakage.
- */
-function collapseOldToolResults(messages: LLMMessage[], keepLatest = 2, minLen = 300): number {
-  let saved = 0;
-  let keptToolTurns = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.role !== 'tool' || !m.toolResults) continue;
-    if (keptToolTurns < keepLatest) {
-      keptToolTurns++;
-      continue;
-    }
-    for (const tr of m.toolResults) {
-      if (tr.isError) continue;
-      const origLen = (tr.content || '').length;
-      if (origLen < minLen) continue;
-      const stub = `[collapsed: ${origLen} chars from earlier iteration — content pruned to save context]`;
-      saved += origLen - stub.length;
-      tr.content = stub;
-    }
-  }
-  return saved;
-}
-
-/** Cheap estimate of total message tokens (4 chars ≈ 1 token). */
-function estimateMessagesTokens(messages: LLMMessage[]): number {
-  let chars = 0;
-  for (const m of messages) {
-    if (m.content) chars += m.content.length;
-    if (m.toolCalls) chars += JSON.stringify(m.toolCalls).length;
-    if (m.toolResults) for (const tr of m.toolResults) chars += (tr.content || '').length;
-  }
-  return Math.ceil(chars / 4);
-}
-
-/**
- * Adaptive in-loop compaction. Escalates aggressiveness until the token
- * estimate is under the profile's contextBudget:
- *
- *   pass 1: keep 2 tool turns, stub anything ≥ 300 chars
- *   pass 2: keep 1 tool turn, stub anything ≥ 100 chars
- *   pass 3: keep 1 tool turn, stub anything ≥ 50 chars
- *
- * No LLM calls — pure local string manipulation. Returns the final token
- * estimate so the caller can emit it as an activity line.
- */
-function compactInLoop(messages: LLMMessage[], budget: number): { before: number; after: number; savedBytes: number } {
-  const before = estimateMessagesTokens(messages);
-  if (before <= budget) return { before, after: before, savedBytes: 0 };
-
-  let savedBytes = collapseOldToolResults(messages, 2, 300);
-  if (estimateMessagesTokens(messages) > budget) {
-    savedBytes += collapseOldToolResults(messages, 1, 100);
-  }
-  if (estimateMessagesTokens(messages) > budget) {
-    savedBytes += collapseOldToolResults(messages, 1, 50);
-  }
-  return { before, after: estimateMessagesTokens(messages), savedBytes };
-}
-
-/**
- * Pick the cheapest enabled model for compaction-style LLM calls.
- * Respects the active profile's allowedProviders so `zai` mode compacts
- * with glm-4.5-flash (free) instead of bleeding out to claude-haiku.
- * Returns undefined if nothing suitable is enabled — caller keeps the
- * hardcoded ContextManager default in that case.
- */
-function pickCompressionModel(
-  registry: ModelRegistry,
-  profile: BudgetProfile,
-): { provider: ProviderId; id: string } | undefined {
-  const allowed = profile.allowedProviders;
-  const candidates: ModelEntry[] = registry.getAvailable();
-  const inScope = allowed && allowed.length > 0
-    ? candidates.filter(m => allowed.includes(m.provider))
-    : candidates;
-  const withSummarization = inScope.filter(m => m.capabilities.includes('summarization'));
-  const pool = withSummarization.length > 0 ? withSummarization : inScope;
-  if (pool.length === 0) return undefined;
-  pool.sort((a, b) => a.inputCostPer1M - b.inputCostPer1M);
-  return { provider: pool[0].provider, id: pool[0].id };
-}
-
-function classifyPhase(input: string): 'execute' | 'discuss' {
-  const s = input.toLowerCase();
-  // Strong coding-intent verbs paired with code-y nouns / file extensions / language names.
-  if (/\b(write|make|create|build|implement|generate|add|fix|debug|refactor|optimize|update|change|modify|edit|remove|rewrite|port|translate|save|store|persist|dump|export|append)\b[^\n]{0,80}\b(code|script|function|class|method|file|test|module|app|component|endpoint|api|page|cli|tool|server|client|parser|wrapper|helper|util|util(?:s|ity)|service|model|database|schema|migration|response|answer|reply|output|log|notes?|disk|report|review|summary|transcript)\b/.test(s)) return 'execute';
-  if (/\bin\s+(python|javascript|typescript|rust|go(lang)?|java|c\+\+|c#|ruby|php|swift|kotlin|bash|shell|sql)\b/.test(s)) return 'execute';
-  if (/\.(py|js|ts|tsx|jsx|rs|go|java|cpp|cc|h|hpp|cs|rb|php|swift|kt|sh|sql|html|css|scss|json|yml|yaml|toml|md|txt)\b/.test(s)) return 'execute';
-  if (/\b(write|make|create|build|implement)\s+(a|an|the)?\s*(python|js|ts|rust|go|bash|shell|sql)\b/.test(s)) return 'execute';
-  // File-oriented imperative: "save X to disk/file" or "write X to <path>".
-  if (/\b(save|write|store|dump|export|persist|append)\b[^\n]{0,40}\b(to|as|into|in)\b[^\n]{0,80}\b(disk|file|folder|directory|path)\b/.test(s)) return 'execute';
-  return 'discuss';
-}
+// Helpers (collapseOldToolResults, compactInLoop, pickCompressionModel,
+// classifyPhase) live in ./submit-helpers.ts and are imported at the top.
 
 async function handleSubmit(
   input: string,
@@ -816,197 +723,6 @@ async function handleSubmit(
   await contextManager.updateSessionState();
 }
 
-// ── Slash commands ───────────────────────────────────────────────────
-
-async function handleCommand(
-  input: string, session: Session, contextManager: ContextManager,
-  ledger: Ledger, registry: ModelRegistry, collector: RoutingCollector, toolCtx: ToolContext,
-  mcpClient: McpClientManager, toolManager: ToolManager, workingDir: string,
-  profiles: ProfileManager, router: UnifiedRouter,
-  councilProfiles: CouncilProfileManager, councilPath: string,
-  analytics: Analytics,
-  checkpointManager: CheckpointManager,
-  sessionStore: SessionStore,
-  rateLimiter: RateLimiter,
-  pendingImages: ImageAttachment[],
-  telemetry: TelemetryEmitter,
-): Promise<string> {
-  const parts = input.split(/\s+/);
-  const cmd = parts[0];
-
-  switch (cmd) {
-    case '/mode': {
-      const mode = parts[1];
-      if (!mode) return profiles.format();
-      try {
-        profiles.setProfile(mode as any);
-        router.rules.setProfile(profiles.getActive());
-        // Reapply profile scope to intent router + compression model so
-        // switching to/from zai updates everything in one shot.
-        const p = profiles.getActive();
-        const cheap = pickCompressionModel(registry, p);
-        if (cheap) contextManager.setCompressionModel(cheap.provider, cheap.id);
-        router.setProfileScope({
-          allowedProviders: p.allowedProviders,
-          classifier: cheap ? { provider: cheap.provider, model: cheap.id } : undefined,
-          rolePinning: p.rolePinning,
-        });
-        writeActiveProfile(resolve(workingDir, '.kondi-chat'), profiles.getActive().name);
-        // If there's no manual override, let the indicator reflect the
-        // new profile name until the next turn resolves a concrete model.
-        if (!router.rules.getOverride()) {
-          emit({ type: 'model_override', label: profiles.getActive().name });
-        }
-        return `Mode: ${profiles.getActive().name}`;
-      } catch (e) { return (e as Error).message; }
-    }
-    case '/use': {
-      const alias = parts[1];
-      if (!alias) return router.rules.getOverride()
-        ? `Using: ${router.rules.getOverride()!.alias || router.rules.getOverride()!.id}`
-        : 'Router: auto';
-      if (alias === 'auto') {
-        router.rules.setOverride(undefined);
-        emit({ type: 'model_override', label: profiles.getActive().name });
-        return 'Router: auto';
-      }
-      const model = registry.getByAlias(alias);
-      if (!model) {
-        const candidates: string[] = registry.findAliasCandidates(alias);
-        const hint = candidates.length > 1
-          ? ` — ambiguous, could be: ${candidates.map((a: string) => `@${a}`).join(', ')}`
-          : ` — available: ${registry.getAliases().join(', ')}`;
-        return `Unknown: ${alias}${hint}`;
-      }
-      router.rules.setOverride(model);
-      emit({ type: 'model_override', label: model.alias || model.id });
-      return `Using: ${model.name} (@${model.alias})`;
-    }
-    case '/consultants': {
-      const roster = toolCtx.consultants ?? [];
-      if (roster.length === 0) return 'No consultants configured. Edit .kondi-chat/consultants.json to add some.';
-      const lines: string[] = ['Available consultants:', ''];
-      for (const c of roster) {
-        lines.push(`  ${c.role}`);
-        lines.push(`    ${c.name} (${c.provider}/${c.model})`);
-        lines.push(`    ${c.description}`);
-        lines.push('');
-      }
-      lines.push('Edit .kondi-chat/consultants.json to add, remove, or tune them.');
-      return lines.join('\n');
-    }
-    case '/models': return registry.format();
-    case '/health': { await registry.checkHealth(); return registry.formatHealth(); }
-    case '/routing': return collector.formatStats();
-    case '/status': {
-      const budget = contextManager.getBudgetStatus();
-      return [
-        `Session: ${session.id.slice(0, 8)}`,
-        `Tokens: ${session.totalInputTokens.toLocaleString()}in / ${session.totalOutputTokens.toLocaleString()}out`,
-        `Cost: $${session.totalCostUsd.toFixed(4)}`,
-        `Context: ${budget.currentContextSize.toLocaleString()}/${budget.modelContextWindow.toLocaleString()} (${(budget.contextUtilization * 100).toFixed(0)}%)`,
-      ].join('\n');
-    }
-    case '/cost': {
-      const totals = ledger.getTotals();
-      if (totals.calls === 0) return 'No calls yet.';
-      const lines = [`Total: ${totals.calls} calls | $${totals.costUsd.toFixed(4)}`];
-      for (const [m, d] of Object.entries(totals.byModel).sort((a, b) => (b[1] as any).costUsd - (a[1] as any).costUsd)) {
-        lines.push(`  ${m}: ${(d as any).calls} calls $${(d as any).costUsd.toFixed(4)}`);
-      }
-      return lines.join('\n');
-    }
-    case '/council': {
-      if (!parts[1] || parts[1] === 'list') return councilProfiles.format();
-      if (parts[1] === 'run' && parts[2]) {
-        const brief = parts.slice(3).join(' ');
-        if (!brief) return 'Usage: /council run <profile> <brief>';
-        const result = await executeCouncil(parts[2], brief, [], workingDir, councilPath, councilProfiles);
-        return result.content;
-      }
-      return 'Usage: /council [list|run <profile> <brief>]';
-    }
-    case '/analytics': {
-      const days = parts[1] ? parseInt(parts[1]) : 30;
-      if (parts[1] === 'rebuild') { analytics.rebuild(); return 'Analytics rebuilt from all ledger files.'; }
-      if (parts[1] === 'export') { return analytics.exportAll(); }
-      return analytics.format(days);
-    }
-    case '/attach': {
-      const p = parts.slice(1).join(' ');
-      if (!p) return 'Usage: /attach <path to image>';
-      try {
-        const abs = resolve(workingDir, p);
-        const buf = readFileSync(abs);
-        const MAX_BYTES = 10 * 1024 * 1024;
-        if (buf.byteLength > MAX_BYTES) return `Image too large: ${buf.byteLength} > 10MB`;
-        if (pendingImages.length >= 5) return 'Already 5 images queued for next message.';
-        const ext = (p.split('.').pop() || '').toLowerCase();
-        const mime: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
-        const mimeType = mime[ext];
-        if (!mimeType) return `Unsupported image type: .${ext}`;
-        pendingImages.push({
-          mimeType,
-          base64: buf.toString('base64'),
-          originalPath: p,
-          sizeBytes: buf.byteLength,
-        });
-        return `Attached ${p} (${mimeType}, ${buf.byteLength} bytes). Queued ${pendingImages.length}/5 for next message.`;
-      } catch (e) {
-        return `Attach failed: ${(e as Error).message}`;
-      }
-    }
-    case '/telemetry': {
-      const sub = parts[1] || 'status';
-      if (sub === 'enable') { telemetry.enable(); return 'Telemetry: local-only (no network). Run /telemetry details to see the schema.'; }
-      if (sub === 'disable') { telemetry.disable(); return 'Telemetry: disabled (local events cleared).'; }
-      if (sub === 'delete') { telemetry.deleteAll(); return 'Telemetry: all local events deleted.'; }
-      if (sub === 'export') { return telemetry.export(); }
-      if (sub === 'details') {
-        return [
-          'Telemetry records anonymous counters only. Allowed kinds:',
-          '  feature_used   — enum counter (session_started, undo_invoked, …)',
-          '  tool_called    — counter by category (filesystem_read, git, web, …)',
-          '  error_occurred — counter by class (llm_timeout, permission_denied, …)',
-          'NEVER recorded: prompts, responses, tool args, file paths, URLs, API keys.',
-          'Storage: .kondi-chat/telemetry.json (local only). No network in v1.',
-        ].join('\n');
-      }
-      return telemetry.format();
-    }
-    case '/rate-limits': return rateLimiter.format();
-    case '/sessions': return sessionStore.format(workingDir);
-    case '/resume': {
-      if (!parts[1]) return 'Usage: /resume <session-id>';
-      const p = sessionStore.load(parts[1]);
-      if (!p) return `Session not found: ${parts[1]}`;
-      return `To resume ${p.session.id.slice(0, 8)}, restart with:\n  kondi-chat --resume ${p.session.id}`;
-    }
-    case '/checkpoints': return checkpointManager.format();
-    case '/undo': {
-      const arg = parts[1];
-      try {
-        if (!arg) {
-          const r = checkpointManager.restore(-1);
-          return `Reverted ${r.restored.id} (turn ${r.restored.turnNumber}): ${r.restored.summary}\n  files: ${r.filesRestored.length}${r.errors.length ? `  errors: ${r.errors.join('; ')}` : ''}`;
-        }
-        if (/^\d+$/.test(arg)) {
-          const n = parseInt(arg, 10);
-          const r = checkpointManager.restore(-n);
-          return `Reverted ${n} checkpoint(s) to ${r.restored.id} (turn ${r.restored.turnNumber}). Files: ${r.filesRestored.length}`;
-        }
-        const cp = checkpointManager.get(arg);
-        if (!cp) return `Unknown checkpoint: ${arg}. Run /checkpoints to list.`;
-        const r = checkpointManager.restore(arg);
-        return `Restored ${r.restored.id}. Files: ${r.filesRestored.join(', ') || '(none)'}`;
-      } catch (e) {
-        return `Undo failed: ${(e as Error).message}`;
-      }
-    }
-    case '/help': return formatHelp(parts[1]);
-    default: return `Unknown: ${cmd}. Try /help`;
-  }
-}
 
 function formatToolArgs(tc: any): string {
   const args = tc.arguments;
