@@ -180,24 +180,13 @@ impl App {
     }
 
     /// Queue a submit/command to fire when the current turn finishes.
-    /// The user line is rendered to scrollback immediately (with a
-    /// "queued" marker) so the user has confirmation the keystroke
-    /// landed. When the turn ends, `pop_pending_submit` hands the text
-    /// back and the main loop dispatches it normally.
+    /// No scrollback line is written — the inline viewport renders the
+    /// full live queue below the in-progress message, and the message
+    /// itself will land in scrollback (as a normal `❯` user line) when
+    /// it actually fires via `pop_pending_submit`. Keeping the queued
+    /// text out of scrollback until it really runs avoids a duplicate
+    /// "queued: X" + "X" pair once the current turn finishes.
     pub fn queue_submit(&mut self, text: String) {
-        // Visual indicator that it's queued, not sent.
-        let preview = if text.len() > 80 {
-            format!("{}…", &text[..80.min(text.len())])
-        } else {
-            text.clone()
-        };
-        self.pending_history.push(vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                format!("⧗ queued: {}", preview),
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
-            )),
-        ]);
         self.pending_submits.push_back(text);
     }
 

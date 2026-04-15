@@ -199,6 +199,34 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
         )));
     }
 
+    // Live queue preview — if the user has type-ahead messages waiting
+    // to fire, show them numbered in dim magenta italic below the
+    // in-progress message. Makes the pending stack visible at a glance
+    // without needing a detail view, and the list shrinks live as each
+    // entry drains into its own turn when the current one finishes.
+    if !app.pending_submits.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  ⧗ queue ({}) — Esc to clear:", app.pending_submits.len()),
+            Style::default().fg(Color::Rgb(180, 140, 200)).add_modifier(Modifier::BOLD),
+        )));
+        for (i, text) in app.pending_submits.iter().enumerate() {
+            // Truncate each preview to keep the viewport tidy; full text
+            // is preserved and fires verbatim when drained.
+            let one_line: String = text.replace('\n', " ↵ ");
+            let preview = if one_line.chars().count() > 80 {
+                let truncated: String = one_line.chars().take(77).collect();
+                format!("{truncated}…")
+            } else {
+                one_line
+            };
+            lines.push(Line::from(Span::styled(
+                format!("    {:>2}. {}", i + 1, preview),
+                Style::default().fg(Color::Rgb(180, 140, 200)).add_modifier(Modifier::ITALIC | Modifier::DIM),
+            )));
+        }
+    }
+
     // Pre-wrap so we can compute exact line count and anchor to the bottom.
     let wrapped = wrap_lines_to_width(&lines, area.width as usize);
 
