@@ -17,6 +17,7 @@ import { verify } from './verify.ts';
 import { Ledger } from '../audit/ledger.ts';
 import type { Router as UnifiedRouter } from '../router/index.ts';
 import type { RoutingCollector } from '../router/collector.ts';
+import { PipelineError } from './errors.ts';
 
 // ---------------------------------------------------------------------------
 // Pipeline configuration
@@ -102,15 +103,22 @@ export async function runPipeline(
   // Step 1: Dispatch — create task card
   // -----------------------------------------------------------------------
   const dispatchRoute = await route('dispatch', userIntent);
-  // process.stderr.write(`  │  ╭─ dispatch${dispatchRoute.decision ? ` [${dispatchRoute.decision.reason}]` : ''}\n`);
-  const { card, response: dispatchResponse } = await createTaskCard(
-    userIntent,
-    session.state,
-    session.repoMap,
-    dispatchRoute.provider,
-    dispatchRoute.model,
-    ledger,
-  );
+  let card, dispatchResponse;
+  try {
+    ({ card, response: dispatchResponse } = await createTaskCard(
+      userIntent,
+      session.state,
+      session.repoMap,
+      dispatchRoute.provider,
+      dispatchRoute.model,
+      ledger,
+    ));
+  } catch (e) {
+    throw new PipelineError(
+      `dispatch failed: ${e instanceof Error ? e.message : String(e)}`,
+      { severity: 'fatal', stage: 'dispatch', cause: e },
+    );
+  }
   // process.stderr.write(`  │  │  model: ${dispatchResponse.model}  ${dispatchResponse.inputTokens}in/${dispatchResponse.outputTokens}out\n`);
   // process.stderr.write(`  │  ╰─ task ${card.id} (${card.kind}): ${card.goal.slice(0, 60)}\n`);
 
@@ -139,15 +147,22 @@ export async function runPipeline(
     : '';
 
   const execRoute = await route('execute', card.goal, card.kind, card.failures);
-  // process.stderr.write(`  │  ╭─ execute${execRoute.decision ? ` [${execRoute.decision.reason}]` : ''}\n`);
-  let executionResponse = await executeTaskCard(
-    card,
-    session.repoMap,
-    fileContents,
-    execRoute.provider,
-    execRoute.model,
-    ledger,
-  );
+  let executionResponse;
+  try {
+    executionResponse = await executeTaskCard(
+      card,
+      session.repoMap,
+      fileContents,
+      execRoute.provider,
+      execRoute.model,
+      ledger,
+    );
+  } catch (e) {
+    throw new PipelineError(
+      `execute failed: ${e instanceof Error ? e.message : String(e)}`,
+      { severity: 'recoverable', stage: 'execute', cause: e },
+    );
+  }
   // process.stderr.write(`  │  │  model: ${executionResponse.model}  ${executionResponse.inputTokens}in/${executionResponse.outputTokens}out\n`);
   // process.stderr.write(`  │  ╰─ done\n`);
 
@@ -250,8 +265,9 @@ export async function runPipeline(
   // Step 4: Reflect — frontier summarizes what happened
   // -----------------------------------------------------------------------
   const reflectRoute = await route('reflect', card.goal);
-  // process.stderr.write(`  │  ╭─ reflect${reflectRoute.decision ? ` [${reflectRoute.decision.reason}]` : ''}\n`);
-  const reflectionResponse = await callLLM({
+  let reflectionResponse: LLMResponse;
+  try {
+    reflectionResponse = await callLLM({
     provider: reflectRoute.provider,
     model: reflectRoute.model,
     systemPrompt: 'You are summarizing the results of a coding task for the user. Be concise. Report what was done, whether it passed verification, and what to do next.',
@@ -269,8 +285,17 @@ ${verification.typecheckOutput ? `Typecheck: ${verification.typecheckOutput.slic
 Summarize the results for the user. If failed, suggest what to try next.`,
     maxOutputTokens: 1500,
   });
-  // process.stderr.write(`  │  │  model: ${reflectionResponse.model}  ${reflectionResponse.inputTokens}in/${reflectionResponse.outputTokens}out\n`);
-  // process.stderr.write(`  │  ╰─ done\n`);
+  } catch (e) {
+    // Reflection is non-essential — we already executed and verified. If
+    // the reflection call fails, degrade gracefully with a synthetic
+    // summary instead of nuking the whole pipeline result.
+    reflectionResponse = {
+      content: `(reflection failed: ${e instanceof Error ? e.message : String(e)})`,
+      model: reflectRoute.model || 'unknown',
+      provider: reflectRoute.provider,
+      inputTokens: 0, outputTokens: 0, latencyMs: 0,
+    };
+  }
 
   ledger.record('reflect', reflectionResponse, `Reflect on task ${card.id}`, { taskId: card.id });
 

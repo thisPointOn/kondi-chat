@@ -7,6 +7,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, copyFileSync } from 'node:fs';
+import { readFile, writeFile, mkdir, copyFile } from 'node:fs/promises';
 import { join, resolve, dirname, relative } from 'node:path';
 
 /** Safely check if a path is within a base directory */
@@ -300,7 +301,7 @@ export async function executeTool(
         return await executeConsult(args, ctx.consultants ?? [], ctx.ledger, ctx.workingDir);
       }
       case 'read_file':
-        return toolReadFile(args, ctx);
+        return await toolReadFile(args, ctx);
       case 'list_files':
         return toolListFiles(args, ctx);
       case 'search_code':
@@ -310,9 +311,9 @@ export async function executeTool(
       case 'update_plan':
         return toolUpdatePlan(args, ctx);
       case 'write_file':
-        return toolWriteFile(args, ctx);
+        return await toolWriteFile(args, ctx);
       case 'edit_file':
-        return toolEditFile(args, ctx);
+        return await toolEditFile(args, ctx);
       case 'update_memory':
         return toolUpdateMemory(args, ctx);
       case 'spawn_agent':
@@ -332,12 +333,31 @@ export async function executeTool(
 async function toolCreateTask(
   args: Record<string, unknown>,
   ctx: ToolContext,
-): Promise<{ content: string }> {
+): Promise<ToolExecutionResult> {
   const description = args.description as string;
 
-  // process.stderr.write(`[tool] create_task: ${description.slice(0, 80)}\n`);
-
-  const result = await runPipeline(description, ctx.session, ctx.ledger, ctx.pipelineConfig);
+  let result;
+  try {
+    result = await runPipeline(description, ctx.session, ctx.ledger, ctx.pipelineConfig);
+  } catch (e) {
+    const { PipelineError } = await import('./errors.ts');
+    if (e instanceof PipelineError) {
+      // Structured pipeline failure — tell the model which stage broke
+      // and whether it's worth retrying.
+      return {
+        content:
+          `create_task failed at stage "${e.stage}" (${e.severity}): ${e.message}\n\n` +
+          (e.severity === 'recoverable'
+            ? 'This is recoverable — consider adjusting the task description or reading related files first.'
+            : 'This is fatal — the pipeline cannot complete this task as described. Consider a different approach.'),
+        isError: true,
+      };
+    }
+    return {
+      content: `create_task failed: ${e instanceof Error ? e.message : String(e)}`,
+      isError: true,
+    };
+  }
 
   const summary = [
     `Task ${result.task.id} (${result.task.kind}): ${result.task.status}`,
@@ -353,10 +373,10 @@ async function toolCreateTask(
   return { content: summary };
 }
 
-function toolReadFile(
+async function toolReadFile(
   args: Record<string, unknown>,
   ctx: ToolContext,
-): { content: string; isError?: boolean } {
+): Promise<{ content: string; isError?: boolean }> {
   const relPath = args.path as string;
   const maxLines = (args.max_lines as number) || 200;
   const base = resolve(ctx.workingDir);
@@ -365,12 +385,15 @@ function toolReadFile(
   if (!isPathSafe(base, fullPath)) {
     return { content: `Path traversal blocked: ${relPath}`, isError: true };
   }
-  if (!existsSync(fullPath)) {
-    return { content: `File not found: ${relPath}`, isError: true };
-  }
 
   ctx.setActiveFile?.(relPath);
-  const content = readFileSync(fullPath, 'utf-8');
+  let content: string;
+  try {
+    content = await readFile(fullPath, 'utf-8');
+  } catch (e: any) {
+    if (e?.code === 'ENOENT') return { content: `File not found: ${relPath}`, isError: true };
+    return { content: `Read failed: ${e?.message || String(e)}`, isError: true };
+  }
   const lines = content.split('\n');
   if (lines.length > maxLines) {
     return {
@@ -529,10 +552,10 @@ function toolUpdatePlan(
   return { content: `Plan updated.\n${summary}` };
 }
 
-function toolWriteFile(
+async function toolWriteFile(
   args: Record<string, unknown>,
   ctx: ToolContext,
-): ToolExecutionResult {
+): Promise<ToolExecutionResult> {
   const relPath = args.path as string;
   const content = args.content as string;
   const base = resolve(ctx.workingDir);
@@ -545,16 +568,19 @@ function toolWriteFile(
   const existed = existsSync(fullPath);
   let originalContent = '';
   if (existed) {
-    try { originalContent = readFileSync(fullPath, 'utf-8'); } catch { originalContent = ''; }
+    try { originalContent = await readFile(fullPath, 'utf-8'); } catch { originalContent = ''; }
     const backupDir = join(ctx.workingDir, '.kondi-chat', 'backups', 'latest');
     const backupPath = join(backupDir, relPath);
-    mkdirSync(dirname(backupPath), { recursive: true });
-    copyFileSync(fullPath, backupPath);
+    await mkdir(dirname(backupPath), { recursive: true });
+    await copyFile(fullPath, backupPath);
   }
 
-  // Create parent directories and write
-  mkdirSync(dirname(fullPath), { recursive: true });
-  writeFileSync(fullPath, content);
+  try {
+    await mkdir(dirname(fullPath), { recursive: true });
+    await writeFile(fullPath, content);
+  } catch (e: any) {
+    return { content: `Write failed: ${e?.message || String(e)}`, isError: true };
+  }
   ctx.setActiveFile?.(relPath);
   ctx.mutatedFiles?.add(relPath);
 
@@ -565,10 +591,10 @@ function toolWriteFile(
   };
 }
 
-function toolEditFile(
+async function toolEditFile(
   args: Record<string, unknown>,
   ctx: ToolContext,
-): ToolExecutionResult {
+): Promise<ToolExecutionResult> {
   const relPath = args.path as string;
   const oldString = args.old_string as string;
   const newString = args.new_string as string;
@@ -578,13 +604,14 @@ function toolEditFile(
   if (!isPathSafe(base, fullPath)) {
     return { content: `Path traversal blocked: ${relPath}`, isError: true };
   }
-  if (!existsSync(fullPath)) {
-    return { content: `File not found: ${relPath}`, isError: true };
+
+  let original: string;
+  try {
+    original = await readFile(fullPath, 'utf-8');
+  } catch (e: any) {
+    if (e?.code === 'ENOENT') return { content: `File not found: ${relPath}`, isError: true };
+    return { content: `Read failed: ${e?.message || String(e)}`, isError: true };
   }
-
-  // process.stderr.write(`[tool] edit_file: ${relPath}\n`);
-
-  const original = readFileSync(fullPath, 'utf-8');
 
   // Check the old_string exists
   const idx = original.indexOf(oldString);
@@ -601,12 +628,20 @@ function toolEditFile(
   // Backup
   const backupDir = join(ctx.workingDir, '.kondi-chat', 'backups', 'latest');
   const backupPath = join(backupDir, relPath);
-  mkdirSync(dirname(backupPath), { recursive: true });
-  copyFileSync(fullPath, backupPath);
+  try {
+    await mkdir(dirname(backupPath), { recursive: true });
+    await copyFile(fullPath, backupPath);
+  } catch (e: any) {
+    return { content: `Backup failed: ${e?.message || String(e)}`, isError: true };
+  }
 
   // Apply edit
   const updated = original.slice(0, idx) + newString + original.slice(idx + oldString.length);
-  writeFileSync(fullPath, updated);
+  try {
+    await writeFile(fullPath, updated);
+  } catch (e: any) {
+    return { content: `Write failed: ${e?.message || String(e)}`, isError: true };
+  }
   ctx.setActiveFile?.(relPath);
   ctx.mutatedFiles?.add(relPath);
 

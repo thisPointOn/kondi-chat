@@ -36,6 +36,7 @@ import { ToolManager } from '../mcp/tool-manager.ts';
 import { CouncilProfileManager } from '../council/profiles.ts';
 import { executeCouncil } from '../council/tool.ts';
 import { RoutingCollector } from '../router/collector.ts';
+import type { ModelRegistry, ModelEntry } from '../router/registry.ts';
 import { Analytics } from '../audit/analytics.ts';
 import { TelemetryEmitter } from '../audit/telemetry.ts';
 import { runFirstRunWizard, checkForUpdate, readActiveProfile, writeActiveProfile } from './wizard.ts';
@@ -275,23 +276,37 @@ async function main() {
     try { sessionStore.save(session, profiles.getActive().name, router.rules.getOverride()?.id); }
     catch (e) { process.stderr.write(`[session-save] ${(e as Error).message}\n`); }
   }, AUTO_SAVE_MS);
-  const saveAndExit = () => {
-    try { sessionStore.save(session, profiles.getActive().name, router.rules.getOverride()?.id); } catch { /* ignore */ }
+  // Idempotent shutdown path. Signal + crash handlers route through here
+  // so the session is flushed AND MCP child transports get a chance to
+  // close cleanly before the process exits. A hard 2s deadline backs up
+  // the async cleanup — if MCP is wedged we'd rather kill the process
+  // than hang the user's terminal forever.
+  let shuttingDown = false;
+  const saveAndExit = (exitCode: number = 0): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     clearInterval(saveInterval);
+    try { sessionStore.save(session, profiles.getActive().name, router.rules.getOverride()?.id); } catch { /* ignore */ }
+    // Hard deadline: force-exit if cleanup doesn't finish in 2 seconds.
+    const deadline = setTimeout(() => process.exit(exitCode), 2000);
+    deadline.unref();
+    // Tear down MCP client connections so stdio child processes get a
+    // real close() instead of becoming zombies on SIGKILL of the parent.
+    mcpClient.disconnectAll()
+      .catch(() => { /* best-effort cleanup */ })
+      .finally(() => process.exit(exitCode));
   };
-  process.on('SIGTERM', () => { saveAndExit(); process.exit(0); });
-  process.on('SIGINT', () => { saveAndExit(); process.exit(0); });
+  process.on('SIGTERM', () => saveAndExit(0));
+  process.on('SIGINT', () => saveAndExit(0));
 
   // Spec 13 — fatal handlers flush session state before crashing out
   process.on('uncaughtException', (err) => {
     try { emit({ type: 'error', message: `Uncaught: ${err.message}`, recoverable: false }); } catch { /* ignore */ }
-    saveAndExit();
-    process.exit(1);
+    saveAndExit(1);
   });
   process.on('unhandledRejection', (reason) => {
     try { emit({ type: 'error', message: `Unhandled rejection: ${String(reason)}`, recoverable: false }); } catch { /* ignore */ }
-    saveAndExit();
-    process.exit(1);
+    saveAndExit(1);
   });
 
   // Spec 13 — integrate any recovery partial left by a prior crashed run
@@ -328,9 +343,10 @@ async function main() {
     try { cmd = JSON.parse(line); } catch { return; }
 
     if (cmd.type === 'quit') {
-      saveAndExit();
-      await mcpClient.disconnectAll();
-      process.exit(0);
+      // saveAndExit handles both the session flush and MCP teardown
+      // behind a 2s hard deadline. No need for redundant disconnects here.
+      saveAndExit(0);
+      return;
     }
 
     if (cmd.type === 'permission_response') {
@@ -489,16 +505,19 @@ function compactInLoop(messages: LLMMessage[], budget: number): { before: number
  * Returns undefined if nothing suitable is enabled — caller keeps the
  * hardcoded ContextManager default in that case.
  */
-function pickCompressionModel(registry: any, profile: BudgetProfile): { provider: ProviderId; id: string } | undefined {
+function pickCompressionModel(
+  registry: ModelRegistry,
+  profile: BudgetProfile,
+): { provider: ProviderId; id: string } | undefined {
   const allowed = profile.allowedProviders;
-  const candidates: any[] = registry.getAvailable();
+  const candidates: ModelEntry[] = registry.getAvailable();
   const inScope = allowed && allowed.length > 0
-    ? candidates.filter((m: any) => allowed.includes(m.provider))
+    ? candidates.filter(m => allowed.includes(m.provider))
     : candidates;
-  const withSummarization = inScope.filter((m: any) => m.capabilities.includes('summarization'));
+  const withSummarization = inScope.filter(m => m.capabilities.includes('summarization'));
   const pool = withSummarization.length > 0 ? withSummarization : inScope;
   if (pool.length === 0) return undefined;
-  pool.sort((a: any, b: any) => a.inputCostPer1M - b.inputCostPer1M);
+  pool.sort((a, b) => a.inputCostPer1M - b.inputCostPer1M);
   return { provider: pool[0].provider, id: pool[0].id };
 }
 
@@ -801,7 +820,7 @@ async function handleSubmit(
 
 async function handleCommand(
   input: string, session: Session, contextManager: ContextManager,
-  ledger: Ledger, registry: any, collector: any, toolCtx: ToolContext,
+  ledger: Ledger, registry: ModelRegistry, collector: RoutingCollector, toolCtx: ToolContext,
   mcpClient: McpClientManager, toolManager: ToolManager, workingDir: string,
   profiles: ProfileManager, router: UnifiedRouter,
   councilProfiles: CouncilProfileManager, councilPath: string,
@@ -1067,13 +1086,22 @@ async function runNonInteractiveTurn(
     // instead of hanging forever waiting for a TUI response.
     toolCtx.emit = () => {};
   }
-  // Install simple auto-approve overrides by bypassing check for listed tools
+  // Non-interactive auto-approve flag. We consult the original `check`
+  // FIRST so always-confirm patterns (rm -rf, sudo, curl|sh, etc.) can
+  // never be silently bypassed by listing a tool on the CLI allow-list.
+  // The flag only downgrades non-dangerous tiers. Shell chain operators
+  // are still upgraded to `confirm` by the underlying check — in
+  // non-interactive mode a confirm request will fail fast (no TUI to
+  // answer it), so chained commands are effectively blocked unless the
+  // operator explicitly passes --dangerously-skip-permissions.
   if (flags.autoApprove.size > 0 && toolCtx.permissionManager) {
     const pm = toolCtx.permissionManager;
     const origCheck = pm.check.bind(pm);
     pm.check = (tool: string, args: Record<string, unknown>) => {
+      const original = origCheck(tool, args);
+      if (original === 'always-confirm') return 'always-confirm';
       if (flags.autoApprove.has(tool)) return 'auto-approve';
-      return origCheck(tool, args);
+      return original;
     };
   }
 
@@ -1104,7 +1132,7 @@ async function runNonInteractiveTurn(
   const start = Date.now();
   let exitCode = 0;
   try {
-    await handleSubmit(input, session, contextManager, ledger, router, (router as any).collector, toolCtx, toolManager, profiles, checkpointManager);
+    await handleSubmit(input, session, contextManager, ledger, router, router.collector, toolCtx, toolManager, profiles, checkpointManager);
   } catch (e) {
     exitCode = 1;
     process.stderr.write(`Error: ${(e as Error).message}\n`);

@@ -54,9 +54,30 @@ const DEFAULT_ALWAYS_CONFIRM_PATTERNS: string[] = [
   'chmod\\s+(777|000)',
   'sudo(\\s|$)',
   'curl.*\\|\\s*(sh|bash)',
+  'wget.*\\|\\s*(sh|bash)',
   'dd\\s+',
   '>\\s*/dev/',
+  // Write/redirect to system dirs
+  '>\\s*(/etc|/usr|/bin|/sbin|/boot|/root|~)',
+  // Crypto/secret exfil vectors
+  '(ssh-keygen|openssl)\\s+.*\\bprivate\\b',
 ];
+
+/**
+ * Shell compound/chaining operators that let a caller append arbitrary
+ * follow-up commands. When `run_command` is classified as `auto-approve`
+ * and the command string contains any of these, we force an upgrade to
+ * `confirm` so a human sees the chain before it runs. This closes the
+ * "auto-approve `npm test` then `&& rm -rf ~`" gap.
+ *
+ * Detection is textual on purpose — anything short of a full shell AST
+ * parse has edge cases (e.g. `echo "a && b"` contains `&&` inside a
+ * quoted string). We accept the false-positive rate here: at worst the
+ * user sees a confirm dialog for a command that was actually safe, and
+ * can approve it. The alternative — shipping a production shell parser —
+ * is a much bigger maintenance surface.
+ */
+const SHELL_CHAIN_OPERATORS: RegExp = /(&&|\|\||;|\||`|\$\(|>>|\bxargs\b|\beval\b)/;
 
 const DEFAULT_CONFIG: PermissionConfig = {
   defaultTier: 'confirm',
@@ -111,21 +132,31 @@ export class PermissionManager {
   check(tool: string, args: Record<string, unknown>): PermissionTier {
     if (this.skip) return 'auto-approve';
 
-    // always-confirm patterns apply to run_command's `command` arg
+    // Start from session override → tool default → config default.
+    const sessionTier = this.config.sessionOverrides?.[tool];
+    let tier: PermissionTier = sessionTier
+      || this.config.tools[tool]
+      || this.config.defaultTier;
+
+    // run_command-specific safety rails:
+    //   1. always-confirm patterns (rm -rf, sudo, curl|sh, …) are bypass-
+    //      proof — they always escalate to the strictest tier regardless
+    //      of what the config or session override says.
+    //   2. shell compound/chain operators (&&, ||, ;, |, $(), backtick,
+    //      xargs, eval) force-upgrade `auto-approve` → `confirm`. A human
+    //      sees every chained command before it runs, but yolo-for-turn
+    //      can still batch-approve them — they're "risky" not "forbidden".
     if (tool === 'run_command') {
       const cmd = normalizeCommand(String(args.command ?? ''));
       for (const re of this.patterns) {
         if (re.test(cmd)) return 'always-confirm';
       }
+      if (tier === 'auto-approve' && SHELL_CHAIN_OPERATORS.test(cmd)) {
+        return 'confirm';
+      }
     }
 
-    // Session override wins for the tool
-    const sessionTier = this.config.sessionOverrides?.[tool];
-    if (sessionTier) return sessionTier;
-
-    const toolTier = this.config.tools[tool];
-    if (toolTier) return toolTier;
-    return this.config.defaultTier;
+    return tier;
   }
 
   /**
