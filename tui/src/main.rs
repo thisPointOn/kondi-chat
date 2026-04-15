@@ -177,6 +177,9 @@ async fn main() -> io::Result<()> {
                     (KeyCode::Char('t'), KeyModifiers::CONTROL) => {
                         app.toggle_detail("stats");
                     }
+                    (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
+                        app.toggle_detail("reasoning");
+                    }
                     (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
                         app.show_activity = !app.show_activity;
                     }

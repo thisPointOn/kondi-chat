@@ -249,7 +249,12 @@ fn draw_detail(f: &mut Frame, app: &App, view: &str) {
         .split(f.area());
 
     let mut lines: Vec<Line> = vec![];
-    let title = match view { "tools" => "Tool Calls (current turn)", "stats" => "Stats (current turn)", _ => "Detail" };
+    let title = match view {
+        "tools" => "Tool Calls (current turn)",
+        "stats" => "Stats (current turn)",
+        "reasoning" => "Model Reasoning (current turn)",
+        _ => "Detail",
+    };
     lines.push(Line::from(Span::styled(format!("═══ {title} ═══"), Style::default().add_modifier(Modifier::BOLD))));
     lines.push(Line::from(""));
 
@@ -286,6 +291,25 @@ fn draw_detail(f: &mut Frame, app: &App, view: &str) {
                 lines.push(Line::from(Span::styled("  (no stats yet)", Style::default().fg(Color::DarkGray))));
             }
         }
+
+        if view == "reasoning" {
+            match msg.reasoning_content.as_deref() {
+                Some(r) if !r.is_empty() => {
+                    for rline in r.lines() {
+                        lines.push(Line::from(Span::styled(
+                            format!("  {rline}"),
+                            Style::default().fg(Color::Rgb(180, 160, 200)),
+                        )));
+                    }
+                }
+                _ => {
+                    lines.push(Line::from(Span::styled(
+                        "  (no reasoning — this model didn't return chain-of-thought)",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+        }
     } else {
         lines.push(Line::from(Span::styled("  (no in-progress turn)", Style::default().fg(Color::DarkGray))));
     }
@@ -300,7 +324,7 @@ fn draw_detail(f: &mut Frame, app: &App, view: &str) {
         .scroll(((total_lines.saturating_sub(visible)).saturating_sub(scroll as u16), 0));
     f.render_widget(para, chunks[0]);
 
-    let hints = Paragraph::new(Span::styled("Esc:back ↑↓:scroll ^O:tools ^T:stats", Style::default().fg(Color::DarkGray)));
+    let hints = Paragraph::new(Span::styled("Esc:back ↑↓:scroll ^O:tools ^T:stats ^R:reasoning", Style::default().fg(Color::DarkGray)));
     f.render_widget(hints, chunks[1]);
 }
 

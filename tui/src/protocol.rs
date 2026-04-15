@@ -23,7 +23,14 @@ pub enum BackendEvent {
     },
 
     #[serde(rename = "message")]
-    Message { id: String, role: String, content: String, model_label: Option<String> },
+    Message {
+        id: String,
+        role: String,
+        content: String,
+        model_label: Option<String>,
+        #[serde(default)]
+        reasoning_content: Option<String>,
+    },
 
     #[serde(rename = "message_update")]
     MessageUpdate {
@@ -32,6 +39,8 @@ pub enum BackendEvent {
         model_label: Option<String>,
         tool_calls: Option<Vec<ToolCallInfo>>,
         stats: Option<MessageStats>,
+        #[serde(default)]
+        reasoning_content: Option<String>,
     },
 
     #[serde(rename = "tool_call")]

@@ -37,7 +37,7 @@ import { COUNCIL_TOOL, executeCouncil } from '../council/tool.ts';
 import { RoutingCollector } from '../router/collector.ts';
 import { Analytics } from '../audit/analytics.ts';
 import { TelemetryEmitter } from '../audit/telemetry.ts';
-import { runFirstRunWizard, checkForUpdate } from './wizard.ts';
+import { runFirstRunWizard, checkForUpdate, readActiveProfile, writeActiveProfile } from './wizard.ts';
 import { formatHelp } from './help.ts';
 
 // Spec 08 — MAX_TOOL_ITERATIONS deleted; handleSubmit now uses LoopGuard
@@ -109,7 +109,9 @@ async function main() {
   const router = new UnifiedRouter(storageDir, { useIntent: true });
   const registry = router.registry;
   const collector = router.collector;
-  const profiles = new ProfileManager((restoredProfile as any) || 'balanced', storageDir);
+  // Profile precedence: --resume session > config.json default > 'balanced'.
+  const initialProfile = restoredProfile || readActiveProfile(storageDir);
+  const profiles = new ProfileManager(initialProfile as any, storageDir);
   router.rules.setProfile(profiles.getActive());
   if (restoredOverrideModel) {
     const m = registry.getById(restoredOverrideModel) || registry.getByAlias(restoredOverrideModel);
@@ -409,7 +411,7 @@ async function handleSubmit(
     contextManager.addAssistantMessage(response);
     ledger.record('discuss', response, message.slice(0, 200));
 
-    emit({ type: 'message', id: msgId, role: 'assistant', content: response.content, model_label: targetModel.alias || targetModel.name });
+    emit({ type: 'message', id: msgId, role: 'assistant', content: response.content, model_label: targetModel.alias || targetModel.name, reasoning_content: response.reasoningContent });
     emit({ type: 'message_update', id: msgId, stats: {
       input_tokens: response.inputTokens, output_tokens: response.outputTokens,
       cost_usd: cost, models: [response.model], provider: targetModel.provider,
@@ -430,6 +432,7 @@ async function handleSubmit(
   let respondingReason = '';
   const allToolCalls: any[] = [];
   const modelsUsed = new Set<string>();
+  const reasoningChunks: string[] = [];
 
   const msgId = `msg-${Date.now()}`;
   emit({ type: 'message', id: msgId, role: 'assistant', content: '', model_label: '...' });
@@ -473,6 +476,13 @@ async function handleSubmit(
     totalOutputTokens += response.outputTokens;
     totalCost += iterCost;
     modelsUsed.add(response.model);
+
+    if (response.reasoningContent) {
+      const header = reasoningChunks.length === 0
+        ? `── ${response.model} ──`
+        : `\n── ${response.model} (step ${reasoningChunks.length + 1}) ──`;
+      reasoningChunks.push(`${header}\n${response.reasoningContent}`);
+    }
 
     ledger.record('discuss', response, messages[messages.length - 1]?.content?.slice(0, 200) || '');
 
@@ -581,6 +591,7 @@ async function handleSubmit(
     content: finalContent,
     model_label: respondingModel,
     tool_calls: allToolCalls.length > 0 ? allToolCalls : null,
+    reasoning_content: reasoningChunks.length > 0 ? reasoningChunks.join('\n') : undefined,
     stats: {
       input_tokens: totalInputTokens, output_tokens: totalOutputTokens,
       cost_usd: totalCost, models: [...modelsUsed],
@@ -610,8 +621,6 @@ async function handleCommand(
   pendingImages: ImageAttachment[],
   telemetry: TelemetryEmitter,
 ): Promise<string> {
-  // Import the actual command handler from main.tsx would be circular,
-  // so we duplicate the essential commands here
   const parts = input.split(/\s+/);
   const cmd = parts[0];
 
@@ -622,6 +631,7 @@ async function handleCommand(
       try {
         profiles.setProfile(mode as any);
         router.rules.setProfile(profiles.getActive());
+        writeActiveProfile(resolve(workingDir, '.kondi-chat'), profiles.getActive().name);
         return `Mode: ${profiles.getActive().name}`;
       } catch (e) { return (e as Error).message; }
     }

@@ -15,9 +15,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "chat": "npx tsx src/cli/main.tsx",
     "chat:tui": "cd tui && cargo run --release",
-    "chat:repl": "npx tsx src/cli/main-repl.ts",
     "build:tui": "cd tui && cargo build --release",
     "start": "npx tsx src/cli/backend.ts",
     "test": "vitest run",
@@ -44,14 +42,10 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "ink": "^6.8.0",
-    "ink-text-input": "^6.0.0",
-    "react": "^19.2.4",
     "tsx": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
-    "@types/react": "^19.2.14",
     "typescript": "^6.0.2",
     "vitest": "^4.1.2"
   }

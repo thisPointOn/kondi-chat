@@ -25,6 +25,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import type { ProviderId } from '../types.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -47,6 +48,8 @@ export interface BudgetProfile {
   includeVerification: boolean;
   preferLocal: boolean;
   maxOutputTokens: number;
+  /** If set, routing is restricted to models from these providers only. */
+  allowedProviders?: ProviderId[];
 }
 
 // ---------------------------------------------------------------------------

@@ -10,6 +10,7 @@ pub struct ChatMessage {
     pub model_label: Option<String>,
     pub tool_calls: Vec<ToolCallInfo>,
     pub stats: Option<MessageStats>,
+    pub reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -182,7 +183,7 @@ impl App {
                     ));
                 }
             }
-            BackendEvent::Message { id, role, content, model_label } => {
+            BackendEvent::Message { id, role, content, model_label, reasoning_content } => {
                 if role == "assistant" {
                     self.messages.clear();
                     self.messages.push(ChatMessage {
@@ -191,6 +192,7 @@ impl App {
                         model_label: model_label.clone(),
                         tool_calls: vec![],
                         stats: None,
+                        reasoning_content,
                     });
                     if model_label.is_some() {
                         self.working_id = Some(id);
@@ -199,11 +201,12 @@ impl App {
                     self.push_system(content);
                 }
             }
-            BackendEvent::MessageUpdate { id, content, model_label, tool_calls, stats } => {
+            BackendEvent::MessageUpdate { id, content, model_label, tool_calls, stats, reasoning_content } => {
                 if let Some(msg) = self.messages.iter_mut().find(|m| m.id == id) {
                     if let Some(c) = content { msg.content = c; }
                     if let Some(l) = model_label { msg.model_label = Some(l); }
                     if let Some(tc) = tool_calls { msg.tool_calls = tc; }
+                    if let Some(r) = reasoning_content { msg.reasoning_content = Some(r); }
                     if let Some(s) = stats {
                         self.session_cost += s.cost_usd;
                         msg.stats = Some(s);
@@ -252,6 +255,8 @@ impl App {
             }
             BackendEvent::CommandResult { output } => {
                 self.push_system(output);
+                self.is_processing = false;
+                self.status = String::new();
             }
         }
     }
@@ -296,10 +301,17 @@ pub fn render_assistant_lines(msg: &ChatMessage) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = vec![Line::from("")];
 
     let label = msg.model_label.clone().unwrap_or_else(|| "assistant".to_string());
-    out.push(Line::from(vec![
+    let mut header_spans = vec![
         Span::styled("● ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
         Span::styled(label, Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-    ]));
+    ];
+    if msg.reasoning_content.as_deref().map(str::is_empty) == Some(false) {
+        header_spans.push(Span::styled(
+            "  [^R reasoning]",
+            Style::default().fg(Color::Magenta).add_modifier(Modifier::DIM),
+        ));
+    }
+    out.push(Line::from(header_spans));
 
     for tc in &msg.tool_calls {
         let color = if tc.is_error { Color::Red } else { Color::Cyan };

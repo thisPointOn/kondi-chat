@@ -13,9 +13,34 @@
  *   - verify → no LLM call (local tools)
  */
 
-import type { LedgerPhase, TaskKind } from '../types.ts';
+import type { LedgerPhase, ProviderId, TaskKind } from '../types.ts';
 import { ModelRegistry, type ModelCapability, type ModelEntry } from './registry.ts';
 import type { BudgetProfile } from './profiles.ts';
+
+/**
+ * Minimal subset of ModelRegistry used by the routing strategy helpers.
+ * A scoped view (see scopedRegistry) implements this without inheriting.
+ */
+interface RegistryView {
+  getEnabled(): ModelEntry[];
+  getByCapability(capability: ModelCapability): ModelEntry[];
+  getCheapest(capability: ModelCapability): ModelEntry | undefined;
+  getBest(capability: ModelCapability): ModelEntry | undefined;
+}
+
+function scopedRegistry(registry: ModelRegistry, providers: ProviderId[]): RegistryView {
+  const allowed = new Set(providers);
+  const filter = (m: ModelEntry) => allowed.has(m.provider);
+  return {
+    getEnabled: () => registry.getEnabled().filter(filter),
+    getByCapability: (cap) => registry.getByCapability(cap).filter(filter),
+    getCheapest: (cap) => registry.getByCapability(cap).filter(filter)[0],
+    getBest: (cap) => {
+      const list = registry.getByCapability(cap).filter(filter);
+      return list[list.length - 1];
+    },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Route decision
@@ -44,6 +69,14 @@ export class RuleRouter {
   /** Set the active budget profile — changes model selection priorities */
   setProfile(profile: BudgetProfile): void {
     this.profile = profile;
+  }
+
+  /** Registry view scoped to the active profile's provider allow-list, if any. */
+  private reg(): RegistryView {
+    const allowed = this.profile?.allowedProviders;
+    return allowed && allowed.length > 0
+      ? scopedRegistry(this.registry, allowed)
+      : this.registry;
   }
 
   /** Force all routing to a specific model. Pass undefined to clear. */
@@ -79,7 +112,7 @@ export class RuleRouter {
 
     // Promotion overrides: if the cheap model failed enough, use the best
     if (promoted && (phase === 'execute')) {
-      const best = this.registry.getBest('coding');
+      const best = this.reg().getBest('coding');
       if (best) {
         return { model: best, reason: `promoted after ${failures} failures`, promoted: true };
       }
@@ -113,8 +146,8 @@ export class RuleRouter {
     if (this.profile) {
       const prefs = this.profile.planningPreference;
       const selector = this.profile.preferLocal
-        ? (cap: string) => this.registry.getCheapest(cap)
-        : (cap: string) => this.registry.getBest(cap);
+        ? (cap: string) => this.reg().getCheapest(cap)
+        : (cap: string) => this.reg().getBest(cap);
       for (const cap of prefs) {
         const model = selector(cap);
         if (model) return { model, reason: `${this.profile.name}: ${cap}`, promoted: false };
@@ -122,9 +155,9 @@ export class RuleRouter {
     }
 
     // Default: best planning model
-    const model = this.registry.getBest('planning')
-      || this.registry.getBest('reasoning')
-      || this.registry.getBest('coding')
+    const model = this.reg().getBest('planning')
+      || this.reg().getBest('reasoning')
+      || this.reg().getBest('coding')
       || this.fallback();
     return { model, reason: 'reasoning phase — best planner', promoted: false };
   }
@@ -135,8 +168,8 @@ export class RuleRouter {
       // Try direct task kind match first
       if (taskKind) {
         const directMatch = this.profile.preferLocal
-          ? this.registry.getCheapest(taskKind)
-          : this.registry.getByCapability(taskKind)[0];
+          ? this.reg().getCheapest(taskKind)
+          : this.reg().getByCapability(taskKind)[0];
         if (directMatch) {
           return { model: directMatch, reason: `${this.profile.name}: ${taskKind} match`, promoted: false };
         }
@@ -145,14 +178,14 @@ export class RuleRouter {
       // Then profile's execution preferences
       const prefs = this.profile.executionPreference;
       for (const cap of prefs) {
-        const model = this.registry.getCheapest(cap);
+        const model = this.reg().getCheapest(cap);
         if (model) return { model, reason: `${this.profile.name}: ${cap}`, promoted: false };
       }
     }
 
     // Default: try to match task kind directly to a capability
     if (taskKind) {
-      const directMatch = this.registry.getCheapest(taskKind);
+      const directMatch = this.reg().getCheapest(taskKind);
       if (directMatch) {
         return { model: directMatch, reason: `${taskKind} task — direct capability match`, promoted: false };
       }
@@ -162,52 +195,52 @@ export class RuleRouter {
     switch (taskKind) {
       case 'analysis':
       case 'code-review':
-        const reviewer = this.registry.getBest('code-review')
-          || this.registry.getBest('analysis')
-          || this.registry.getBest('reasoning')
+        const reviewer = this.reg().getBest('code-review')
+          || this.reg().getBest('analysis')
+          || this.reg().getBest('reasoning')
           || this.fallback();
         return { model: reviewer, reason: `${taskKind} task — best reviewer`, promoted: false };
 
       case 'marketing':
       case 'writing':
-        const writer = this.registry.getCheapest('marketing')
-          || this.registry.getCheapest('writing')
-          || this.registry.getCheapest('general')
+        const writer = this.reg().getCheapest('marketing')
+          || this.reg().getCheapest('writing')
+          || this.reg().getCheapest('general')
           || this.fallback();
         return { model: writer, reason: `${taskKind} task — best writer`, promoted: false };
 
       case 'test':
       case 'fix':
-        const fixer = this.registry.getCheapest('fast-coding')
-          || this.registry.getCheapest('coding')
+        const fixer = this.reg().getCheapest('fast-coding')
+          || this.reg().getCheapest('coding')
           || this.fallback();
         return { model: fixer, reason: `${taskKind} task — cheapest coder`, promoted: false };
 
       case 'implementation':
       case 'refactor':
       case 'refactoring':
-        const coder = this.registry.getCheapest('coding')
+        const coder = this.reg().getCheapest('coding')
           || this.fallback();
         return { model: coder, reason: `${taskKind} task — cheapest coder`, promoted: false };
 
       default:
         // Unknown kind — use cheapest coding model as default for execution
-        const defaultModel = this.registry.getCheapest('coding')
-          || this.registry.getCheapest('general')
+        const defaultModel = this.reg().getCheapest('coding')
+          || this.reg().getCheapest('general')
           || this.fallback();
         return { model: defaultModel, reason: `${taskKind || 'unknown'} task — default`, promoted: false };
     }
   }
 
   private selectForCheap(): RouteDecision {
-    const model = this.registry.getCheapest('summarization')
-      || this.registry.getCheapest('general')
+    const model = this.reg().getCheapest('summarization')
+      || this.reg().getCheapest('general')
       || this.fallback();
     return { model, reason: 'cheap phase — summarization', promoted: false };
   }
 
   private fallback(): ModelEntry {
-    const enabled = this.registry.getEnabled();
+    const enabled = this.reg().getEnabled();
     if (enabled.length === 0) {
       throw new Error('No models enabled in registry. Run /models to configure.');
     }

@@ -17,7 +17,7 @@ export interface WizardResult {
   configPath: string;
   created: boolean;
   providersDetected: string[];
-  defaultProfile: 'balanced' | 'cheap' | 'quality';
+  defaultProfile: string;
 }
 
 const PROVIDER_ENV: Record<string, string> = {
@@ -58,12 +58,33 @@ export function runFirstRunWizard(storageDir: string, opts: { interactive?: bool
   return { configPath, created: true, providersDetected, defaultProfile };
 }
 
-function readProfile(path: string): 'balanced' | 'cheap' | 'quality' {
+function readProfile(path: string): string {
   try {
     const raw = JSON.parse(readFileSync(path, 'utf-8'));
-    if (raw.defaultProfile === 'cheap' || raw.defaultProfile === 'quality') return raw.defaultProfile;
+    if (typeof raw.defaultProfile === 'string' && raw.defaultProfile.length > 0) {
+      return raw.defaultProfile;
+    }
   } catch { /* ignore */ }
   return 'balanced';
+}
+
+/** Persist the active profile name to config.json, preserving other fields. */
+export function writeActiveProfile(storageDir: string, name: string): void {
+  const configPath = join(storageDir, 'config.json');
+  let config: Record<string, unknown> = {};
+  try {
+    if (existsSync(configPath)) {
+      config = JSON.parse(readFileSync(configPath, 'utf-8'));
+    }
+  } catch { /* start fresh on parse error */ }
+  config.defaultProfile = name;
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, JSON.stringify(config, null, 2));
+}
+
+/** Read the persisted active profile from config.json (or 'balanced'). */
+export function readActiveProfile(storageDir: string): string {
+  return readProfile(join(storageDir, 'config.json'));
 }
 
 /**

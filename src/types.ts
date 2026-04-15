@@ -12,6 +12,7 @@ export type ProviderId =
   | 'deepseek'
   | 'google'
   | 'xai'
+  | 'zai'
   | 'ollama'
   | 'nvidia-router';
 
@@ -298,4 +299,10 @@ export interface LLMResponse {
   requestedModel?: string;
   /** Spec 14 — raw response headers for rate-limit parsing. */
   responseHeaders?: Record<string, string>;
+  /**
+   * Hidden chain-of-thought emitted by reasoning models (GLM-5.x, OpenAI o-series,
+   * DeepSeek-R1, Anthropic extended thinking). Billed as output tokens but not
+   * shown inline; the TUI exposes it via Ctrl+R.
+   */
+  reasoningContent?: string;
 }

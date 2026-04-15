@@ -89,6 +89,7 @@ export const DEFAULT_MODELS: Record<ProviderId, string> = {
   'deepseek': 'deepseek-chat',
   'google': 'models/gemini-2.5-flash',
   'xai': 'grok-3',
+  'zai': 'glm-4.6',
   'ollama': 'llama3.1',
   'nvidia-router': 'auto',
 };
@@ -103,6 +104,7 @@ function getApiKey(provider: ProviderId): string | undefined {
     case 'openai': return process.env.OPENAI_API_KEY;
     case 'deepseek': return process.env.DEEPSEEK_API_KEY;
     case 'xai': return process.env.XAI_API_KEY;
+    case 'zai': return process.env.ZAI_API_KEY;
     case 'google': return process.env.GOOGLE_API_KEY;
     case 'nvidia-router': return process.env.NVIDIA_API_KEY;
     default: return undefined;
@@ -172,6 +174,7 @@ async function callAnthropic(
   // Streaming path
   if (req.stream && req.onToken) {
     let content = '';
+    let reasoningContent = '';
     const toolCalls: ToolCall[] = [];
     let inputTokens = 0;
     let outputTokens = 0;
@@ -181,6 +184,7 @@ async function callAnthropic(
     let currentToolId = '';
     let currentToolName = '';
     let currentToolJson = '';
+    let inThinkingBlock = false;
 
     for await (const event of parseSSE(resp)) {
       try {
@@ -196,6 +200,9 @@ async function callAnthropic(
           currentToolId = block.id;
           currentToolName = block.name;
           currentToolJson = '';
+        } else if (block?.type === 'thinking') {
+          inThinkingBlock = true;
+          if (block.thinking) reasoningContent += block.thinking;
         }
       } else if (event.type === 'content_block_delta') {
         const delta = event.data?.delta;
@@ -204,8 +211,13 @@ async function callAnthropic(
           req.onToken(delta.text);
         } else if (delta?.type === 'input_json_delta' && delta.partial_json) {
           currentToolJson += delta.partial_json;
+        } else if (delta?.type === 'thinking_delta' && delta.thinking) {
+          reasoningContent += delta.thinking;
         }
       } else if (event.type === 'content_block_stop') {
+        if (inThinkingBlock) {
+          inThinkingBlock = false;
+        }
         if (currentToolId) {
           try {
             toolCalls.push({
@@ -232,6 +244,7 @@ async function callAnthropic(
       inputTokens, outputTokens,
       latencyMs: Date.now() - start, cached,
       ...(toolCalls.length > 0 ? { toolCalls } : {}),
+      ...(reasoningContent ? { reasoningContent } : {}),
     };
   }
 
@@ -240,11 +253,14 @@ async function callAnthropic(
   const usage = data.usage || {};
 
   let content = '';
+  let reasoningContent = '';
   const toolCalls: ToolCall[] = [];
 
   for (const block of data.content || []) {
     if (block.type === 'text') {
       content += block.text;
+    } else if (block.type === 'thinking') {
+      reasoningContent += block.thinking || '';
     } else if (block.type === 'tool_use') {
       toolCalls.push({
         id: block.id,
@@ -261,6 +277,7 @@ async function callAnthropic(
     latencyMs: Date.now() - start,
     cached: (usage.cache_read_input_tokens || 0) > 0,
     ...(toolCalls.length > 0 ? { toolCalls } : {}),
+    ...(reasoningContent ? { reasoningContent } : {}),
   };
 }
 
@@ -381,6 +398,7 @@ async function callOpenAICompatible(
   // Streaming path
   if (req.stream && req.onToken) {
     let content = '';
+    let reasoningContent = '';
     const toolCalls: ToolCall[] = [];
     const toolJsonBuffers: Map<number, { id: string; name: string; json: string }> = new Map();
     let actualModel = model;
@@ -411,6 +429,12 @@ async function callOpenAICompatible(
       if (delta.content) {
         content += delta.content;
         req.onToken(delta.content);
+      }
+
+      // Reasoning content (z.ai GLM-5.x, OpenAI o-series, DeepSeek-R1).
+      // Not surfaced via onToken — kept hidden and shown in the TUI's reasoning panel.
+      if (delta.reasoning_content) {
+        reasoningContent += delta.reasoning_content;
       }
 
       // Tool calls (streamed incrementally)
@@ -448,6 +472,7 @@ async function callOpenAICompatible(
       inputTokens, outputTokens,
       latencyMs: Date.now() - start,
       ...(toolCalls.length > 0 ? { toolCalls } : {}),
+      ...(reasoningContent ? { reasoningContent } : {}),
     };
   }
 
@@ -478,6 +503,7 @@ async function callOpenAICompatible(
     outputTokens: usage.completion_tokens || 0,
     latencyMs: Date.now() - start,
     ...(toolCalls.length > 0 ? { toolCalls } : {}),
+    ...(choice.reasoning_content ? { reasoningContent: choice.reasoning_content } : {}),
   };
 }
 
@@ -701,6 +727,7 @@ export async function callLLM(req: LLMRequest): Promise<LLMResponse> {
       'openai': 'OPENAI_API_KEY',
       'deepseek': 'DEEPSEEK_API_KEY',
       'xai': 'XAI_API_KEY',
+      'zai': 'ZAI_API_KEY',
       'google': 'GOOGLE_API_KEY',
       'nvidia-router': 'NVIDIA_API_KEY',
     };
@@ -807,6 +834,11 @@ function callProvider(
     case 'xai':
       return callOpenAICompatible('https://api.x.ai/v1', apiKey!, model, provider, req);
 
+    case 'zai':
+      // Coding Plan endpoint — required for GLM Coding Plan subscriptions.
+      // The general-purpose /api/paas/v4 endpoint returns 1113 for coding-plan keys.
+      return callOpenAICompatible('https://api.z.ai/api/coding/paas/v4', apiKey!, model, provider, req);
+
     case 'nvidia-router': {
       const routerUrl = process.env.NVIDIA_ROUTER_URL || 'http://localhost:8001/v1';
       return callOpenAICompatible(routerUrl, apiKey!, model, provider, req);
@@ -819,6 +851,6 @@ function callProvider(
       return callOpenAICompatible('http://localhost:11434/v1', 'ollama', model, provider, req);
 
     default:
-      throw new Error(`Unknown provider "${provider}". Supported: anthropic, openai, deepseek, xai, google, ollama, nvidia-router`);
+      throw new Error(`Unknown provider "${provider}". Supported: anthropic, openai, deepseek, xai, zai, google, ollama, nvidia-router`);
   }
 }

@@ -132,6 +132,51 @@ const DEFAULT_MODELS: ModelEntry[] = [
     contextWindow: 200_000,
     enabled: true,
   },
+  // --- Z.AI (GLM family, OpenAI-compatible) ---
+  {
+    id: 'glm-5.1',
+    name: 'GLM 5.1',
+    alias: 'reason',
+    provider: 'zai',
+    capabilities: ['planning', 'reasoning', 'analysis', 'code-review'],
+    inputCostPer1M: 1.40,
+    outputCostPer1M: 4.40,
+    contextWindow: 200_000,
+    enabled: true,
+  },
+  {
+    id: 'glm-4.6',
+    name: 'GLM 4.6',
+    alias: 'glm',
+    provider: 'zai',
+    capabilities: ['coding', 'fast-coding', 'general'],
+    inputCostPer1M: 0.60,
+    outputCostPer1M: 2.20,
+    contextWindow: 200_000,
+    enabled: true,
+  },
+  {
+    id: 'glm-4.5-flash',
+    name: 'GLM 4.5 Flash',
+    alias: 'flash',
+    provider: 'zai',
+    capabilities: ['summarization', 'general'],
+    inputCostPer1M: 0,
+    outputCostPer1M: 0,
+    contextWindow: 128_000,
+    enabled: true,
+  },
+  {
+    id: 'glm-4.5-air',
+    name: 'GLM 4.5 Air',
+    alias: 'glm-air',
+    provider: 'zai',
+    capabilities: ['fast-coding', 'general', 'summarization'],
+    inputCostPer1M: 0.20,
+    outputCostPer1M: 1.10,
+    contextWindow: 128_000,
+    enabled: false,
+  },
   // --- Local models (Ollama) ---
   {
     id: 'qwen2.5:3b',
@@ -354,6 +399,7 @@ export class ModelRegistry {
       case 'openai': return process.env.OPENAI_API_KEY;
       case 'deepseek': return process.env.DEEPSEEK_API_KEY;
       case 'xai': return process.env.XAI_API_KEY;
+      case 'zai': return process.env.ZAI_API_KEY;
       case 'google': return process.env.GOOGLE_API_KEY;
       case 'nvidia-router': return process.env.NVIDIA_API_KEY;
       default: return undefined;
@@ -366,6 +412,7 @@ export class ModelRegistry {
       openai: 'OPENAI_API_KEY',
       deepseek: 'DEEPSEEK_API_KEY',
       xai: 'XAI_API_KEY',
+      zai: 'ZAI_API_KEY',
       google: 'GOOGLE_API_KEY',
       'nvidia-router': 'NVIDIA_API_KEY',
     };
