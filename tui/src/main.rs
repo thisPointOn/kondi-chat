@@ -158,14 +158,25 @@ async fn main() -> io::Result<()> {
                     (KeyCode::Esc, _) => {
                         if app.detail_view.is_some() {
                             app.detail_view = None;
-                        } else {
-                            app.input.clear();
+                        } else if !app.input.is_empty() {
+                            app.clear_input();
+                        } else if !app.pending_submits.is_empty() {
+                            // Empty input + non-empty queue: Esc clears the queue.
+                            // Lets the user bail out of queued type-ahead without
+                            // waiting for the current turn to process them.
+                            app.clear_pending_submits();
                         }
                     }
                     (KeyCode::Enter, _) => {
                         if !app.input.is_empty() {
-                            let text = app.input.drain(..).collect::<String>();
-                            if text.starts_with('/') {
+                            let text = std::mem::take(&mut app.input);
+                            app.input_cursor = 0;
+                            if app.is_processing {
+                                // Current turn still running — queue and
+                                // let the main loop drain it when the turn
+                                // finishes. No concurrent submits.
+                                app.queue_submit(text);
+                            } else if text.starts_with('/') {
                                 send_command(&mut writer, TuiCommand::Command { text: text.clone() }).await;
                                 app.add_user_message(&text);
                             } else {
@@ -175,7 +186,7 @@ async fn main() -> io::Result<()> {
                         }
                     }
                     (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
-                        app.input.push('\n');
+                        app.insert_char('\n');
                     }
                     (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
                         app.toggle_detail("tools");
@@ -192,13 +203,18 @@ async fn main() -> io::Result<()> {
                     (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
                         app.show_activity = !app.show_activity;
                     }
-                    (KeyCode::Backspace, _) => { app.input.pop(); }
-                    // Bash-style input history. Wheel scroll, drag-select,
-                    // and copy are all owned by the terminal now, so the
-                    // arrow keys are free to recall history again.
+                    (KeyCode::Backspace, _) => { app.backspace_at_cursor(); }
+                    (KeyCode::Delete, _) => { app.delete_at_cursor(); }
+                    // Up/Down: bash-style history recall. Left/Right: move
+                    // the cursor inside the current line. Home/End (and
+                    // ^A/^E): jump to line ends.
                     (KeyCode::Up, _) => { app.history_prev(); }
                     (KeyCode::Down, _) => { app.history_next(); }
-                    (KeyCode::Char(c), _) => { app.input.push(c); }
+                    (KeyCode::Left, _) => { app.cursor_left(); }
+                    (KeyCode::Right, _) => { app.cursor_right(); }
+                    (KeyCode::Home, _) => { app.cursor_home(); }
+                    (KeyCode::End, _) => { app.cursor_end(); }
+                    (KeyCode::Char(c), _) => { app.insert_char(c); }
                     _ => {}
                 } }
             }
@@ -216,6 +232,20 @@ async fn main() -> io::Result<()> {
                 Ok(Ok(None)) => break,
                 Ok(Err(_)) => break,
                 Err(_) => break,
+            }
+        }
+
+        // If the last turn just finished and there's a queued submit waiting,
+        // fire it now. `pop_pending_submit` records the user line in history
+        // and flips is_processing back on so the spinner resumes immediately.
+        if !app.is_processing && !app.pending_submits.is_empty() {
+            if let Some(text) = app.pop_pending_submit() {
+                if text.starts_with('/') {
+                    send_command(&mut writer, TuiCommand::Command { text }).await;
+                } else {
+                    send_command(&mut writer, TuiCommand::Submit { text }).await;
+                }
+                needs_draw = true;
             }
         }
 

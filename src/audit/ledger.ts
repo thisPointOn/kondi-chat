@@ -14,23 +14,57 @@ import type { LedgerEntry, LedgerPhase, LLMResponse, ProviderId } from '../types
 // Pricing table (USD per 1M tokens)
 // ---------------------------------------------------------------------------
 
-const PRICING: Record<string, { input: number; output: number }> = {
-  'claude-opus-4-20250514': { input: 15, output: 75 },
-  'claude-sonnet-4-5-20250929': { input: 3, output: 15 },
-  'claude-haiku-4-5-20251001': { input: 0.8, output: 4 },
-  'gpt-5.4': { input: 2.5, output: 15 },
-  'gpt-5.4-mini': { input: 0.75, output: 4.5 },
-  'gpt-5.4-nano': { input: 0.20, output: 1.25 },
-  'gpt-4o': { input: 2.5, output: 10 },
-  'gpt-4o-mini': { input: 0.15, output: 0.6 },
-  'deepseek-chat': { input: 0.27, output: 1.10 },
-  'models/gemini-2.5-flash': { input: 0.15, output: 0.6 },
-  'grok-3': { input: 3, output: 15 },
+/**
+ * Pricing per 1M tokens.
+ * `cachedInput` is the discounted rate for prompt-cached bytes — typically
+ * 10% of standard (Anthropic) or 50% (OpenAI/Z.AI). If omitted, we use the
+ * standard input rate as a conservative fallback.
+ */
+const PRICING: Record<string, { input: number; output: number; cachedInput?: number }> = {
+  // Anthropic (cache-read priced at ~10% of input on current plans)
+  'claude-opus-4-20250514':     { input: 15,   output: 75,  cachedInput: 1.50 },
+  'claude-sonnet-4-5-20250929': { input: 3,    output: 15,  cachedInput: 0.30 },
+  'claude-haiku-4-5-20251001':  { input: 0.8,  output: 4,   cachedInput: 0.08 },
+  // OpenAI (cached reads at 50% of input)
+  'gpt-5.4':                    { input: 2.5,  output: 15,  cachedInput: 1.25 },
+  'gpt-5.4-mini':               { input: 0.75, output: 4.5, cachedInput: 0.375 },
+  'gpt-5.4-nano':               { input: 0.20, output: 1.25, cachedInput: 0.10 },
+  'gpt-4o':                     { input: 2.5,  output: 10,  cachedInput: 1.25 },
+  'gpt-4o-mini':                { input: 0.15, output: 0.6, cachedInput: 0.075 },
+  // DeepSeek (cached at ~10%)
+  'deepseek-chat':              { input: 0.27, output: 1.10, cachedInput: 0.027 },
+  // Google / xAI (no documented cache discount)
+  'models/gemini-2.5-flash':    { input: 0.15, output: 0.6 },
+  'grok-3':                     { input: 3,    output: 15 },
+  // Z.AI GLM — per https://docs.z.ai/guides/overview/pricing (cached at 50%)
+  'glm-5.1':                    { input: 1.4,  output: 4.4, cachedInput: 0.7 },
+  'glm-5':                      { input: 1.0,  output: 3.2, cachedInput: 0.5 },
+  'glm-5-turbo':                { input: 1.2,  output: 4.0, cachedInput: 0.6 },
+  'glm-4.7':                    { input: 0.6,  output: 2.2, cachedInput: 0.3 },
+  'glm-4.6':                    { input: 0.6,  output: 2.2, cachedInput: 0.3 },
+  'glm-4.5':                    { input: 0.6,  output: 2.2, cachedInput: 0.3 },
+  'glm-4.5-air':                { input: 0.2,  output: 1.1, cachedInput: 0.1 },
+  'glm-4.5-flash':              { input: 0,    output: 0 },
+  'glm-4.7-flash':              { input: 0,    output: 0 },
 };
 
-export function estimateCost(model: string, inputTokens: number, outputTokens: number): number {
+/**
+ * Estimate cost in USD.
+ * @param cachedInputTokens  Portion of inputTokens served from prompt cache.
+ *                           Billed at the model's `cachedInput` rate (typically
+ *                           10–50% of standard input) instead of `input`.
+ */
+export function estimateCost(
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+  cachedInputTokens = 0,
+): number {
   const p = PRICING[model] || { input: 3, output: 15 };
-  return (inputTokens * p.input + outputTokens * p.output) / 1_000_000;
+  const cached = Math.min(cachedInputTokens, inputTokens);
+  const uncachedInput = inputTokens - cached;
+  const cachedRate = p.cachedInput ?? p.input;
+  return (uncachedInput * p.input + cached * cachedRate + outputTokens * p.output) / 1_000_000;
 }
 
 // ---------------------------------------------------------------------------
@@ -62,7 +96,8 @@ export class Ledger {
     promptSummary: string,
     opts?: { taskId?: string; promoted?: boolean },
   ): LedgerEntry {
-    const cost = estimateCost(response.model, response.inputTokens, response.outputTokens);
+    const cached = response.cachedInputTokens ?? 0;
+    const cost = estimateCost(response.model, response.inputTokens, response.outputTokens, cached);
 
     const entry: LedgerEntry = {
       id: `${this.sessionId}-${this.entries.length.toString().padStart(4, '0')}`,
@@ -74,7 +109,8 @@ export class Ledger {
       outputTokens: response.outputTokens,
       latencyMs: response.latencyMs,
       costUsd: cost,
-      cached: response.cached ?? false,
+      cached: response.cached ?? cached > 0,
+      ...(cached > 0 ? { cachedInputTokens: cached } : {}),
       promptSummary: truncate(promptSummary, 500),
       responseSummary: truncate(response.content, 500),
       taskId: opts?.taskId,

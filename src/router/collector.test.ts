@@ -114,4 +114,76 @@ describe('RoutingCollector', () => {
     expect(exported.features.every(f => f.length === len)).toBe(true);
     expect(exported.featureNames.length).toBe(len);
   });
+
+  it('tracks tier breakdown', () => {
+    const collector = new RoutingCollector(tempDir);
+    collector.record(makeSample({ routingTier: 'intent' }));
+    collector.record(makeSample({ routingTier: 'intent', succeeded: false }));
+    collector.record(makeSample({ routingTier: 'nn', modelId: 'gpt-4o', provider: 'openai' }));
+    collector.record(makeSample({ routingTier: undefined })); // defaults to 'rules'
+
+    const stats = collector.getStats();
+    expect(stats.byTier['intent'].total).toBe(2);
+    expect(stats.byTier['intent'].succeeded).toBe(1);
+    expect(stats.byTier['nn'].total).toBe(1);
+    expect(stats.byTier['rules'].total).toBe(1);
+  });
+
+  it('tracks model × tier matrix', () => {
+    const collector = new RoutingCollector(tempDir);
+    collector.record(makeSample({ modelId: 'claude-sonnet-4-5', routingTier: 'intent' }));
+    collector.record(makeSample({ modelId: 'claude-sonnet-4-5', routingTier: 'nn' }));
+    collector.record(makeSample({ modelId: 'gpt-4o', provider: 'openai', routingTier: 'intent' }));
+
+    const stats = collector.getStats();
+    expect(stats.byModelTier['claude-sonnet-4-5']['intent'].total).toBe(1);
+    expect(stats.byModelTier['claude-sonnet-4-5']['nn'].total).toBe(1);
+    expect(stats.byModelTier['gpt-4o']['intent'].total).toBe(1);
+  });
+
+  it('computes quality and cost metrics', () => {
+    const collector = new RoutingCollector(tempDir);
+    collector.record(makeSample({ qualityScore: 0.8, costEfficiency: 200, costUsd: 0.004 }));
+    collector.record(makeSample({ qualityScore: 0.6, costEfficiency: 300, costUsd: 0.002 }));
+
+    const stats = collector.getStats();
+    expect(stats.avgQualityScore).toBeCloseTo(0.7, 5);
+    expect(stats.avgCostEfficiency).toBeCloseTo(250, 5);
+    expect(stats.totalCost).toBeCloseTo(0.006, 5);
+  });
+
+  it('computes per-model avgLatencyMs and avgQuality', () => {
+    const collector = new RoutingCollector(tempDir);
+    collector.record(makeSample({ latencyMs: 1000, qualityScore: 0.9 }));
+    collector.record(makeSample({ latencyMs: 3000, qualityScore: 0.7 }));
+
+    const stats = collector.getStats();
+    expect(stats.byModel['deepseek-chat'].avgLatencyMs).toBe(2000);
+    expect(stats.byModel['deepseek-chat'].avgQuality).toBeCloseTo(0.8, 5);
+  });
+
+  it('tracks time range', () => {
+    const collector = new RoutingCollector(tempDir);
+    collector.record(makeSample({ timestamp: '2025-01-15T10:00:00Z' }));
+    collector.record(makeSample({ timestamp: '2025-03-22T15:30:00Z' }));
+
+    const stats = collector.getStats();
+    expect(stats.firstSample).toBe('2025-01-15T10:00:00Z');
+    expect(stats.lastSample).toBe('2025-03-22T15:30:00Z');
+  });
+
+  it('formatStats includes tier distribution and model × tier', () => {
+    const collector = new RoutingCollector(tempDir);
+    collector.record(makeSample({ routingTier: 'intent' }));
+    collector.record(makeSample({ routingTier: 'nn', modelId: 'gpt-4o', provider: 'openai' }));
+    collector.record(makeSample({ routingTier: undefined }));
+
+    const output = collector.formatStats();
+    expect(output).toContain('Tier Distribution');
+    expect(output).toContain('intent');
+    expect(output).toContain('nn');
+    expect(output).toContain('rules');
+    expect(output).toContain('Model × Tier');
+    expect(output).toContain('primary');
+  });
 });

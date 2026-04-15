@@ -72,6 +72,29 @@ const DEFAULT_MODELS: ModelEntry[] = [
     contextWindow: 1_000_000,
     enabled: true,
   },
+  // --- Gemini models (free tier via Google AI Studio) ---
+  {
+    id: 'models/gemini-2.5-pro',
+    name: 'Gemini 2.5 Pro',
+    alias: 'gemini-pro',
+    provider: 'google',
+    capabilities: ['planning', 'reasoning', 'analysis', 'coding'],
+    inputCostPer1M: 0,
+    outputCostPer1M: 0,
+    contextWindow: 1_000_000,
+    enabled: true,
+  },
+  {
+    id: 'models/gemini-2.5-flash',
+    name: 'Gemini 2.5 Flash',
+    alias: 'gemini',
+    provider: 'google',
+    capabilities: ['coding', 'fast-coding', 'general', 'summarization'],
+    inputCostPer1M: 0,
+    outputCostPer1M: 0,
+    contextWindow: 1_000_000,
+    enabled: true,
+  },
   // --- Mid-tier OpenAI ---
   {
     id: 'gpt-5.4-mini',
@@ -258,10 +281,34 @@ export class ModelRegistry {
     return this.models.find(m => m.id === id);
   }
 
-  /** Find a model by its @mention alias (case-insensitive) */
+  /**
+   * Find a model by its @mention alias. Case-insensitive, with unambiguous
+   * prefix matching: `@gemi` resolves to `gemini` if it's the only enabled
+   * alias starting with those letters. Returns undefined if no match or
+   * if the prefix matches multiple aliases (call `findAliasCandidates` to
+   * report them).
+   */
   getByAlias(alias: string): ModelEntry | undefined {
     const lower = alias.toLowerCase();
-    return this.models.find(m => m.alias?.toLowerCase() === lower && m.enabled);
+    const enabled = this.models.filter(m => m.alias && m.enabled);
+    // 1. Exact match wins, cheaper than prefix scan and unambiguous.
+    const exact = enabled.find(m => m.alias!.toLowerCase() === lower);
+    if (exact) return exact;
+    // 2. Prefix match — only return if it's unique.
+    const prefix = enabled.filter(m => m.alias!.toLowerCase().startsWith(lower));
+    return prefix.length === 1 ? prefix[0] : undefined;
+  }
+
+  /**
+   * Return every enabled alias that starts with `prefix` (case-insensitive).
+   * Used by error-message sites to report "did you mean X or Y?" on an
+   * ambiguous @mention and by the TUI suggestion system for `@` autocomplete.
+   */
+  findAliasCandidates(prefix: string): string[] {
+    const lower = prefix.toLowerCase();
+    return this.models
+      .filter(m => m.alias && m.enabled && m.alias.toLowerCase().startsWith(lower))
+      .map(m => m.alias!);
   }
 
   /** Get all known aliases for display */

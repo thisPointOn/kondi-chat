@@ -158,6 +158,8 @@ export interface LedgerEntry {
   latencyMs: number;
   costUsd: number;
   cached: boolean;
+  /** Input tokens served from the provider's prompt cache (included in inputTokens). */
+  cachedInputTokens?: number;
 
   /** What was sent (system + user prompt) */
   promptSummary: string;
@@ -305,4 +307,12 @@ export interface LLMResponse {
    * shown inline; the TUI exposes it via Ctrl+R.
    */
   reasoningContent?: string;
+  /**
+   * Portion of inputTokens that the provider served from its prompt cache
+   * (OpenAI `prompt_tokens_details.cached_tokens`, Anthropic
+   * `cache_read_input_tokens`). Billed at reduced rate — our cost estimate
+   * subtracts 50% of the standard input price on the cached portion, which
+   * matches the published discount on both OpenAI and Z.AI endpoints.
+   */
+  cachedInputTokens?: number;
 }

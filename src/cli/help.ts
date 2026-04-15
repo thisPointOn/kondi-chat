@@ -13,10 +13,10 @@ export interface HelpTopic {
 
 const TOPICS: Record<string, HelpTopic> = {
   '/mode': {
-    syntax: '/mode [quality|balanced|cheap|<custom>]',
-    description: 'Show or set the active budget profile. Profiles control loop caps, cost caps, and model priorities.',
-    examples: ['/mode', '/mode quality', '/mode cheap'],
-    related: ['/use', '/cost'],
+    syntax: '/mode [quality|balanced|cheap|zai|<custom>]',
+    description: 'Show or set the active budget profile. Profiles control loop caps, cost caps, model priorities, and optional provider allow-lists. Persisted across restarts via .kondi-chat/config.json.',
+    examples: ['/mode', '/mode quality', '/mode zai'],
+    related: ['/use', '/cost', '/routing'],
   },
   '/use': {
     syntax: '/use <alias> | /use auto',
@@ -61,6 +61,10 @@ const TOPICS: Record<string, HelpTopic> = {
     examples: ['/undo', '/undo 2', '/undo cp-1712438400-abcd'],
     related: ['/checkpoints'],
   },
+  '/routing': {
+    description: 'Routing dashboard: tier distribution (intent/nn/rules), per-model success rates and cost, model×tier matrix, quality scores, NN training readiness, and by-phase breakdown. The intent tier is the primary — if it is dominant you know the router is picking models with full model descriptions instead of falling back to hardcoded rules.',
+    related: ['/models', '/cost', '/analytics'],
+  },
   '/rate-limits': {
     description: 'Show per-provider RPM/TPM usage and any queued requests.',
   },
@@ -70,7 +74,7 @@ const TOPICS: Record<string, HelpTopic> = {
   },
   '/council': {
     syntax: '/council [list | run <profile> <brief>]',
-    description: 'Run multi-model deliberation via the council tool.',
+    description: 'Run multi-model deliberation via the council tool. Councils are expensive (fan out across frontier models for multiple rounds) and blocking (synchronous subprocess) — the agent CANNOT invoke them automatically; only explicit /council runs them. Not available from inside the agent toolset.',
   },
   '/help': {
     syntax: '/help [topic]',
@@ -94,6 +98,30 @@ const TOPICS: Record<string, HelpTopic> = {
   },
   'non-interactive': {
     description: 'Flags: --prompt "<text>", --pipe, --json, --sessions. Exit codes: 0 ok, 1 error, 2 max-iter, 3 max-cost, 5 permission-denied.',
+  },
+  'shortcuts': {
+    description: 'TUI keybindings. Ctrl+C quit · Ctrl+N newline in input · Ctrl+O toggle tool-call detail view · Ctrl+T toggle stats detail view · Ctrl+R toggle reasoning detail view (chain-of-thought for reasoning models) · Ctrl+Y copy last assistant response to clipboard · Ctrl+A toggle activity log · Left/Right/Home/End move input cursor · Up/Down recall input history · Esc close detail view or clear input. Permission dialogs: y/Enter approve · n/Esc deny · a approve this exact command for session · t yolo-approve everything for this turn.',
+    related: ['permissions'],
+  },
+  'zai': {
+    description: 'Z.AI (GLM) is supported as an OpenAI-compatible provider. Set ZAI_API_KEY in .env. The Coding Plan endpoint (https://api.z.ai/api/coding/paas/v4) is used — NOT the pay-as-you-go /api/paas/v4. Use /mode zai to route everything through the tiered zai profile: glm-5.1 (reasoning) for planning/review, glm-4.6 for execution/coding, glm-4.5-flash (free!) for compression and summarization. Profile restricts routing via allowedProviders so nothing leaks to other providers.',
+    related: ['/mode', 'reasoning-models', 'compression'],
+  },
+  'reasoning-models': {
+    description: 'Reasoning models (GLM-5.x, OpenAI o-series, DeepSeek-R1, Anthropic extended-thinking) emit hidden chain-of-thought that is billed as OUTPUT tokens at full rate but not shown inline. A single 20-char reply can cost 500+ output tokens of unseen reasoning — the "80× reasoning tax." Ctrl+R opens the reasoning panel so you can see what the model was actually thinking. Keep reasoning models off the hot path if quota matters; use them only where the depth pays for itself (planning, code review). Cache discount still applies to cached input tokens.',
+    related: ['shortcuts', 'zai'],
+  },
+  'compression': {
+    description: 'Context is capped at the active profile contextBudget. Inside a single agent-loop turn, old tool_result payloads are stubbed in place across three escalation passes (keep 2 turns at 300 chars, keep 1 turn at 100 chars, keep 1 turn at 50 chars) — no LLM calls, just string rewriting. Between turns, ContextManager.compact() summarizes older messages via the active profile compression model (glm-4.5-flash in zai mode, claude-haiku-4-5 otherwise) and writes a COMPACT_BOUNDARY marker. Compaction triggers at contextBudget × 1.2, not at the model context window.',
+    related: ['/mode', 'zai'],
+  },
+  'intent-router': {
+    description: 'The LLM-based intent router is the primary model-selection tier. On every turn it reads every enabled model description + capabilities and asks a cheap classifier LLM which one best fits the task. Scoped to the active profile allowedProviders (so zai mode never picks claude-opus). Classifier LLM is also profile-scoped (zai uses glm-4.5-flash — free — instead of claude-haiku). Falls through to rule-based routing only when the intent tier errors or the profile has zero valid candidates. /routing shows the per-tier distribution.',
+    related: ['/routing', '/mode'],
+  },
+  'caching': {
+    description: 'Prompt cache hits are tracked on both Anthropic (cache_read_input_tokens) and OpenAI-compatible (prompt_tokens_details.cached_tokens) responses. Cached tokens are recorded separately on the ledger entry and discounted in cost estimates (10% of input rate on Anthropic, 50% on OpenAI/Z.AI). See cachedInputTokens in the ledger and /routing for live totals.',
+    related: ['/routing', '/cost'],
   },
 };
 

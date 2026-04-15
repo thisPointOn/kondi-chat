@@ -179,6 +179,7 @@ async function callAnthropic(
     let inputTokens = 0;
     let outputTokens = 0;
     let cached = false;
+    let cachedInputTokens = 0;
 
     // Track tool_use blocks being built
     let currentToolId = '';
@@ -192,7 +193,8 @@ async function callAnthropic(
         const usage = event.data?.message?.usage;
         if (usage) {
           inputTokens = usage.input_tokens || 0;
-          cached = (usage.cache_read_input_tokens || 0) > 0;
+          cachedInputTokens = usage.cache_read_input_tokens || 0;
+          cached = cachedInputTokens > 0;
         }
       } else if (event.type === 'content_block_start') {
         const block = event.data?.content_block;
@@ -243,6 +245,7 @@ async function callAnthropic(
       content, model, provider: 'anthropic',
       inputTokens, outputTokens,
       latencyMs: Date.now() - start, cached,
+      ...(cachedInputTokens > 0 ? { cachedInputTokens } : {}),
       ...(toolCalls.length > 0 ? { toolCalls } : {}),
       ...(reasoningContent ? { reasoningContent } : {}),
     };
@@ -276,6 +279,7 @@ async function callAnthropic(
     outputTokens: usage.output_tokens || 0,
     latencyMs: Date.now() - start,
     cached: (usage.cache_read_input_tokens || 0) > 0,
+    ...((usage.cache_read_input_tokens || 0) > 0 ? { cachedInputTokens: usage.cache_read_input_tokens } : {}),
     ...(toolCalls.length > 0 ? { toolCalls } : {}),
     ...(reasoningContent ? { reasoningContent } : {}),
   };
@@ -404,6 +408,7 @@ async function callOpenAICompatible(
     let actualModel = model;
     let inputTokens = 0;
     let outputTokens = 0;
+    let cachedInputTokens = 0;
 
     for await (const event of parseSSE(resp)) {
       if (!event.data || event.data === '[DONE]') continue;
@@ -455,6 +460,7 @@ async function callOpenAICompatible(
       if (chunk.usage) {
         inputTokens = chunk.usage.prompt_tokens || 0;
         outputTokens = chunk.usage.completion_tokens || 0;
+        cachedInputTokens = chunk.usage.prompt_tokens_details?.cached_tokens || 0;
       }
     }
 
@@ -471,6 +477,7 @@ async function callOpenAICompatible(
       content, model: actualModel, provider,
       inputTokens, outputTokens,
       latencyMs: Date.now() - start,
+      ...(cachedInputTokens > 0 ? { cachedInputTokens, cached: true } : {}),
       ...(toolCalls.length > 0 ? { toolCalls } : {}),
       ...(reasoningContent ? { reasoningContent } : {}),
     };
@@ -480,6 +487,7 @@ async function callOpenAICompatible(
   const data: any = await resp.json();
   const choice = data.choices?.[0]?.message || {};
   const usage = data.usage || {};
+  const cachedInputTokensNs = usage.prompt_tokens_details?.cached_tokens || 0;
   const actualModel = data.model || model;
 
   const toolCalls: ToolCall[] = [];
@@ -502,6 +510,7 @@ async function callOpenAICompatible(
     inputTokens: usage.prompt_tokens || 0,
     outputTokens: usage.completion_tokens || 0,
     latencyMs: Date.now() - start,
+    ...(cachedInputTokensNs > 0 ? { cachedInputTokens: cachedInputTokensNs, cached: true } : {}),
     ...(toolCalls.length > 0 ? { toolCalls } : {}),
     ...(choice.reasoning_content ? { reasoningContent: choice.reasoning_content } : {}),
   };

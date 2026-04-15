@@ -245,33 +245,41 @@ export class ContextManager {
 
   /**
    * Check if compaction is needed and perform it.
-   * Triggers when estimated context size approaches the model's window.
+   *
+   * Triggers on the smaller of:
+   *   - profile contextBudget + 20% headroom (forces compaction while tokens
+   *     are still cheap, instead of waiting for the 200k model window)
+   *   - modelContextWindow - AUTOCOMPACT_BUFFER (hard ceiling fallback)
    */
   async maybeCompact(): Promise<{ compacted: boolean; reason?: string }> {
     const contextSize = this.estimateCurrentContextSize();
-    const threshold = this.config.modelContextWindow - AUTOCOMPACT_BUFFER;
-    const warningThreshold = this.config.modelContextWindow - AUTOCOMPACT_WARNING_BUFFER;
 
-    if (contextSize < warningThreshold) {
-      return { compacted: false };
-    }
+    const budgetThreshold = Math.floor(this.config.contextBudget * 1.2);
+    const windowThreshold = this.config.modelContextWindow - AUTOCOMPACT_BUFFER;
+    const threshold = Math.min(budgetThreshold, windowThreshold);
 
-    if (contextSize >= warningThreshold && contextSize < threshold) {
-      process.stderr.write(
-        `[context] Warning: ${contextSize.toLocaleString()}/${this.config.modelContextWindow.toLocaleString()} tokens ` +
-        `(${((contextSize / this.config.modelContextWindow) * 100).toFixed(0)}% — compaction soon)\n`
-      );
+    if (contextSize < threshold) {
       return { compacted: false };
     }
 
     // Compact needed
     process.stderr.write(
       `[context] Auto-compact triggered: ${contextSize.toLocaleString()} tokens ` +
-      `(threshold: ${threshold.toLocaleString()})\n`
+      `(threshold: ${threshold.toLocaleString()}, budget: ${this.config.contextBudget.toLocaleString()})\n`
     );
 
     await this.compact();
     return { compacted: true, reason: `${contextSize} tokens exceeded threshold ${threshold}` };
+  }
+
+  /**
+   * Override the compression provider + model at runtime. Called from the
+   * backend after it's determined which profile is active, so compaction in
+   * `zai` mode uses glm-4.5-flash (free) instead of claude-haiku.
+   */
+  setCompressionModel(provider: ProviderId, model: string): void {
+    this.config.compressionProvider = provider;
+    this.config.compressionModel = model;
   }
 
   /**

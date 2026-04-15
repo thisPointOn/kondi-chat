@@ -27,13 +27,13 @@ import { runSubAgent, formatSubAgentResult } from '../engine/sub-agents.ts';
 import { WebToolsManager } from '../web/manager.ts';
 import type { ImageAttachment } from '../types.ts';
 import { Router as UnifiedRouter } from '../router/index.ts';
-import { ProfileManager } from '../router/profiles.ts';
+import { ProfileManager, type BudgetProfile } from '../router/profiles.ts';
 import { LoopGuard } from '../engine/loop-guard.ts';
 import { McpClientManager } from '../mcp/client.ts';
 import { loadMcpConfig } from '../mcp/config.ts';
 import { ToolManager } from '../mcp/tool-manager.ts';
 import { CouncilProfileManager } from '../council/profiles.ts';
-import { COUNCIL_TOOL, executeCouncil } from '../council/tool.ts';
+import { executeCouncil } from '../council/tool.ts';
 import { RoutingCollector } from '../router/collector.ts';
 import { Analytics } from '../audit/analytics.ts';
 import { TelemetryEmitter } from '../audit/telemetry.ts';
@@ -137,16 +137,37 @@ async function main() {
 
   const councilProfiles = new CouncilProfileManager(storageDir);
   const councilPath = resolve(workingDir, '../kondi-council');
-  toolManager.registerTool(COUNCIL_TOOL, async (args) => {
-    return executeCouncil(args.profile as string, args.brief as string, [], workingDir, councilPath, councilProfiles);
-  });
+  // Councils are expensive (fan out to multiple frontier models for
+  // multi-round deliberation) and blocking (synchronous subprocess).
+  // They must NEVER be auto-invokable by the agent — the model must not
+  // see COUNCIL_TOOL in its toolset. Users reach councils only via the
+  // explicit /council slash command in handleCommand.
 
   // Bootstrap
   const ctx = await bootstrapDirectory(workingDir, 'light');
   if (ctx) session.groundingContext = ctx;
 
   const memoryManager = new MemoryManager(workingDir);
-  const contextManager = new ContextManager(session, { contextBudget: 30_000 }, ledger, memoryManager);
+  const contextManager = new ContextManager(
+    session,
+    { contextBudget: profiles.getActive().contextBudget },
+    ledger,
+    memoryManager,
+  );
+  // Pick a cheap, profile-appropriate compression model. When the active
+  // profile restricts providers (e.g. zai), the compaction LLM call should
+  // stay inside the filter. For unrestricted profiles, fall back to the
+  // cheapest `summarization` model in the registry.
+  const applyProfileScope = () => {
+    const p = profiles.getActive();
+    const cheap = pickCompressionModel(registry, p);
+    if (cheap) contextManager.setCompressionModel(cheap.provider, cheap.id);
+    router.setProfileScope({
+      allowedProviders: p.allowedProviders,
+      classifier: cheap ? { provider: cheap.provider, model: cheap.id } : undefined,
+    });
+  };
+  applyProfileScope();
 
   // Spec 02 — git context (refreshed after mutating tools and once per turn).
   let gitCtx: GitContext = detectGitRepo(workingDir);
@@ -357,6 +378,96 @@ async function main() {
  * refine this inside Router.select(), but the phase decides which
  * preference list applies.
  */
+/**
+ * Stub tool results older than `keepLatest` iterations in place so they stop
+ * costing input tokens on every subsequent LLM call inside an agent loop.
+ *
+ * Rationale: the ledger showed one user turn going 10k → 23k input tokens as
+ * `read_file` / `search_code` results piled up in the messages array. Most
+ * of that content is no longer load-bearing two iterations later — the model
+ * has already read whatever mattered and moved on. We keep the last
+ * `keepLatest` tool turns verbatim and collapse older ones into one-line
+ * placeholders. Errors are never stubbed. `messages` is mutated in place;
+ * it's a local buffer to handleSubmit, so there's no cross-turn leakage.
+ */
+function collapseOldToolResults(messages: LLMMessage[], keepLatest = 2, minLen = 300): number {
+  let saved = 0;
+  let keptToolTurns = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== 'tool' || !m.toolResults) continue;
+    if (keptToolTurns < keepLatest) {
+      keptToolTurns++;
+      continue;
+    }
+    for (const tr of m.toolResults) {
+      if (tr.isError) continue;
+      const origLen = (tr.content || '').length;
+      if (origLen < minLen) continue;
+      const stub = `[collapsed: ${origLen} chars from earlier iteration — content pruned to save context]`;
+      saved += origLen - stub.length;
+      tr.content = stub;
+    }
+  }
+  return saved;
+}
+
+/** Cheap estimate of total message tokens (4 chars ≈ 1 token). */
+function estimateMessagesTokens(messages: LLMMessage[]): number {
+  let chars = 0;
+  for (const m of messages) {
+    if (m.content) chars += m.content.length;
+    if (m.toolCalls) chars += JSON.stringify(m.toolCalls).length;
+    if (m.toolResults) for (const tr of m.toolResults) chars += (tr.content || '').length;
+  }
+  return Math.ceil(chars / 4);
+}
+
+/**
+ * Adaptive in-loop compaction. Escalates aggressiveness until the token
+ * estimate is under the profile's contextBudget:
+ *
+ *   pass 1: keep 2 tool turns, stub anything ≥ 300 chars
+ *   pass 2: keep 1 tool turn, stub anything ≥ 100 chars
+ *   pass 3: keep 1 tool turn, stub anything ≥ 50 chars
+ *
+ * No LLM calls — pure local string manipulation. Returns the final token
+ * estimate so the caller can emit it as an activity line.
+ */
+function compactInLoop(messages: LLMMessage[], budget: number): { before: number; after: number; savedBytes: number } {
+  const before = estimateMessagesTokens(messages);
+  if (before <= budget) return { before, after: before, savedBytes: 0 };
+
+  let savedBytes = collapseOldToolResults(messages, 2, 300);
+  if (estimateMessagesTokens(messages) > budget) {
+    savedBytes += collapseOldToolResults(messages, 1, 100);
+  }
+  if (estimateMessagesTokens(messages) > budget) {
+    savedBytes += collapseOldToolResults(messages, 1, 50);
+  }
+  return { before, after: estimateMessagesTokens(messages), savedBytes };
+}
+
+/**
+ * Pick the cheapest enabled model for compaction-style LLM calls.
+ * Respects the active profile's allowedProviders so `zai` mode compacts
+ * with glm-4.5-flash (free) instead of bleeding out to claude-haiku.
+ * Returns undefined if nothing suitable is enabled — caller keeps the
+ * hardcoded ContextManager default in that case.
+ */
+function pickCompressionModel(registry: any, profile: BudgetProfile): { provider: ProviderId; id: string } | undefined {
+  const allowed = profile.allowedProviders;
+  const candidates: any[] = registry.getAvailable();
+  const inScope = allowed && allowed.length > 0
+    ? candidates.filter((m: any) => allowed.includes(m.provider))
+    : candidates;
+  const withSummarization = inScope.filter((m: any) => m.capabilities.includes('summarization'));
+  const pool = withSummarization.length > 0 ? withSummarization : inScope;
+  if (pool.length === 0) return undefined;
+  pool.sort((a: any, b: any) => a.inputCostPer1M - b.inputCostPer1M);
+  return { provider: pool[0].provider, id: pool[0].id };
+}
+
 function classifyPhase(input: string): 'execute' | 'discuss' {
   const s = input.toLowerCase();
   // Strong coding-intent verbs paired with code-y nouns / file extensions / language names.
@@ -393,7 +504,13 @@ async function handleSubmit(
     const message = mentionMatch[2];
     const targetModel = router.registry.getByAlias(alias);
     if (!targetModel) {
-      emit({ type: 'error', message: `Unknown model: @${alias}` });
+      const candidates = router.registry.findAliasCandidates(alias);
+      const hint = candidates.length > 1
+        ? ` — ambiguous, could be: ${candidates.map(a => `@${a}`).join(', ')}`
+        : candidates.length === 0
+          ? ` — available: ${router.registry.getAliases().map(a => `@${a}`).join(', ')}`
+          : '';
+      emit({ type: 'error', message: `Unknown model: @${alias}${hint}` });
       return;
     }
 
@@ -464,6 +581,20 @@ async function handleSubmit(
       activity_type: 'step',
     });
     emit({ type: 'message_update', id: msgId, model_label: respondingModel });
+
+    // Before each model call, enforce the profile's contextBudget by
+    // stubbing old tool results in place. No LLM calls — zero cost. If the
+    // stub-stub-stub passes can't get us under budget, we proceed anyway
+    // and rely on the LLM's own context window as the final backstop.
+    const budget = profiles.getActive().contextBudget;
+    const compaction = compactInLoop(messages, budget);
+    if (compaction.savedBytes > 0) {
+      emit({
+        type: 'activity',
+        text: `context: ${compaction.before.toLocaleString()} → ${compaction.after.toLocaleString()} tokens (${compaction.savedBytes.toLocaleString()} chars pruned)`,
+        activity_type: 'step',
+      });
+    }
 
     const response = await callLLM({
       provider: decision.model.provider,
@@ -634,7 +765,21 @@ async function handleCommand(
       try {
         profiles.setProfile(mode as any);
         router.rules.setProfile(profiles.getActive());
+        // Reapply profile scope to intent router + compression model so
+        // switching to/from zai updates everything in one shot.
+        const p = profiles.getActive();
+        const cheap = pickCompressionModel(registry, p);
+        if (cheap) contextManager.setCompressionModel(cheap.provider, cheap.id);
+        router.setProfileScope({
+          allowedProviders: p.allowedProviders,
+          classifier: cheap ? { provider: cheap.provider, model: cheap.id } : undefined,
+        });
         writeActiveProfile(resolve(workingDir, '.kondi-chat'), profiles.getActive().name);
+        // If there's no manual override, let the indicator reflect the
+        // new profile name until the next turn resolves a concrete model.
+        if (!router.rules.getOverride()) {
+          emit({ type: 'model_override', label: profiles.getActive().name });
+        }
         return `Mode: ${profiles.getActive().name}`;
       } catch (e) { return (e as Error).message; }
     }
@@ -643,10 +788,21 @@ async function handleCommand(
       if (!alias) return router.rules.getOverride()
         ? `Using: ${router.rules.getOverride()!.alias || router.rules.getOverride()!.id}`
         : 'Router: auto';
-      if (alias === 'auto') { router.rules.setOverride(undefined); return 'Router: auto'; }
+      if (alias === 'auto') {
+        router.rules.setOverride(undefined);
+        emit({ type: 'model_override', label: profiles.getActive().name });
+        return 'Router: auto';
+      }
       const model = registry.getByAlias(alias);
-      if (!model) return `Unknown: ${alias}. Available: ${registry.getAliases().join(', ')}`;
+      if (!model) {
+        const candidates: string[] = registry.findAliasCandidates(alias);
+        const hint = candidates.length > 1
+          ? ` — ambiguous, could be: ${candidates.map((a: string) => `@${a}`).join(', ')}`
+          : ` — available: ${registry.getAliases().join(', ')}`;
+        return `Unknown: ${alias}${hint}`;
+      }
       router.rules.setOverride(model);
+      emit({ type: 'model_override', label: model.alias || model.id });
       return `Using: ${model.name} (@${model.alias})`;
     }
     case '/models': return registry.format();

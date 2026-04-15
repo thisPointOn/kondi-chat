@@ -1,6 +1,7 @@
 use crate::protocol::{BackendEvent, GitInfo, MessageStats, ToolCallInfo};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use std::collections::VecDeque;
 use std::time::Instant;
 
 #[derive(Debug, Clone)]
@@ -37,6 +38,9 @@ pub struct App {
     pub history_idx: Option<usize>,
     pub history_draft: String,
     pub input: String,
+    /// Cursor position within `input`, measured in *characters* (not bytes)
+    /// so multibyte UTF-8 content doesn't desync the index.
+    pub input_cursor: usize,
     pub status: String,
     pub model: String,
     pub is_processing: bool,
@@ -51,6 +55,14 @@ pub struct App {
     pub git_info: Option<GitInfo>,
     /// Most recent completed assistant message body — used by Ctrl+Y to copy.
     pub last_assistant_content: Option<String>,
+    /// Type-ahead queue: submits (or slash commands) that were entered
+    /// while a previous turn was still running. Drained one at a time in
+    /// the main loop when `is_processing` flips back to false. Prevents
+    /// concurrent turns from racing over shared context / session state.
+    pub pending_submits: VecDeque<String>,
+    /// Aliases (or ids) of models the backend reports as available. Populated
+    /// from the `ready` event and consumed by the `@` autocomplete system.
+    pub available_models: Vec<String>,
     /// Persistent clipboard handle. On X11 arboard serves the selection
     /// from a background thread owned by this struct; if we drop it after
     /// each copy the contents disappear instantly. Kept alive for the
@@ -77,6 +89,7 @@ impl App {
             history_idx: None,
             history_draft: String::new(),
             input: String::new(),
+            input_cursor: 0,
             status: "Starting...".to_string(),
             model: "auto".to_string(),
             is_processing: false,
@@ -90,6 +103,8 @@ impl App {
             pending_permissions: vec![],
             git_info: None,
             last_assistant_content: None,
+            pending_submits: VecDeque::new(),
+            available_models: vec![],
             clipboard: arboard::Clipboard::new().ok(),
         }
     }
@@ -107,6 +122,7 @@ impl App {
         // user_inputs is newest-last, history_idx 0 = most recent.
         let len = self.user_inputs.len();
         self.input = self.user_inputs[len - 1 - next].clone();
+        self.input_cursor = self.char_len();
     }
 
     pub fn history_next(&mut self) {
@@ -124,21 +140,128 @@ impl App {
                 self.input = self.user_inputs[len - 1 - next].clone();
             }
         }
+        self.input_cursor = self.char_len();
     }
 
-    /// Called when the user presses Enter. Renders the user line into
-    /// pending_history (will land in terminal scrollback) and tracks it
-    /// for input history recall.
+    /// Called when the user presses Enter and a submit is dispatched to
+    /// the backend. Records the user line in scrollback AND marks the
+    /// session as processing (spinner on, status "thinking...").
     pub fn add_user_message(&mut self, text: &str) {
+        self.record_user_line(text);
+        self.begin_processing();
+    }
+
+    /// Push a user line into scrollback + history recall without flipping
+    /// the processing state. Used when queueing type-ahead during an
+    /// already-running turn — the line is visible immediately but the
+    /// current turn's spinner/status is untouched.
+    pub fn record_user_line(&mut self, text: &str) {
         self.user_inputs.push(text.to_string());
         let lines = render_user_lines(text);
         self.pending_history.push(lines);
+        self.history_idx = None;
+        self.history_draft.clear();
+    }
+
+    fn begin_processing(&mut self) {
         self.is_processing = true;
         self.activity.clear();
         self.status = "thinking...".to_string();
         self.start_time = Instant::now();
-        self.history_idx = None;
-        self.history_draft.clear();
+    }
+
+    /// Queue a submit/command to fire when the current turn finishes.
+    /// The user line is rendered to scrollback immediately (with a
+    /// "queued" marker) so the user has confirmation the keystroke
+    /// landed. When the turn ends, `pop_pending_submit` hands the text
+    /// back and the main loop dispatches it normally.
+    pub fn queue_submit(&mut self, text: String) {
+        // Visual indicator that it's queued, not sent.
+        let preview = if text.len() > 80 {
+            format!("{}…", &text[..80.min(text.len())])
+        } else {
+            text.clone()
+        };
+        self.pending_history.push(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("⧗ queued: {}", preview),
+                Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            )),
+        ]);
+        self.pending_submits.push_back(text);
+    }
+
+    /// Drain the next queued submit and render it as a normal user line.
+    /// The caller (main loop) is responsible for actually sending the
+    /// TuiCommand over stdin — App has no writer handle.
+    pub fn pop_pending_submit(&mut self) -> Option<String> {
+        let text = self.pending_submits.pop_front()?;
+        self.add_user_message(&text);
+        Some(text)
+    }
+
+    /// Drop every queued submit without firing them. Called when the user
+    /// hits Esc on an empty input while the queue has entries — gives an
+    /// escape hatch if they change their mind mid-queue.
+    pub fn clear_pending_submits(&mut self) -> usize {
+        let n = self.pending_submits.len();
+        self.pending_submits.clear();
+        if n > 0 {
+            self.push_system(format!("Cleared {n} queued submit{}.", if n == 1 { "" } else { "s" }));
+        }
+        n
+    }
+
+    // ── Input editing (cursor-aware, UTF-8 safe) ───────────────────
+
+    fn char_len(&self) -> usize { self.input.chars().count() }
+
+    /// Convert a char index into a byte index for slicing `self.input`.
+    fn byte_at(&self, char_idx: usize) -> usize {
+        self.input
+            .char_indices()
+            .nth(char_idx)
+            .map(|(b, _)| b)
+            .unwrap_or(self.input.len())
+    }
+
+    pub fn insert_char(&mut self, c: char) {
+        let byte = self.byte_at(self.input_cursor);
+        self.input.insert(byte, c);
+        self.input_cursor += 1;
+    }
+
+    pub fn backspace_at_cursor(&mut self) {
+        if self.input_cursor == 0 { return; }
+        let prev = self.input_cursor - 1;
+        let start = self.byte_at(prev);
+        let end = self.byte_at(self.input_cursor);
+        self.input.replace_range(start..end, "");
+        self.input_cursor = prev;
+    }
+
+    pub fn delete_at_cursor(&mut self) {
+        if self.input_cursor >= self.char_len() { return; }
+        let start = self.byte_at(self.input_cursor);
+        let end = self.byte_at(self.input_cursor + 1);
+        self.input.replace_range(start..end, "");
+    }
+
+    pub fn cursor_left(&mut self) {
+        if self.input_cursor > 0 { self.input_cursor -= 1; }
+    }
+
+    pub fn cursor_right(&mut self) {
+        if self.input_cursor < self.char_len() { self.input_cursor += 1; }
+    }
+
+    pub fn cursor_home(&mut self) { self.input_cursor = 0; }
+    pub fn cursor_end(&mut self) { self.input_cursor = self.char_len(); }
+
+    pub fn clear_input(&mut self) {
+        self.input.clear();
+        self.input_cursor = 0;
     }
 
     /// Copy the most recent completed assistant message to the system
@@ -208,10 +331,11 @@ impl App {
 
     pub fn handle_backend_event(&mut self, event: BackendEvent) {
         match event {
-            BackendEvent::Ready { mode, status, git_info, resumed, resumed_session_id, resumed_message_count, .. } => {
+            BackendEvent::Ready { mode, status, git_info, resumed, resumed_session_id, resumed_message_count, models, .. } => {
                 self.status = status;
                 self.model = mode;
                 self.git_info = git_info;
+                self.available_models = models;
                 if resumed {
                     let id = resumed_session_id.unwrap_or_default();
                     let count = resumed_message_count.unwrap_or(0);
@@ -299,6 +423,9 @@ impl App {
                 self.push_system(output);
                 self.is_processing = false;
                 self.status = String::new();
+            }
+            BackendEvent::ModelOverride { label } => {
+                self.model = label;
             }
         }
     }

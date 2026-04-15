@@ -1,16 +1,21 @@
 /**
  * Unified Router — chains NN → Intent → Rules for model selection.
  *
- * 1. NN Router: fast, trained on accumulated data (primary)
- * 2. Intent Router: LLM classifies against model descriptions (cold-start)
- * 3. Rule Router: phase/task-kind fallback (always works)
+ * The Intent Router is the primary and most capable strategy — it reads
+ * every model's description and capabilities from the registry and asks
+ * an LLM which one best fits the task. It handles any model, any capability.
  *
- * The intent router is only used when:
- *   - NN router returns null (low confidence or not trained)
- *   - The registry has models the NN hasn't seen
+ * The NN Router is a fast approximation of Intent — when trained on enough
+ * data, it can predict the Intent Router's choice without an LLM call.
+ * It's used when available for speed (no API latency).
+ *
+ * The Rule Router is the minimal fallback — phase/task-kind heuristics
+ * that always produce a result but don't consider model descriptions.
+ *
+ * Priority: NN (if trained & confident) → Intent (primary) → Rules (fallback)
  */
 
-import type { LedgerPhase, TaskKind } from '../types.ts';
+import type { LedgerPhase, TaskKind, ProviderId } from '../types.ts';
 import type { ModelEntry } from './registry.ts';
 import { ModelRegistry } from './registry.ts';
 import { RuleRouter, type RouteDecision } from './rules.ts';
@@ -44,6 +49,16 @@ export class Router {
   readonly collector: RoutingCollector;
 
   private useIntent: boolean;
+  /**
+   * Active profile scope + classifier overrides, applied to every
+   * `select()` call. `setProfileScope` is called from backend.ts whenever
+   * the active budget profile changes so the intent router (and its
+   * classifier LLM) stay inside the profile's allowedProviders.
+   */
+  private profileScope: {
+    allowedProviders?: ProviderId[];
+    classifier?: { provider: ProviderId; model: string };
+  } = {};
 
   constructor(
     storageDir: string,
@@ -61,6 +76,19 @@ export class Router {
     this.intent = new IntentRouter(options?.intentConfig);
     this.collector = new RoutingCollector(storageDir, this.embeddings);
     this.useIntent = options?.useIntent ?? true;
+  }
+
+  /**
+   * Update the profile-scoped behavior for intent routing:
+   *   - allowedProviders: filters candidate models
+   *   - classifier: overrides the classifier LLM (e.g. zai uses glm-4.5-flash)
+   * Called from backend.ts whenever the active profile changes.
+   */
+  setProfileScope(scope: {
+    allowedProviders?: ProviderId[];
+    classifier?: { provider: ProviderId; model: string };
+  }): void {
+    this.profileScope = scope;
   }
 
   /**
@@ -99,11 +127,18 @@ export class Router {
       process.stderr.write(`[router] NN tier failed: ${(e as Error).message}\n`);
     }
 
-    // 2. Try intent router (LLM call, for cold-start/new models)
+    // 2. Try intent router (LLM call — primary strategy). The profile
+    //    scope narrows candidate models and picks a profile-appropriate
+    //    classifier LLM, so zai mode classifies with glm-4.5-flash (free)
+    //    and only considers zai models as outputs.
     try {
       if (this.useIntent) {
         const intentResult = await this.intent.classify(
           promptText, phase, taskKind, this.registry,
+          {
+            allowedProviders: this.profileScope.allowedProviders,
+            classifier: this.profileScope.classifier,
+          },
         );
 
         if (intentResult) {

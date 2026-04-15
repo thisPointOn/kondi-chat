@@ -124,6 +124,7 @@ export async function runPipeline(
     outputTokens: dispatchResponse.outputTokens,
     costUsd: 0, latencyMs: dispatchResponse.latencyMs,
     routeReason: dispatchRoute.decision?.reason || 'fallback',
+    routingTier: dispatchRoute.decision?.tier,
   });
 
   card.status = 'executing';
@@ -242,6 +243,7 @@ export async function runPipeline(
     outputTokens: executionResponse.outputTokens,
     costUsd: 0, latencyMs: executionResponse.latencyMs,
     routeReason: execRoute.decision?.reason || 'fallback',
+    routingTier: execRoute.decision?.tier,
   });
 
   // -----------------------------------------------------------------------

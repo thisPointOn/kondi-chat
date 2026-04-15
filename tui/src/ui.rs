@@ -16,6 +16,66 @@ use crate::app::{render_assistant_lines, App};
 /// (the common case for assistant message text). Multi-span lines like
 /// the assistant header (`● label`) are short and shouldn't trigger wrap
 /// in practice.
+/// Render the input buffer with a visible cursor block at `cursor` (a
+/// *character* index, not a byte index). The cursor is an inverted-color
+/// cell covering the char at the cursor position, or a trailing block if
+/// the cursor is at the end. Newlines split into separate Lines so the
+/// Paragraph widget wraps as you'd expect for a multi-line compose box.
+fn build_input_text(
+    input: &str,
+    cursor: usize,
+    base: Style,
+    cursor_style: Style,
+) -> Text<'static> {
+    // Walk chars and emit spans, toggling style at the cursor position.
+    // A span's style is fixed, so we break the stream into "before",
+    // "cursor cell" (one char), and "after" segments.
+    let total: usize = input.chars().count();
+    let cursor = cursor.min(total);
+
+    let mut lines_out: Vec<Line<'static>> = Vec::new();
+    let mut current: Vec<Span<'static>> = Vec::new();
+
+    // Helper: flush current into lines_out, optionally starting a new line.
+    let push_str = |buf: &mut Vec<Span<'static>>, lines: &mut Vec<Line<'static>>, s: &str, style: Style| {
+        let mut first = true;
+        for seg in s.split('\n') {
+            if !first {
+                lines.push(Line::from(std::mem::take(buf)));
+            }
+            if !seg.is_empty() {
+                buf.push(Span::styled(seg.to_string(), style));
+            }
+            first = false;
+        }
+    };
+
+    // before cursor
+    let before: String = input.chars().take(cursor).collect();
+    push_str(&mut current, &mut lines_out, &before, base);
+
+    // cursor cell
+    if cursor < total {
+        let ch_at = input.chars().nth(cursor).unwrap_or(' ');
+        if ch_at == '\n' {
+            // Cursor sits on a newline — show a block at end of line,
+            // then start a new line.
+            current.push(Span::styled(" ".to_string(), cursor_style));
+            lines_out.push(Line::from(std::mem::take(&mut current)));
+        } else {
+            current.push(Span::styled(ch_at.to_string(), cursor_style));
+        }
+        let after: String = input.chars().skip(cursor + 1).collect();
+        push_str(&mut current, &mut lines_out, &after, base);
+    } else {
+        // Cursor at end — trailing block.
+        current.push(Span::styled(" ".to_string(), cursor_style));
+    }
+
+    lines_out.push(Line::from(current));
+    Text::from(lines_out)
+}
+
 pub fn wrap_lines_to_width(lines: &[Line<'_>], width: usize) -> Vec<Line<'static>> {
     let w = width.max(1);
     let mut out: Vec<Line<'static>> = Vec::new();
@@ -78,7 +138,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     };
     let input_height = (input_lines as u16 + 2).min(9).max(4);
 
-    let suggestions = get_suggestions(&app.input, &app.model);
+    let suggestions = get_suggestions(&app.input, &app.model, &app.available_models);
     let suggestion_height = if suggestions.is_empty() { 0 } else { (suggestions.len() as u16).min(6) };
 
     // Reserve fixed slots for status (1) + input + model (1) + suggestions.
@@ -167,6 +227,13 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         ));
     }
     left_spans.push(Span::styled(app.status.clone(), status_style));
+    if !app.pending_submits.is_empty() {
+        left_spans.push(Span::raw(" "));
+        left_spans.push(Span::styled(
+            format!("⧗ queued: {} (Esc to clear)", app.pending_submits.len()),
+            Style::default().fg(Color::Rgb(180, 140, 200)).add_modifier(Modifier::DIM),
+        ));
+    }
     if let Some(ref g) = app.git_info {
         let suffix = if g.dirty_count == 0 { "clean".to_string() } else { format!("{} modified", g.dirty_count) };
         let branch_color = if g.dirty_count == 0 { Color::Green } else { Color::Yellow };
@@ -184,22 +251,29 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_input(f: &mut Frame, app: &App, area: Rect) {
     let border_color = if app.is_processing { Color::DarkGray } else { Color::Rgb(255, 20, 147) };
-    let display = if app.input.is_empty() && !app.is_processing {
-        "Type a message... (Enter to send)".to_string()
+    let bg = Color::Rgb(30, 30, 30);
+    let base = Style::default().bg(bg);
+    let cursor_style = Style::default().bg(Color::Rgb(255, 20, 147)).fg(Color::Black);
+
+    let text: Text = if app.input.is_empty() && !app.is_processing {
+        // Idle placeholder with a highlighted block where the cursor sits.
+        Line::from(vec![
+            Span::styled(" ", cursor_style),
+            Span::styled("Type a message... (Enter to send)", Style::default().fg(Color::DarkGray).bg(bg)),
+        ]).into()
     } else if app.is_processing && app.input.is_empty() {
-        "Processing...".to_string()
+        Line::from(Span::styled("Processing...", Style::default().fg(Color::DarkGray).bg(bg))).into()
     } else {
-        format!("{}_", app.input)
+        build_input_text(&app.input, app.input_cursor, base, cursor_style)
     };
 
-    let bg = Color::Rgb(30, 30, 30);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color).bg(bg))
-        .style(Style::default().bg(bg));
-    let input = Paragraph::new(display)
+        .style(base);
+    let input = Paragraph::new(text)
         .wrap(Wrap { trim: false })
-        .style(Style::default().bg(bg))
+        .style(base)
         .block(block);
     f.render_widget(input, area);
 }
@@ -381,9 +455,10 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/quit", "exit"),
 ];
 
-fn get_suggestions(input: &str, _model: &str) -> Vec<Suggestion> {
+fn get_suggestions(input: &str, _model: &str, models: &[String]) -> Vec<Suggestion> {
     let first_line = input.split('\n').next().unwrap_or("");
     if first_line.is_empty() { return vec![]; }
+
     if first_line.starts_with('/') {
         let typed = first_line.to_lowercase();
         return COMMANDS.iter()
@@ -392,6 +467,22 @@ fn get_suggestions(input: &str, _model: &str) -> Vec<Suggestion> {
             .map(|(cmd, desc)| Suggestion { value: cmd.to_string(), desc: desc.to_string() })
             .collect();
     }
+
+    // @mention autocomplete. Triggers on a leading `@` with no whitespace
+    // yet (once the user hits space we stop showing suggestions and let
+    // them type the message body).
+    if first_line.starts_with('@') && !first_line.contains(' ') {
+        let prefix = first_line[1..].to_lowercase();
+        return models.iter()
+            .filter(|alias| alias.to_lowercase().starts_with(&prefix))
+            .take(8)
+            .map(|alias| Suggestion {
+                value: format!("@{alias}"),
+                desc: "force this model for one turn".to_string(),
+            })
+            .collect();
+    }
+
     vec![]
 }
 

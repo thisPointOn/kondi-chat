@@ -89,6 +89,9 @@ export interface RoutingSample {
    */
   costEfficiency?: number;
 
+  /** Which routing tier made this selection */
+  routingTier?: 'nn' | 'intent' | 'rules';
+
   // The reason the rule router gave
   routeReason: string;
 }
@@ -209,72 +212,187 @@ export class RoutingCollector {
     }
   }
 
-  /** Get summary stats for training readiness */
+  /** Get summary stats for training readiness and dashboard display */
   getStats(): {
     totalSamples: number;
-    byModel: Record<string, { total: number; succeeded: number; apiErrors: number; avgCost: number }>;
-    byPhase: Record<string, { total: number; succeeded: number }>;
     readyForTraining: boolean;
+    byTier: Record<string, { total: number; succeeded: number; avgLatencyMs: number; avgCost: number }>;
+    byModel: Record<string, { total: number; succeeded: number; apiErrors: number; avgCost: number; avgLatencyMs: number; avgQuality: number }>;
+    byPhase: Record<string, { total: number; succeeded: number }>;
+    byModelTier: Record<string, Record<string, { total: number; succeeded: number }>>;
+    avgQualityScore: number;
+    avgCostEfficiency: number;
+    totalCost: number;
+    firstSample: string | null;
+    lastSample: string | null;
   } {
     const samples = this.getAll();
-    const byModel: Record<string, { total: number; succeeded: number; apiErrors: number; totalCost: number }> = {};
+    const byTier: Record<string, { total: number; succeeded: number; totalLatency: number; totalCost: number }> = {};
+    const byModel: Record<string, { total: number; succeeded: number; apiErrors: number; totalCost: number; totalLatency: number; qualitySum: number; qualityCount: number }> = {};
     const byPhase: Record<string, { total: number; succeeded: number }> = {};
+    const byModelTier: Record<string, Record<string, { total: number; succeeded: number }>> = {};
+
+    let totalQuality = 0, qualityCount = 0;
+    let totalEfficiency = 0, efficiencyCount = 0;
+    let totalCost = 0;
+    let firstTs: string | null = null, lastTs: string | null = null;
 
     for (const s of samples) {
+      // Time range
+      if (!firstTs || s.timestamp < firstTs) firstTs = s.timestamp;
+      if (!lastTs || s.timestamp > lastTs) lastTs = s.timestamp;
+
+      // By tier
+      const tier = s.routingTier || 'rules';
+      if (!byTier[tier]) byTier[tier] = { total: 0, succeeded: 0, totalLatency: 0, totalCost: 0 };
+      byTier[tier].total++;
+      if (s.succeeded) byTier[tier].succeeded++;
+      byTier[tier].totalLatency += s.latencyMs;
+      byTier[tier].totalCost += s.costUsd;
+
       // By model
-      if (!byModel[s.modelId]) byModel[s.modelId] = { total: 0, succeeded: 0, apiErrors: 0, totalCost: 0 };
+      if (!byModel[s.modelId]) byModel[s.modelId] = { total: 0, succeeded: 0, apiErrors: 0, totalCost: 0, totalLatency: 0, qualitySum: 0, qualityCount: 0 };
       byModel[s.modelId].total++;
       if (s.succeeded) byModel[s.modelId].succeeded++;
       if (s.apiError) byModel[s.modelId].apiErrors++;
       byModel[s.modelId].totalCost += s.costUsd;
+      byModel[s.modelId].totalLatency += s.latencyMs;
+      if (s.qualityScore !== undefined) {
+        byModel[s.modelId].qualitySum += s.qualityScore;
+        byModel[s.modelId].qualityCount++;
+      }
 
       // By phase
       if (!byPhase[s.phase]) byPhase[s.phase] = { total: 0, succeeded: 0 };
       byPhase[s.phase].total++;
       if (s.succeeded) byPhase[s.phase].succeeded++;
+
+      // By model × tier
+      if (!byModelTier[s.modelId]) byModelTier[s.modelId] = {};
+      if (!byModelTier[s.modelId][tier]) byModelTier[s.modelId][tier] = { total: 0, succeeded: 0 };
+      byModelTier[s.modelId][tier].total++;
+      if (s.succeeded) byModelTier[s.modelId][tier].succeeded++;
+
+      // Global quality / efficiency
+      if (s.qualityScore !== undefined) { totalQuality += s.qualityScore; qualityCount++; }
+      if (s.costEfficiency !== undefined) { totalEfficiency += s.costEfficiency; efficiencyCount++; }
+      totalCost += s.costUsd;
     }
 
-    const modelStats: Record<string, { total: number; succeeded: number; apiErrors: number; avgCost: number }> = {};
-    for (const [id, data] of Object.entries(byModel)) {
+    const modelStats: Record<string, { total: number; succeeded: number; apiErrors: number; avgCost: number; avgLatencyMs: number; avgQuality: number }> = {};
+    for (const [id, d] of Object.entries(byModel)) {
       modelStats[id] = {
-        total: data.total,
-        succeeded: data.succeeded,
-        apiErrors: data.apiErrors,
-        avgCost: data.total > 0 ? data.totalCost / data.total : 0,
+        total: d.total, succeeded: d.succeeded, apiErrors: d.apiErrors,
+        avgCost: d.total > 0 ? d.totalCost / d.total : 0,
+        avgLatencyMs: d.total > 0 ? d.totalLatency / d.total : 0,
+        avgQuality: d.qualityCount > 0 ? d.qualitySum / d.qualityCount : 0,
+      };
+    }
+
+    const tierStats: Record<string, { total: number; succeeded: number; avgLatencyMs: number; avgCost: number }> = {};
+    for (const [t, d] of Object.entries(byTier)) {
+      tierStats[t] = {
+        total: d.total, succeeded: d.succeeded,
+        avgLatencyMs: d.total > 0 ? d.totalLatency / d.total : 0,
+        avgCost: d.total > 0 ? d.totalCost / d.total : 0,
       };
     }
 
     return {
       totalSamples: samples.length,
+      readyForTraining: samples.length >= 100 && Object.keys(byModel).length >= 2,
+      byTier: tierStats,
       byModel: modelStats,
       byPhase,
-      // Need at least 100 samples with multiple models to train usefully
-      readyForTraining: samples.length >= 100 && Object.keys(byModel).length >= 2,
+      byModelTier,
+      avgQualityScore: qualityCount > 0 ? totalQuality / qualityCount : 0,
+      avgCostEfficiency: efficiencyCount > 0 ? totalEfficiency / efficiencyCount : 0,
+      totalCost,
+      firstSample: firstTs,
+      lastSample: lastTs,
     };
   }
 
-  /** Format stats for display */
+  /** Format stats as a rich terminal dashboard */
   formatStats(): string {
     const stats = this.getStats();
     if (stats.totalSamples === 0) return 'No routing data collected yet.';
 
-    const lines: string[] = [
-      `Routing data: ${stats.totalSamples} samples (${stats.readyForTraining ? 'ready for training' : 'collecting...'})`,
-      '',
-      'By model:',
-    ];
+    const lines: string[] = [];
+    const w = (s: string, n: number) => s.length > n ? s.slice(0, n - 1) + '…' : s.padEnd(n);
 
-    for (const [id, data] of Object.entries(stats.byModel)) {
-      const rate = data.total > 0 ? (data.succeeded / data.total * 100).toFixed(0) : '0';
-      const reliability = data.total > 0 ? (((data.total - data.apiErrors) / data.total) * 100).toFixed(0) : '100';
-      const errorTag = data.apiErrors > 0 ? `  ${data.apiErrors} API errors (${reliability}% reliable)` : '';
-      lines.push(`  ${id.padEnd(35)} ${data.total} calls  ${rate}% success  $${data.avgCost.toFixed(4)}/call${errorTag}`);
+    lines.push('═══ Routing Statistics ═══');
+    lines.push('');
+
+    // Date range
+    const fmtDate = (iso: string | null) => iso ? iso.slice(0, 10) : '?';
+    lines.push(`Data: ${stats.totalSamples.toLocaleString()} samples (${fmtDate(stats.firstSample)} → ${fmtDate(stats.lastSample)})`);
+
+    // NN training readiness
+    const nnSamples = stats.byTier.nn?.total ?? 0;
+    const needed = Math.max(0, 100 - stats.totalSamples);
+    const multiModel = Object.keys(stats.byModel).length >= 2;
+    if (stats.readyForTraining) {
+      lines.push(`NN Training: ✓ ready (${stats.totalSamples} samples, ${Object.keys(stats.byModel).length} models)`);
+    } else {
+      const reason = !multiModel ? `need ≥2 models, have ${Object.keys(stats.byModel).length}` : `need 100 samples, have ${stats.totalSamples}`;
+      lines.push(`NN Training: ✗ collecting (${reason})`);
+    }
+    lines.push('');
+
+    // Tier distribution
+    lines.push('── Tier Distribution ──────────────────────────────────────');
+    const tierOrder = ['intent', 'nn', 'rules'] as const;
+    for (const tier of tierOrder) {
+      const d = stats.byTier[tier];
+      if (!d) continue;
+      const pct = stats.totalSamples > 0 ? (d.total / stats.totalSamples * 100).toFixed(0) : '0';
+      const succ = d.total > 0 ? (d.succeeded / d.total * 100).toFixed(0) : '0';
+      const lat = d.avgLatencyMs > 0 ? `${(d.avgLatencyMs / 1000).toFixed(1)}s` : '—';
+      const tag = tier === 'intent' ? '  ← primary' : '';
+      lines.push(`  ${tier.padEnd(8)} ${String(d.total).padStart(5)} calls (${pct.padStart(3)}%)  ${succ}% success  avg ${lat}${tag}`);
+    }
+    lines.push('');
+
+    // Model selection
+    lines.push('── Model Selection ───────────────────────────────────────');
+    // Sort by total descending
+    const sortedModels = Object.entries(stats.byModel).sort((a, b) => b[1].total - a[1].total);
+    for (const [id, d] of sortedModels) {
+      const pct = stats.totalSamples > 0 ? (d.total / stats.totalSamples * 100).toFixed(0) : '0';
+      const succ = d.total > 0 ? (d.succeeded / d.total * 100).toFixed(0) : '0';
+      const qTag = d.avgQuality > 0 ? `  Q:${d.avgQuality.toFixed(2)}` : '';
+      lines.push(`  ${w(id, 36)} ${String(d.total).padStart(5)} (${pct.padStart(3)}%)  ${succ}% success  $${d.avgCost.toFixed(4)}/call${qTag}`);
+    }
+    lines.push('');
+
+    // Model × Tier matrix
+    if (Object.keys(stats.byModelTier).length > 0) {
+      lines.push('── Model × Tier ──────────────────────────────────────────');
+      for (const [model, tiers] of Object.entries(stats.byModelTier)) {
+        const parts = tierOrder.map(t => {
+          const td = tiers[t];
+          return td ? `${t}:${td.total}` : '';
+        }).filter(Boolean);
+        lines.push(`  ${w(model, 36)} ${parts.join('  ')}`);
+      }
+      lines.push('');
     }
 
-    lines.push('', 'By phase:');
-    for (const [phase, data] of Object.entries(stats.byPhase)) {
-      const rate = data.total > 0 ? (data.succeeded / data.total * 100).toFixed(0) : '0';
-      lines.push(`  ${phase.padEnd(16)} ${data.total} calls  ${rate}% success`);
+    // Quality & efficiency
+    if (stats.avgQualityScore > 0 || stats.totalCost > 0) {
+      lines.push('── Quality & Efficiency ──────────────────────────────────');
+      if (stats.avgQualityScore > 0) lines.push(`  Avg quality score:   ${stats.avgQualityScore.toFixed(2)}/1.0`);
+      if (stats.avgCostEfficiency > 0) lines.push(`  Avg cost efficiency: ${stats.avgCostEfficiency.toFixed(1)}`);
+      lines.push(`  Total spent:         $${stats.totalCost.toFixed(4)}`);
+      lines.push('');
+    }
+
+    // By phase
+    lines.push('── By Phase ──────────────────────────────────────────────');
+    for (const [phase, d] of Object.entries(stats.byPhase)) {
+      const rate = d.total > 0 ? (d.succeeded / d.total * 100).toFixed(0) : '0';
+      lines.push(`  ${phase.padEnd(16)} ${String(d.total).padStart(5)} calls  ${rate}% success`);
     }
 
     return lines.join('\n');
