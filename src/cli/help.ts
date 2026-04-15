@@ -20,9 +20,9 @@ const TOPICS: Record<string, HelpTopic> = {
   },
   '/use': {
     syntax: '/use <alias> | /use auto',
-    description: 'Pin the agent to a specific model, or return to auto-routing.',
-    examples: ['/use claude', '/use gpt-4o', '/use auto'],
-    related: ['/models', '/mode'],
+    description: 'Pin the agent to a specific model for every subsequent turn, or return to auto-routing. Aliases resolve on an unambiguous prefix (`/use gemi` → gemini). Ambiguous prefixes list the candidates. The bottom-of-viewport model indicator updates immediately when this runs — no turn required.',
+    examples: ['/use claude', '/use gemini', '/use glm', '/use auto'],
+    related: ['/models', '/mode', 'mentions'],
   },
   '/models': {
     description: 'List all registered models with their aliases and health status.',
@@ -72,6 +72,22 @@ const TOPICS: Record<string, HelpTopic> = {
     syntax: '/telemetry [enable|disable|status|details|export|delete]',
     description: 'Control opt-in local telemetry. Nothing is sent to any server in v1.',
   },
+  '/consultants': {
+    description:
+      'List the domain-expert consultants configured for this project. Each consultant is a (model, system-prompt) pair stored in .kondi-chat/consultants.json. The agent can call them via the `consult` tool when it decides a problem has a clear domain angle — aerospace safety, security, database, etc. Edit the JSON to add, remove, or tune experts without touching code.',
+    related: ['consultants', '/models'],
+  },
+  'consultants': {
+    description:
+      'Consultants are domain-expert personas the agent calls on demand via the `consult` tool. Each is a triple of (role id, provider/model, system prompt) stored in .kondi-chat/consultants.json. Consultants are pure text-in/text-out — they cannot read files, run commands, or see the main conversation. They exist to give the agent a specialized opinion without setting up a full sub-agent. Defaults include aerospace-engineer, security-auditor, and database-architect. To add one, append an entry to the JSON: {"role": "ml-researcher", "name": "...", "description": "...", "provider": "anthropic", "model": "claude-sonnet-4-5-20250929", "system": "You are a machine-learning researcher..."}. Consultations are logged to the ledger as phase: consult so /routing and /cost can attribute the spend.',
+    related: ['/consultants', '/loop'],
+  },
+  '/loop': {
+    syntax: '/loop <goal>',
+    description: 'Run an autonomous agent loop toward a stated goal. Each iteration the model may call tools, produce partial output, and decide whether the goal is met. If the model returns final text without calling any tool but has not emitted DONE or STUCK, the backend synthesizes a "continue" follow-up and keeps iterating — LoopGuard still enforces the profile\'s iteration and cost caps. The model signals termination with DONE (success) or STUCK: <reason> (blocked) on its own line. The `/loop` command streams tool_call and activity events in real time like a normal submit, not a silent command.',
+    examples: ['/loop fix all the failing tests and commit when green', '/loop find every TODO in src/ and resolve them'],
+    related: ['/mode', 'type-ahead', '/undo'],
+  },
   '/council': {
     syntax: '/council [list | run <profile> <brief>]',
     description: 'Run multi-model deliberation via the council tool. Councils are expensive (fan out across frontier models for multiple rounds) and blocking (synchronous subprocess) — the agent CANNOT invoke them automatically; only explicit /council runs them. Not available from inside the agent toolset.',
@@ -100,8 +116,16 @@ const TOPICS: Record<string, HelpTopic> = {
     description: 'Flags: --prompt "<text>", --pipe, --json, --sessions. Exit codes: 0 ok, 1 error, 2 max-iter, 3 max-cost, 5 permission-denied.',
   },
   'shortcuts': {
-    description: 'TUI keybindings. Ctrl+C quit · Ctrl+N newline in input · Ctrl+O toggle tool-call detail view · Ctrl+T toggle stats detail view · Ctrl+R toggle reasoning detail view (chain-of-thought for reasoning models) · Ctrl+Y copy last assistant response to clipboard · Ctrl+A toggle activity log · Left/Right/Home/End move input cursor · Up/Down recall input history · Esc close detail view or clear input. Permission dialogs: y/Enter approve · n/Esc deny · a approve this exact command for session · t yolo-approve everything for this turn.',
-    related: ['permissions'],
+    description: 'TUI keybindings. Ctrl+C quit · Enter send OR queue if a turn is running (see `type-ahead`) · Ctrl+N newline in input · Ctrl+O toggle tool-call detail view · Ctrl+T toggle stats detail view · Ctrl+R toggle reasoning detail view (chain-of-thought for reasoning models) · Ctrl+Y copy last assistant response to clipboard · Ctrl+A toggle activity log · Left/Right/Home/End move input cursor · Up/Down recall input history · Esc cascades: close detail view → clear input → clear queued submits. Permission dialogs: y/Enter approve · n/Esc deny · a approve this exact command for session · t yolo-approve everything for this turn.',
+    related: ['permissions', 'type-ahead', 'mentions'],
+  },
+  'type-ahead': {
+    description: 'Enter during an in-flight turn queues the new message instead of dispatching it. A dim "⧗ queued: …" line drops into scrollback and the status bar shows "⧗ queued: N (Esc to clear)". When the current turn finishes, the oldest queued entry fires automatically. Guarantees at most one handleSubmit is ever in flight on the backend, so concurrent turns cannot race over session state, tool attribution, or permissions. Esc on an empty input clears the queue.',
+    related: ['shortcuts'],
+  },
+  'mentions': {
+    description: '@<alias> at the start of a message forces one specific model for that single turn without changing the router state. Typing `@` alone triggers an autocomplete list of every enabled alias, filterable as you keep typing. Aliases resolve on unambiguous prefix (`@gemi` → @gemini). Ambiguous prefixes report candidates. For a persistent pin use /use <alias> instead.',
+    related: ['/use', '/models', 'shortcuts'],
   },
   'zai': {
     description: 'Z.AI (GLM) is supported as an OpenAI-compatible provider. Set ZAI_API_KEY in .env. The Coding Plan endpoint (https://api.z.ai/api/coding/paas/v4) is used — NOT the pay-as-you-go /api/paas/v4. Use /mode zai to route everything through the tiered zai profile: glm-5.1 (reasoning) for planning/review, glm-4.6 for execution/coding, glm-4.5-flash (free!) for compression and summarization. Profile restricts routing via allowedProviders so nothing leaks to other providers.',

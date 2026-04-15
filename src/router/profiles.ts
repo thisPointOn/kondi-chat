@@ -50,6 +50,21 @@ export interface BudgetProfile {
   maxOutputTokens: number;
   /** If set, routing is restricted to models from these providers only. */
   allowedProviders?: ProviderId[];
+  /**
+   * Hard-pin specific ledger phases to specific model IDs. When the router
+   * is asked to select for a pinned phase, it returns that exact model and
+   * skips the NN/intent/rules tiers. Unpinned phases route normally.
+   *
+   * Useful for profiles that want a deterministic multi-role pipeline
+   * (e.g. plan with gpt-5.4, code with gemini-2.5-pro, review with glm-5.1)
+   * without relying on capability tags resolving unambiguously across
+   * providers.
+   *
+   * Keys are `LedgerPhase` strings — typically 'dispatch', 'discuss',
+   * 'execute', 'reflect', 'compress'. The model ID must be in the active
+   * registry (enabled or not) or routing will fall through.
+   */
+  rolePinning?: Record<string, string>;
 }
 
 // ---------------------------------------------------------------------------

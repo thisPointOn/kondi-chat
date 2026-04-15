@@ -1,5 +1,17 @@
 # Context Efficiency & Router Integration Plan
 
+> **Scope note:** this plan covers the **council subprocess**
+> (`kondi-council`), not kondi-chat's main agent loop. The main agent
+> loop's context efficiency work — adaptive in-loop tool-result
+> stubbing, profile-driven cross-turn compaction via
+> `ContextManager.compact()`, profile-scoped compression models,
+> prompt-cache tracking, and intent-router scoping — is implemented
+> and documented under `/help compression`, `/help intent-router`,
+> `/help caching`, and the "Budget profiles" / "Providers" sections of
+> the README. The plan below remains the design for the council
+> subproject and a source of longer-term ideas about cross-subsystem
+> context sharing, but it does not describe the current agent loop.
+
 ## Problem Statement
 
 Council deliberations are prohibitively expensive. A single planning council with 5 personas (1 manager, 3 consultants, 1 worker) over 3 rounds with revisions costs $15+ due to unbounded context growth, redundant LLM calls, and no cross-model context management.

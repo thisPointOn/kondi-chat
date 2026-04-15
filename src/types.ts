@@ -138,6 +138,7 @@ export interface VerificationResult {
 // ---------------------------------------------------------------------------
 
 export type LedgerPhase =
+  | 'consult'          // consultant expert — domain-specialized persona
   | 'discuss'          // frontier: user conversation
   | 'commit'           // system: state update
   | 'dispatch'         // frontier: task card creation

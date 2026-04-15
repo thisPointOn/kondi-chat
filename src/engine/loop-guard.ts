@@ -7,7 +7,9 @@
  *   - Error deduplication (same error twice = stuck)
  *   - Diminishing returns (no progress between iterations)
  *
- * Used by /loop command and internally by the agent loop.
+ * Used by the regular agent loop inside handleSubmit and by the autonomous
+ * /loop command which runs handleSubmit with opts.loop = true (so the loop
+ * does not stop at the first no-tool-call response).
  */
 
 import type { BudgetProfile } from '../router/profiles.ts';

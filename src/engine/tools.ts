@@ -47,6 +47,41 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'consult',
+    description:
+      'Ask a specialized domain expert (aerospace engineer, security auditor, database ' +
+      'architect, etc.) for an opinion on a specific question. Use this when the problem ' +
+      'has a clear domain angle that would benefit from an expert perspective — DO NOT use ' +
+      'it for routine coding questions, trivia, or tasks you can handle yourself. ' +
+      'Consultants are pure text-in/text-out: they see only the question and optional ' +
+      'context you pass, not the full conversation or your tool history. ' +
+      'Call with an empty role to list available consultants. Consultant definitions live ' +
+      'in .kondi-chat/consultants.json and can be edited by the user.',
+    parameters: {
+      type: 'object',
+      properties: {
+        role: {
+          type: 'string',
+          description:
+            'Machine id of the consultant (e.g. "aerospace-engineer", "security-auditor"). ' +
+            'Omit or pass empty string to list every available consultant and their descriptions.',
+        },
+        question: {
+          type: 'string',
+          description:
+            'The specific question you want the expert to answer. Be concrete — "is this retraction sequence safe under loss-of-hydraulic-pressure?" beats "is this safe?".',
+        },
+        context: {
+          type: 'string',
+          description:
+            'Optional extra context: relevant code snippet, design summary, constraints, ' +
+            'prior decisions. Keep it focused — the consultant cannot read files itself.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'read_file',
     description: 'Read the contents of a file in the working directory.',
     parameters: {
@@ -236,6 +271,8 @@ export interface ToolContext {
   spawnSubAgent?: (type: 'research' | 'worker' | 'planner', instruction: string) => Promise<string>;
   /** Spec 08 — current-turn loop guard for tools that want to inspect status. */
   loopGuard?: LoopGuard;
+  /** Domain-expert consultants loaded from .kondi-chat/consultants.json. */
+  consultants?: import('./consultants.ts').Consultant[];
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +295,10 @@ export async function executeTool(
     switch (name) {
       case 'create_task':
         return await toolCreateTask(args, ctx);
+      case 'consult': {
+        const { executeConsult } = await import('./consultants.ts');
+        return await executeConsult(args, ctx.consultants ?? [], ctx.ledger, ctx.workingDir);
+      }
       case 'read_file':
         return toolReadFile(args, ctx);
       case 'list_files':

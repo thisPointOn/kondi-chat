@@ -17,6 +17,7 @@ import { MemoryManager } from '../context/memory.ts';
 import { bootstrapDirectory } from '../context/bootstrap.ts';
 import { Ledger, estimateCost } from '../audit/ledger.ts';
 import { AGENT_TOOLS, type ToolContext } from '../engine/tools.ts';
+import { loadConsultants } from '../engine/consultants.ts';
 import { PermissionManager } from '../engine/permissions.ts';
 import { detectGitRepo, formatGitContextForPrompt, GIT_TOOLS, executeGitTool, type GitContext } from '../engine/git-tools.ts';
 import { CheckpointManager, isMutatingToolCall, predictedMutations } from '../engine/checkpoints.ts';
@@ -165,6 +166,7 @@ async function main() {
     router.setProfileScope({
       allowedProviders: p.allowedProviders,
       classifier: cheap ? { provider: cheap.provider, model: cheap.id } : undefined,
+      rolePinning: p.rolePinning,
     });
   };
   applyProfileScope();
@@ -233,6 +235,7 @@ async function main() {
     memoryManager,
     setActiveFile: (p: string) => contextManager.setActiveFile(p),
     permissionManager,
+    consultants: loadConsultants(storageDir),
     emit,
     spawnSubAgent: async (type, instruction) => {
       emit({ type: 'activity', text: `spawn_agent(${type}): ${instruction.slice(0, 80)}`, activity_type: 'sub_agent' });
@@ -336,6 +339,37 @@ async function main() {
     }
 
     if (cmd.type === 'command') {
+      // `/loop <goal>` is not a simple string-returning slash command —
+      // it spawns a multi-iteration agent loop that needs the streaming
+      // event path of handleSubmit. Route it there instead of
+      // handleCommand so the TUI sees tool_call / activity / message
+      // events in real time.
+      const loopMatch = (cmd.text as string).match(/^\/loop\s+([\s\S]+)/);
+      if (loopMatch) {
+        const goal = loopMatch[1].trim();
+        refreshGit();
+        toolCtx.mutatedFiles = new Set();
+        const boot = `Autonomous loop — goal: ${goal}\n\n` +
+          `Work toward this goal using the available tools. Do not stop at the ` +
+          `first pass. Keep iterating: investigate, edit, verify, refine.\n\n` +
+          `IMPORTANT: for any unit of real coding work, call the create_task ` +
+          `tool with a clear goal + constraints. create_task runs the full ` +
+          `dispatch → execute → verify → reflect pipeline, which routes each ` +
+          `phase to a different role-appropriate model from the active ` +
+          `profile (planning model for dispatch, coding model for execute, ` +
+          `reflect model for the final critique) and verifies the result ` +
+          `against local tools. Prefer create_task over ad-hoc read_file + ` +
+          `write_file loops whenever the task has a clear goal you can state.\n\n` +
+          `When the goal is fully accomplished, respond with DONE on its own ` +
+          `line followed by a brief summary of what changed. If you are blocked ` +
+          `and cannot proceed, respond with STUCK: <reason>.`;
+        await handleSubmit(boot, session, contextManager, ledger, router, collector, toolCtx, toolManager, profiles, checkpointManager, { loop: true, loopGoal: goal });
+        try { sessionStore.save(session, profiles.getActive().name, router.rules.getOverride()?.id); } catch { /* ignore */ }
+        emit({ type: 'command_result', output: `Loop finished.` });
+        refreshGit();
+        emitGitInfo();
+        return;
+      }
       const output = await handleCommand(cmd.text, session, contextManager, ledger, registry, collector, toolCtx, mcpClient, toolManager, workingDir, profiles, router, councilProfiles, councilPath, analytics, checkpointManager, sessionStore, rateLimiter, pendingImages, telemetry);
       emit({ type: 'command_result', output });
       refreshGit();
@@ -491,6 +525,7 @@ async function handleSubmit(
   toolManager: ToolManager,
   profiles: ProfileManager,
   checkpointManager: CheckpointManager,
+  opts?: { loop?: boolean; loopGoal?: string },
 ) {
   const turnNumber = session.messages.filter(m => m.role === 'user').length + 1;
   let checkpointCreated = false;
@@ -620,6 +655,28 @@ async function handleSubmit(
     ledger.record('discuss', response, messages[messages.length - 1]?.content?.slice(0, 200) || '');
 
     if (!response.toolCalls || response.toolCalls.length === 0) {
+      // Autonomous-loop mode: when the model stops calling tools but the
+      // goal isn't explicitly marked done, synthesize a "continue" prompt
+      // and keep iterating. LoopGuard still enforces hard caps, so this
+      // can't run forever. The model signals termination by emitting the
+      // literal tokens DONE or STUCK on a line by themselves.
+      if (opts?.loop) {
+        const body = (response.content || '').trim();
+        const terminated = /^DONE\b/mi.test(body) || /^STUCK\b/mi.test(body);
+        if (!terminated && !loopGuard.check().shouldStop) {
+          messages.push({ role: 'assistant', content: response.content || '(progress)' });
+          messages.push({
+            role: 'user',
+            content:
+              `Continue working on the goal: "${opts.loopGoal || input}".\n` +
+              `If the goal is fully accomplished, respond with DONE on its own line followed by a brief summary.\n` +
+              `If you are blocked and cannot proceed, respond with STUCK: <reason>.\n` +
+              `Otherwise keep going — call the tools you need.`,
+          });
+          emit({ type: 'activity', text: 'loop: continuing — no terminal marker', activity_type: 'step' });
+          continue;
+        }
+      }
       finalContent = response.content;
       break;
     }
@@ -773,6 +830,7 @@ async function handleCommand(
         router.setProfileScope({
           allowedProviders: p.allowedProviders,
           classifier: cheap ? { provider: cheap.provider, model: cheap.id } : undefined,
+          rolePinning: p.rolePinning,
         });
         writeActiveProfile(resolve(workingDir, '.kondi-chat'), profiles.getActive().name);
         // If there's no manual override, let the indicator reflect the
@@ -804,6 +862,19 @@ async function handleCommand(
       router.rules.setOverride(model);
       emit({ type: 'model_override', label: model.alias || model.id });
       return `Using: ${model.name} (@${model.alias})`;
+    }
+    case '/consultants': {
+      const roster = toolCtx.consultants ?? [];
+      if (roster.length === 0) return 'No consultants configured. Edit .kondi-chat/consultants.json to add some.';
+      const lines: string[] = ['Available consultants:', ''];
+      for (const c of roster) {
+        lines.push(`  ${c.role}`);
+        lines.push(`    ${c.name} (${c.provider}/${c.model})`);
+        lines.push(`    ${c.description}`);
+        lines.push('');
+      }
+      lines.push('Edit .kondi-chat/consultants.json to add, remove, or tune them.');
+      return lines.join('\n');
     }
     case '/models': return registry.format();
     case '/health': { await registry.checkHealth(); return registry.formatHealth(); }

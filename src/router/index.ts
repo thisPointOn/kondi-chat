@@ -58,6 +58,7 @@ export class Router {
   private profileScope: {
     allowedProviders?: ProviderId[];
     classifier?: { provider: ProviderId; model: string };
+    rolePinning?: Record<string, string>;
   } = {};
 
   constructor(
@@ -87,6 +88,7 @@ export class Router {
   setProfileScope(scope: {
     allowedProviders?: ProviderId[];
     classifier?: { provider: ProviderId; model: string };
+    rolePinning?: Record<string, string>;
   }): void {
     this.profileScope = scope;
   }
@@ -101,6 +103,25 @@ export class Router {
     failures?: number,
     promotionThreshold?: number,
   ): Promise<UnifiedRouteDecision> {
+    // 0. Role pin wins over everything else. If the active profile hard-binds
+    //    this phase to a specific model id, return it and skip NN/intent/rules.
+    //    This is what makes multi-role profiles (plan=X, code=Y, review=Z)
+    //    deterministic across providers.
+    const pinnedId = this.profileScope.rolePinning?.[phase];
+    if (pinnedId) {
+      const pinned = this.registry.getById(pinnedId);
+      if (pinned && pinned.enabled) {
+        return {
+          model: pinned,
+          reason: `profile pin: ${phase} → ${pinned.alias || pinned.id}`,
+          tier: 'rules',
+          promoted: false,
+        };
+      }
+      // Fall through if the pinned model is missing or disabled — better to
+      // continue with normal routing than to hard-fail on a typo.
+    }
+
     // 1. Try NN router (fast, no LLM call) — Spec 13: never let a tier crash the turn.
     try {
       if (this.nn.isAvailable()) {

@@ -109,6 +109,39 @@ Create custom profiles by adding JSON files to `.kondi-chat/profiles/`:
 
 `contextBudget` is also the ceiling the compactor enforces. Inside an agent loop, old tool results are progressively stubbed to stay under it — no LLM calls, just local string rewriting. Between turns, cross-turn compaction fires at `contextBudget × 1.2` and summarizes older messages using the profile-scoped compression model (glm-4.5-flash in zai mode, claude-haiku in unrestricted profiles). See `/help compression` and `/help intent-router`.
 
+#### Role pinning (multi-provider pipelines)
+
+A profile can hard-bind specific pipeline phases to specific model IDs via `rolePinning`. This guarantees that e.g. planning always goes to gpt-5.4, coding always goes to gemini-2.5-pro, and review always goes to glm-5.1 — no matter what the intent router would otherwise pick:
+
+```json
+{
+  "name": "orchestra",
+  "description": "Multi-provider role pipeline — plan/code/review cycle",
+  "allowedProviders": ["openai", "google", "zai"],
+  "rolePinning": {
+    "discuss":  "gpt-5.4",
+    "dispatch": "gpt-5.4",
+    "execute":  "models/gemini-2.5-pro",
+    "reflect":  "glm-5.1",
+    "compress": "glm-4.5-flash",
+    "state_update": "glm-4.5-flash"
+  },
+  "contextBudget": 40000,
+  "maxIterations": 24,
+  "loopCostCap": 5.00,
+  "loopIterationCap": 24,
+  "promotionThreshold": 2,
+  "includeReflection": true,
+  "includeVerification": true,
+  "preferLocal": false,
+  "maxOutputTokens": 8192
+}
+```
+
+When the router is asked to select for a pinned phase, it returns that exact model and skips the NN/intent/rules tiers entirely. Unpinned phases (or any phase whose pinned model is missing/disabled) route normally through the tier chain. A bundled `orchestra` profile with these settings ships in `.kondi-chat/profiles/` as a working example — activate it with `/mode orchestra`.
+
+This works naturally with the `create_task` tool: when the agent calls `create_task`, the underlying pipeline calls `router.select('dispatch')` → `router.select('execute')` → `router.select('reflect')` in sequence, each honoring the profile's pinning, so you get a deterministic plan→code→review cycle per task.
+
 ### Agent tools
 
 The agent has access to:
@@ -121,7 +154,8 @@ The agent has access to:
 | `list_files` | List directory contents |
 | `search_code` | Grep for patterns across the codebase |
 | `run_command` | Execute shell commands |
-| `create_task` | Dispatch multi-phase coding tasks |
+| `create_task` | Dispatch multi-phase coding tasks (routes each phase to a profile-appropriate model) |
+| `consult` | Ask a domain-expert consultant for an opinion — see the Consultants section |
 | `update_plan` | Update the session goal and plan |
 | `update_memory` | Write to KONDI.md memory files |
 | `git_status` | View git repository state |
@@ -143,15 +177,81 @@ Multiple models debate the question across several rounds, with a manager model 
 
 **Councils are explicit-only.** The agent cannot auto-invoke a council — `COUNCIL_TOOL` is deliberately **not** registered in the agent toolset. Councils are expensive (fan out across frontier models for multiple rounds) and blocking (synchronous subprocess) so they only run when the user types `/council` themselves.
 
+### Domain-expert consultants
+
+The agent can call on domain experts via the `consult` tool when it decides a problem benefits from a specialized perspective. Defaults ship with:
+
+- **aerospace-engineer** — flight safety, fault tolerance, margins, certification
+- **security-auditor** — OWASP top-10, authn/authz, input validation, crypto misuse
+- **database-architect** — indexes, query plans, migration safety, isolation levels
+
+Consultants are defined in `.kondi-chat/consultants.json` (auto-created on first run with the defaults above). Each entry:
+
+```json
+{
+  "role": "ml-researcher",
+  "name": "ML Research Scientist",
+  "description": "Review experimental designs, loss functions, evaluation protocols, distribution shift, and reproducibility.",
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-5-20250929",
+  "system": "You are an ML research scientist. When reviewing an experimental design, think about: sample size and power, evaluation leakage, distribution shift between train and deploy, ablation coverage, baseline fairness, reproducibility (seeds, data provenance, code), and what conclusion the reported results actually support vs. what is being claimed. Be blunt about overclaiming.",
+  "contextText": "Project is a recommender system for a mid-size e-commerce site. Eval is offline NDCG@10 against a 30-day holdout. Production serves 1M users/day.",
+  "contextFiles": ["docs/eval-protocol.md", "docs/data-splits.md"],
+  "maxOutputTokens": 2048
+}
+```
+
+**Field reference:**
+
+| Field | Purpose |
+|---|---|
+| `role` | Machine id — what the agent passes in `consult({role: "..."})`. |
+| `name` | Human-readable display name. |
+| `description` | Shown to the agent so it can decide *when* to reach for this consultant. Keep it concrete — "review for flight safety and fault tolerance" beats "do engineering review." |
+| `provider` + `model` | Which LLM runs the persona. Can be any enabled model, regardless of the active profile's `allowedProviders`. |
+| `system` | The persona definition — this is where the actual expertise lives. |
+| `contextText` *(optional)* | Static baseline context baked into every call: mission specs, target platform, stable constraints, vocabulary. |
+| `contextFiles` *(optional)* | Relative paths read from disk **lazily on each call** (not at startup), so edits to spec files show up in the next consultation without restarting. Capped per-file at 50KB and 200KB total by default — override with `contextFileMaxBytes` / `contextTotalMaxBytes` if you need more. Paths are sandboxed to the working directory; `../` escapes are rejected. |
+| `maxOutputTokens` *(optional)* | Default 2048. |
+
+The agent decides *when* to consult. Consultants are **pure text-in / text-out** — they see only the question (plus any caller-supplied `context` arg, plus the consultant's own `contextText` + `contextFiles`), not the session history, and they cannot call any tools themselves. If you need an expert that can actually read arbitrary files or run commands, use `spawn_agent` instead.
+
+Consultations log to the ledger as `phase: consult` with the role in the reason field, so `/routing` and `/cost` attribute the spend to the consultant that did the work. Run `/consultants` in the TUI to see the roster, including a preview of each consultant's baseline context and attached files.
+
+### Autonomous loop mode
+
+Run the agent against a goal until it explicitly reports completion or hits the profile's iteration/cost caps:
+
+```
+/loop fix all the failing tests and commit when green
+/loop find every TODO in src/ and resolve them
+```
+
+Unlike a regular turn — which stops as soon as the model returns a final answer without calling tools — `/loop` synthesizes a "continue" follow-up whenever the model appears to stop early, and keeps iterating. The model signals termination itself by emitting `DONE` or `STUCK: <reason>` on a line by itself, at which point the loop ends and the final summary is written to scrollback.
+
+**Safety rails:**
+
+- `LoopGuard` enforces the active profile's `loopIterationCap` and `loopCostCap`. The loop can't outrun your budget.
+- Checkpoints are still created before the first mutating tool call, so `/undo` works the same way as for a normal turn.
+- Permission prompts still fire for every `confirm`-tier tool call. Use `t` in the permission dialog to yolo-approve everything for the duration of the current iteration if you trust the loop.
+- `Ctrl+C` aborts the TUI (and therefore the backend), stopping the loop immediately.
+- All tool-call, activity, and message events stream in real time — you can watch the loop work and `Ctrl+O` into the tool-call detail view at any moment.
+
 ### @mention routing
 
-Direct a message to a specific model:
+Direct a message to a specific model by prefixing your prompt with `@<alias>`:
 
 ```
 > @opus Analyze the security implications of this auth flow
 > @deep Write the implementation based on the analysis above
 > @gemini Review the code for edge cases
 ```
+
+**Autocomplete.** Typing `@` as the first character of the input pops an autocomplete list of every enabled model alias (same source as `/models`). Keep typing to narrow it — `@ge` filters to `@gemini` and `@gemini-pro`.
+
+**Prefix matching.** Aliases resolve on an unambiguous prefix, so you don't have to type the whole thing. `@gemi` lands on `@gemini` because it's the only enabled alias starting with those letters. If your prefix is ambiguous (e.g. `@gem` when both `@gemini` and `@gemini-pro` are enabled), the backend reports the ambiguity and lists the candidates so you can disambiguate.
+
+**`/use <alias>`** is the persistent equivalent: it pins *all* subsequent turns to the given model until you run `/use auto` to return to router-based selection. The bottom-of-viewport model indicator updates immediately when `/use` runs — no need to send a turn first.
 
 ### Session management
 
@@ -226,29 +326,30 @@ kondi-chat --prompt "Fix the tests" --auto-approve run_command,write_file
 
 | Command | Description |
 |---------|-------------|
-| `/mode [profile]` | Show or switch budget profile |
-| `/use <alias>` | Force a specific model (`/use auto` for router) |
+| `/mode [profile]` | Show or switch budget profile. Persisted across restarts via config.json. |
+| `/use <alias>` | Force a specific model (`/use auto` for router). Supports unambiguous prefix matching — `/use gemi` → gemini. Updates the model indicator immediately. |
 | `/models` | List available models and aliases |
 | `/health` | Check model availability |
-| `/routing` | Show routing stats and training data |
+| `/routing` | Routing stats dashboard — tier distribution (intent/nn/rules), per-model cost, model×tier matrix, NN training readiness, per-phase breakdown |
 | `/status` | Session stats and context utilization |
 | `/cost` | Cost breakdown by model |
 | `/analytics [days]` | Usage analytics |
-| `/council [list\|run]` | Council deliberation |
-| `/loop <prompt>` | Autonomous agent loop with guards |
+| `/consultants` | List domain-expert consultants the agent can call via the `consult` tool |
+| `/council [list\|run]` | Council deliberation — explicit-only, never auto-invoked by the agent |
+| `/loop <goal>` | Autonomous agent loop with guards — cycles until the model emits DONE / STUCK or LoopGuard caps hit |
 | `/undo [n]` | Undo last n file changes |
 | `/resume` | Resume a previous session |
 | `/sessions` | List saved sessions |
 | `/mcp` | List MCP servers and tools |
 | `/tools` | List agent tools |
-| `/help` | Show all commands |
+| `/help [topic]` | Show all commands or a specific help topic (zai, compression, intent-router, type-ahead, mentions, consultants, etc.) |
 | `/quit` | Exit |
 
 ## Keyboard shortcuts
 
 | Key | Action |
 |-----|--------|
-| `Enter` | Send message |
+| `Enter` | Send message — or queue it if a turn is already running |
 | `Ctrl+N` | Insert newline in input |
 | `Ctrl+O` | Toggle tool-call detail view (current turn) |
 | `Ctrl+T` | Toggle token-stats detail view (current turn) |
@@ -259,8 +360,10 @@ kondi-chat --prompt "Fix the tests" --auto-approve run_command,write_file
 | `Home` / `End` | Jump to start / end of input |
 | `Backspace` / `Delete` | Delete before / at cursor |
 | `↑` / `↓` | Recall input history (bash-style) |
-| `Esc` | Close detail view / clear input |
+| `Esc` | Close detail view → clear input → clear queued submits (in that order) |
 | `Ctrl+C` | Exit |
+
+**Type-ahead queue.** If you hit Enter while a turn is still running, the new message is queued instead of fired concurrently. The TUI renders a dim `⧗ queued: …` line in scrollback as confirmation, and the status bar shows `⧗ queued: N (Esc to clear)`. When the current turn finishes, the oldest queued entry fires automatically and the spinner picks back up. This guarantees at most one `handleSubmit` is ever in flight on the backend — concurrent turns can't race over shared session state, tool call attribution, or the permission dialog. `Esc` on an empty input clears the queue if you change your mind mid-stack.
 
 Mouse wheel scrolls the terminal scrollback. Text selection and copy work natively — no special mode needed.
 
