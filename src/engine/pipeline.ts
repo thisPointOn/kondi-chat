@@ -89,7 +89,12 @@ export async function runPipeline(
   config: PipelineConfig,
 ): Promise<PipelineResult> {
 
-  /** Resolve provider/model from router or fallback */
+  /** Track what happened in each pipeline phase so the router's intent
+   *  classifier can make informed per-step decisions. */
+  const priorPhases: Array<{ phase: string; model: string; summary?: string; succeeded?: boolean }> = [];
+
+  /** Resolve provider/model from router or fallback, passing accumulated
+   *  phase context so the intent classifier sees the full picture. */
   const route = async (
     phase: import('../types.ts').LedgerPhase,
     promptText: string,
@@ -103,6 +108,7 @@ export async function runPipeline(
         taskKind,
         failures,
         config.promotionThreshold,
+        { priorPhases: [...priorPhases], currentGoal: userIntent },
       );
       return { provider: decision.model.provider, model: decision.model.id, decision };
     }
@@ -153,6 +159,13 @@ export async function runPipeline(
     routingTier: dispatchRoute.decision?.tier,
   });
 
+  priorPhases.push({
+    phase: 'dispatch',
+    model: dispatchResponse.model,
+    summary: `task ${card.id} (${card.kind}): ${card.goal.slice(0, 80)}`,
+    succeeded: true,
+  });
+
   card.status = 'executing';
   session.tasks.push(card);
   session.state.activeTaskId = card.id;
@@ -192,6 +205,13 @@ export async function runPipeline(
   // -----------------------------------------------------------------------
   // Step 2.5: Apply — write model output to disk
   // -----------------------------------------------------------------------
+  priorPhases.push({
+    phase: 'execute',
+    model: executionResponse.model,
+    summary: `wrote ${executionResponse.outputTokens} output tokens`,
+    succeeded: true,
+  });
+
   let applyResult: ApplyResult | undefined;
   if (config.workingDir && card.outputMode !== 'text') {
     const changes = parseFileReplacements(executionResponse.content);
@@ -219,6 +239,12 @@ export async function runPipeline(
       type: 'activity',
       text: `pipeline: verify → ${verification.passed ? 'PASSED' : 'FAILED'}`,
       activity_type: 'step',
+    });
+    priorPhases.push({
+      phase: 'verify',
+      model: 'local',
+      summary: verification.passed ? 'tests passed' : 'tests FAILED',
+      succeeded: verification.passed,
     });
 
     const verifyOutput = [

@@ -36,6 +36,22 @@ export interface UnifiedRouteDecision {
   confidence?: number;
 }
 
+/**
+ * Context about what happened in prior phases of the current pipeline.
+ * Fed to the intent router so the LLM classifier can make informed
+ * decisions — "Gemini just wrote the code, tests passed, pick a
+ * reviewer" instead of blindly seeing the original prompt again.
+ */
+export interface PhaseContext {
+  priorPhases?: Array<{
+    phase: string;
+    model: string;
+    summary?: string;
+    succeeded?: boolean;
+  }>;
+  currentGoal?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Unified Router
 // ---------------------------------------------------------------------------
@@ -94,7 +110,13 @@ export class Router {
   }
 
   /**
-   * Select the best model. Tries NN → Intent → Rules in order.
+   * Select the best model. Tries NN → Intent → Pin fallback → Rules.
+   *
+   * The intent router gets rich phase context (what models handled prior
+   * phases, what succeeded/failed) so it can make informed per-phase
+   * decisions. Profile pins (`rolePinning`) now serve as the fallback,
+   * not the first check — the router gets a real shot at intelligent
+   * selection before the hard override kicks in.
    */
   async select(
     phase: LedgerPhase,
@@ -102,27 +124,9 @@ export class Router {
     taskKind?: TaskKind,
     failures?: number,
     promotionThreshold?: number,
+    phaseContext?: PhaseContext,
   ): Promise<UnifiedRouteDecision> {
-    // 0. Role pin wins over everything else. If the active profile hard-binds
-    //    this phase to a specific model id, return it and skip NN/intent/rules.
-    //    This is what makes multi-role profiles (plan=X, code=Y, review=Z)
-    //    deterministic across providers.
-    const pinnedId = this.profileScope.rolePinning?.[phase];
-    if (pinnedId) {
-      const pinned = this.registry.getById(pinnedId);
-      if (pinned && pinned.enabled) {
-        return {
-          model: pinned,
-          reason: `profile pin: ${phase} → ${pinned.alias || pinned.id}`,
-          tier: 'rules',
-          promoted: false,
-        };
-      }
-      // Fall through if the pinned model is missing or disabled — better to
-      // continue with normal routing than to hard-fail on a typo.
-    }
-
-    // 1. Try NN router (fast, no LLM call) — Spec 13: never let a tier crash the turn.
+    // 1. Try NN router (fast, no LLM call).
     try {
       if (this.nn.isAvailable()) {
         let embedding: number[] | undefined;
@@ -148,10 +152,10 @@ export class Router {
       process.stderr.write(`[router] NN tier failed: ${(e as Error).message}\n`);
     }
 
-    // 2. Try intent router (LLM call — primary strategy). The profile
-    //    scope narrows candidate models and picks a profile-appropriate
-    //    classifier LLM, so zai mode classifies with glm-4.5-flash (free)
-    //    and only considers zai models as outputs.
+    // 2. Intent router with enriched phase context. The classifier LLM
+    //    sees the current phase, what happened in prior phases, and the
+    //    profile's soft preference for this phase — enough to make a
+    //    genuinely informed per-step model choice.
     try {
       if (this.useIntent) {
         const intentResult = await this.intent.classify(
@@ -159,6 +163,8 @@ export class Router {
           {
             allowedProviders: this.profileScope.allowedProviders,
             classifier: this.profileScope.classifier,
+            phaseContext,
+            phasePreference: this.profileScope.rolePinning?.[phase],
           },
         );
 
@@ -175,7 +181,26 @@ export class Router {
       process.stderr.write(`[router] Intent tier failed: ${(e as Error).message}\n`);
     }
 
-    // 3. Fall back to rules
+    // 3. Profile pin fallback. If the intent router didn't produce a
+    //    result (classifier error, no candidates, model hallucination),
+    //    honor the profile's rolePinning as a hard guarantee. This
+    //    preserves the deterministic behavior users relied on while the
+    //    intent router was the primary path — pins only fire when the
+    //    intelligent tiers fail.
+    const pinnedId = this.profileScope.rolePinning?.[phase];
+    if (pinnedId) {
+      const pinned = this.registry.getById(pinnedId);
+      if (pinned && pinned.enabled) {
+        return {
+          model: pinned,
+          reason: `pin fallback: ${phase} → ${pinned.alias || pinned.id}`,
+          tier: 'rules',
+          promoted: false,
+        };
+      }
+    }
+
+    // 4. Rule-based fallback — deterministic phase/task-kind heuristics.
     const ruleResult = this.rules.select(phase, taskKind, failures, promotionThreshold);
     return {
       model: ruleResult.model,

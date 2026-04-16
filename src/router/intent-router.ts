@@ -43,6 +43,10 @@ export interface IntentRouterCallOptions {
   allowedProviders?: ProviderId[];
   /** Override the classifier LLM for this call (e.g. zai's glm-4.5-flash). */
   classifier?: { provider: ProviderId; model: string };
+  /** Rich context about what happened in prior pipeline phases. */
+  phaseContext?: import('../router/index.ts').PhaseContext;
+  /** The profile's preferred model for this phase (soft hint, not hard pin). */
+  phasePreference?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -98,19 +102,48 @@ export class IntentRouter {
       .map(r => `  <route name="${r.name}">${r.description}</route>`)
       .join('\n');
 
-    const prompt = `You are a router that selects the best model for a given task.
+    // Build phase-context block so the classifier knows what happened
+    // in prior pipeline steps, not just the original user prompt.
+    let contextBlock = '';
+    if (opts?.phaseContext?.priorPhases && opts.phaseContext.priorPhases.length > 0) {
+      const lines = opts.phaseContext.priorPhases.map(p =>
+        `  - ${p.phase}: handled by ${p.model}${p.succeeded === false ? ' (FAILED)' : ''}${p.summary ? ` — ${p.summary}` : ''}`
+      );
+      contextBlock = `\n<prior_phases>\n${lines.join('\n')}\n</prior_phases>\n`;
+    }
+
+    let preferenceHint = '';
+    if (opts?.phasePreference) {
+      preferenceHint = `\nThe user's profile suggests "${opts.phasePreference}" for the ${phase} phase. Honor this preference unless another model is clearly better suited given the context above.\n`;
+    }
+
+    const phaseDescriptions: Record<string, string> = {
+      discuss: 'Conversational Q&A, explanations, open-ended discussion. Needs good general reasoning at reasonable cost.',
+      dispatch: 'Planning and task decomposition. Needs strong architectural reasoning — this call sets the direction for everything that follows. Worth paying more for quality here.',
+      execute: 'Code generation, file editing, tool calls. High-volume phase (3-10 calls per turn). Cost matters. Speed matters. Code quality needs to be good but planning was already done.',
+      reflect: 'Reviewing and critiquing code that was just written. Needs to catch bugs without hallucinating new ones. Should NOT be the same model that wrote the code if possible.',
+      compress: 'Summarizing old context to save tokens. Grunt work. Use the cheapest model available.',
+      state_update: 'Updating session state. Grunt work. Use the cheapest model available.',
+      verify: 'Local verification (no LLM needed).',
+      consult: 'Domain-expert consultation. Use whatever model the consultant specifies.',
+    };
+
+    const phaseDesc = phaseDescriptions[phase] || `Phase: ${phase}`;
+
+    const prompt = `You are a router that selects the best model for the current step of a multi-phase coding pipeline.
 
 <routes>
 ${routesXml}
 </routes>
 
-<task>
+<current_step>
 Phase: ${phase}
-${taskKind ? `Kind: ${taskKind}` : ''}
-Prompt: ${promptText.slice(0, 1000)}
-</task>
-
-Which route best matches this task? Consider the model's capabilities and cost.
+Phase meaning: ${phaseDesc}
+${taskKind ? `Task kind: ${taskKind}` : ''}
+Original goal: ${(opts?.phaseContext?.currentGoal || promptText).slice(0, 800)}
+</current_step>
+${contextBlock}${preferenceHint}
+Given the available models, the current phase, and what happened in prior phases, which model should handle this step? Consider: capabilities, cost, and whether the model that wrote the code should be different from the one that reviews it.
 Respond with ONLY a JSON object: {"route": "model_id"}`;
 
     // Classifier model: per-call override (from active profile) > config default.
