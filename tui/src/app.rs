@@ -42,12 +42,11 @@ pub struct App {
     /// so multibyte UTF-8 content doesn't desync the index.
     pub input_cursor: usize,
     pub status: String,
-    /// Label shown at the bottom of the viewport. When `routing_pinned`
-    /// is false this is the active profile name ("routing: zai"); when
-    /// true this is the alias of the /use override ("routing disabled →
-    /// @gpt"). Updated by `ready` at startup and `model_override` events
-    /// thereafter.
+    /// Last model that actually handled a turn (set by MessageUpdate
+    /// stats). Shown alongside the profile name in the indicator.
     pub model: String,
+    /// Active profile name (set by model_override with pinned=false).
+    pub profile_name: String,
     /// True when the router override is set (via /use). False when the
     /// router is free to pick models for each phase.
     pub routing_pinned: bool,
@@ -99,7 +98,8 @@ impl App {
             input: String::new(),
             input_cursor: 0,
             status: "Starting...".to_string(),
-            model: "auto".to_string(),
+            model: String::new(),
+            profile_name: "auto".to_string(),
             routing_pinned: false,
             is_processing: false,
             detail_scroll: 0,
@@ -423,7 +423,11 @@ impl App {
                 self.status = String::new();
             }
             BackendEvent::ModelOverride { label, pinned } => {
-                self.model = label;
+                if pinned {
+                    self.model = label;
+                } else {
+                    self.profile_name = label;
+                }
                 self.routing_pinned = pinned;
             }
         }

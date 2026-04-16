@@ -312,20 +312,23 @@ fn draw_model_indicator(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
-    // Bottom indicator: tell the user at a glance whether the router is
-    // making model decisions (and which profile) or whether /use has
-    // pinned one specific model (in which case routing is effectively
-    // disabled for the duration of the override).
+    // Bottom indicator: profile + last-used model when routing, or
+    // the pinned alias when /use overrides.
     let spans: Vec<Span> = if app.routing_pinned {
         vec![
             Span::styled(" routing disabled → @", Style::default().fg(Color::Yellow)),
             Span::styled(app.model.clone(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
         ]
     } else {
-        vec![
+        let mut s = vec![
             Span::styled(" routing: ", Style::default().fg(Color::Green)),
-            Span::styled(app.model.clone(), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-        ]
+            Span::styled(app.profile_name.clone(), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        ];
+        if !app.model.is_empty() {
+            s.push(Span::styled(": ", Style::default().fg(Color::Green)));
+            s.push(Span::styled(app.model.clone(), Style::default().fg(Color::DarkGray)));
+        }
+        s
     };
     f.render_widget(Paragraph::new(Line::from(spans)), chunks[0]);
 
