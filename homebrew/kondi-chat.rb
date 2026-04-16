@@ -1,38 +1,31 @@
-# TODO: Update URLs and SHA256 values after the first GitHub release.
+# TODO: Replace SHA256 placeholders with actual values after the first GitHub release.
 
 class KondiChat < Formula
   desc "Multi-model AI coding CLI with intelligent routing and council deliberation"
-  homepage "https://github.com/kondi/kondi-chat"
+  homepage "https://github.com/thisPointOn/kondi-chat"
   version "0.1.0"
   license "MIT"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/kondi/kondi-chat/releases/download/v0.1.0/kondi-chat-0.1.0-darwin-arm64.tar.gz"
-      sha256 "TODO_FILL_AFTER_RELEASE" # TODO: replace with actual sha256
+      url "https://github.com/thisPointOn/kondi-chat/releases/download/v0.1.0/kondi-chat-0.1.0-darwin-arm64.tar.gz"
+      sha256 "TODO_FILL_AFTER_RELEASE"
     else
-      url "https://github.com/kondi/kondi-chat/releases/download/v0.1.0/kondi-chat-0.1.0-darwin-x64.tar.gz"
-      sha256 "TODO_FILL_AFTER_RELEASE" # TODO: replace with actual sha256
+      url "https://github.com/thisPointOn/kondi-chat/releases/download/v0.1.0/kondi-chat-0.1.0-darwin-x64.tar.gz"
+      sha256 "TODO_FILL_AFTER_RELEASE"
     end
   end
 
   on_linux do
-    url "https://github.com/kondi/kondi-chat/releases/download/v0.1.0/kondi-chat-0.1.0-linux-x64.tar.gz"
-    sha256 "TODO_FILL_AFTER_RELEASE" # TODO: replace with actual sha256
+    url "https://github.com/thisPointOn/kondi-chat/releases/download/v0.1.0/kondi-chat-0.1.0-linux-x64.tar.gz"
+    sha256 "TODO_FILL_AFTER_RELEASE"
   end
 
   depends_on "node"
 
   def install
-    bin.install "bin/kondi-tui" => "kondi-chat" if File.exist?("bin/kondi-tui")
-    libexec.install "src", "package.json", "bin/kondi-chat.js"
-
-    if !File.exist?("bin/kondi-tui")
-      (bin/"kondi-chat").write <<~SH
-        #!/bin/bash
-        exec node "#{libexec}/bin/kondi-chat.js" "$@"
-      SH
-    end
+    libexec.install Dir["*"]
+    bin.install_symlink libexec/"bin/kondi-chat"
   end
 
   test do
