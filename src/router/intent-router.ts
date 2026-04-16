@@ -41,6 +41,13 @@ const DEFAULT_CONFIG: IntentRouterConfig = {
 export interface IntentRouterCallOptions {
   /** If set, only consider models from these providers. */
   allowedProviders?: ProviderId[];
+  /**
+   * If set, only consider these specific model IDs. Derived from the
+   * profile's rolePinning values so the classifier sees exactly the
+   * models the profile uses, not every model from the allowed providers.
+   * Takes precedence over allowedProviders when both are set.
+   */
+  allowedModelIds?: string[];
   /** Override the classifier LLM for this call (e.g. zai's glm-4.5-flash). */
   classifier?: { provider: ProviderId; model: string };
   /** Rich context about what happened in prior pipeline phases. */
@@ -77,9 +84,15 @@ export class IntentRouter {
       return null;
     }
 
-    // Candidate scope: profile's allowedProviders wins over all-enabled.
+    // Candidate scope: specific model IDs (from rolePinning) > provider
+    // filter > all enabled. When the profile declares rolePinning, the
+    // classifier sees exactly those 4–5 models, not every model from 3
+    // providers. Much less noise, much better picks.
     let enabled = registry.getEnabled();
-    if (opts?.allowedProviders && opts.allowedProviders.length > 0) {
+    if (opts?.allowedModelIds && opts.allowedModelIds.length > 0) {
+      const allow = new Set(opts.allowedModelIds);
+      enabled = enabled.filter(m => allow.has(m.id));
+    } else if (opts?.allowedProviders && opts.allowedProviders.length > 0) {
       const allow = new Set(opts.allowedProviders);
       enabled = enabled.filter(m => allow.has(m.provider));
     }

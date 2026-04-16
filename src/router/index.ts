@@ -152,16 +152,21 @@ export class Router {
       process.stderr.write(`[router] NN tier failed: ${(e as Error).message}\n`);
     }
 
-    // 2. Intent router with enriched phase context. The classifier LLM
-    //    sees the current phase, what happened in prior phases, and the
-    //    profile's soft preference for this phase — enough to make a
-    //    genuinely informed per-step model choice.
+    // 2. Intent router with enriched phase context. When the profile has
+    //    rolePinning, derive the exact candidate model IDs from the pin
+    //    values so the classifier sees only those 4–5 models, not every
+    //    model from 3 providers. Much less noise, much better picks.
+    const pinnedModelIds = this.profileScope.rolePinning
+      ? [...new Set(Object.values(this.profileScope.rolePinning))]
+      : undefined;
+
     try {
       if (this.useIntent) {
         const intentResult = await this.intent.classify(
           promptText, phase, taskKind, this.registry,
           {
             allowedProviders: this.profileScope.allowedProviders,
+            allowedModelIds: pinnedModelIds,
             classifier: this.profileScope.classifier,
             phaseContext,
             phasePreference: this.profileScope.rolePinning?.[phase],
