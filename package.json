@@ -10,10 +10,12 @@
   "files": [
     "src/",
     "bin/",
+    "scripts/",
     "package.json",
     "LICENSE"
   ],
   "scripts": {
+    "postinstall": "node scripts/postinstall.js",
     "chat:tui": "cd tui && cargo run --release",
     "build:tui": "cd tui && cargo build --release",
     "start": "npx tsx src/cli/backend.ts",

@@ -2,7 +2,7 @@ name: CI / Release
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     tags: ["v*"]
 
 permissions:
@@ -16,12 +16,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
       - run: npx tsc --noEmit
-      - run: cargo build --release --manifest-path tui/Cargo.toml
+      - run: npx vitest run
 
   build:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -29,50 +28,58 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            platform: linux
-            arch: x64
             target: x86_64-unknown-linux-gnu
+            artifact: kondi-tui-linux-x64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: kondi-tui-linux-arm64
+            cross: true
           - os: macos-latest
-            platform: darwin
-            arch: x64
             target: x86_64-apple-darwin
+            artifact: kondi-tui-darwin-x64
           - os: macos-latest
-            platform: darwin
-            arch: arm64
             target: aarch64-apple-darwin
+            artifact: kondi-tui-darwin-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: kondi-tui-win32-x64.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 18
-          cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - run: npm ci
+      - name: Install cross (Linux ARM64)
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
-      - run: cargo build --release --manifest-path tui/Cargo.toml --target ${{ matrix.target }}
+      - name: Build (native)
+        if: "!matrix.cross"
+        working-directory: tui
+        run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package tarball
+      - name: Build (cross-compile)
+        if: matrix.cross
+        working-directory: tui
+        run: cross build --release --target ${{ matrix.target }}
+
+      # Upload the raw binary (used by the npm postinstall script).
+      - name: Rename binary (Unix)
+        if: runner.os != 'Windows'
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          ARCHIVE="kondi-chat-${VERSION}-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz"
-          mkdir -p dist/bin
-          cp bin/kondi-chat bin/kondi-chat.js dist/bin/
-          cp -r src dist/src
-          cp package.json package-lock.json LICENSE dist/
-          cp "tui/target/${{ matrix.target }}/release/kondi-tui" dist/bin/ 2>/dev/null || true
-          tar -czf "$ARCHIVE" -C dist .
-          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          cp tui/target/${{ matrix.target }}/release/kondi-tui ${{ matrix.artifact }}
+          chmod +x ${{ matrix.artifact }}
+
+      - name: Rename binary (Windows)
+        if: runner.os == 'Windows'
+        run: copy tui\target\${{ matrix.target }}\release\kondi-tui.exe ${{ matrix.artifact }}
 
       - uses: actions/upload-artifact@v4
         with:
-          name: kondi-chat-${{ matrix.platform }}-${{ matrix.arch }}
-          path: ${{ env.ARCHIVE }}
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
 
   release:
     needs: build
@@ -88,18 +95,28 @@ jobs:
         with:
           files: artifacts/*
           generate_release_notes: true
+          body: |
+            ## Install
+
+            ```bash
+            npm install -g kondi-chat
+            ```
+
+            The postinstall script automatically downloads the TUI binary
+            for your platform. If you prefer manual install, download the
+            binary for your OS from the assets below and place it at
+            `tui/target/release/kondi-tui` in a cloned repo.
 
   publish-npm:
-    needs: build
+    needs: release
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
           registry-url: https://registry.npmjs.org
-      - run: npm ci
       - run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

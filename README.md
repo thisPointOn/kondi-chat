@@ -25,18 +25,21 @@ kondi-chat does not integrate with an IDE. It runs in a terminal pane next to wh
 ## Install
 
 ```bash
-# npm (requires Node 18+)
+# One command (requires Node 18+). The postinstall script downloads
+# a prebuilt Rust TUI binary for your platform automatically.
 npm install -g kondi-chat
+```
 
-# Homebrew (macOS)
-brew tap thisPointOn/tap
-brew install kondi-chat
+No Rust toolchain needed. The TUI binary is downloaded from the
+GitHub release matching your package version. Supported platforms:
+Linux x64/arm64, macOS x64/arm64, Windows x64.
 
-# From source
+```bash
+# From source (if you want to hack on it)
 git clone https://github.com/thisPointOn/kondi-chat.git
 cd kondi-chat
-npm install
-cd tui && cargo build --release && cd ..
+npm install                              # also runs postinstall
+cd tui && cargo build --release && cd .. # optional: build TUI from source
 ```
 
 ## Quick start
