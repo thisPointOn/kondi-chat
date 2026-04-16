@@ -4,7 +4,7 @@
  * postinstall — downloads the prebuilt Rust TUI binary for the current
  * platform from the matching GitHub release.
  *
- * Runs automatically on `npm install -g kondi-chat`. If the download
+ * Runs automatically on `npm install -g @thispointon/kondi-chat`. If the download
  * fails (no internet, unsupported platform, no matching release), the
  * package still works — bin/kondi-chat.js falls back to running the
  * Node backend directly (no TUI, just stdio). The binary is optional

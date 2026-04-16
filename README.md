@@ -27,7 +27,7 @@ kondi-chat does not integrate with an IDE. It runs in a terminal pane next to wh
 ```bash
 # One command (requires Node 18+). The postinstall script downloads
 # a prebuilt Rust TUI binary for your platform automatically.
-npm install -g kondi-chat
+npm install -g @thispointon/kondi-chat
 ```
 
 No Rust toolchain needed. The TUI binary is downloaded from the

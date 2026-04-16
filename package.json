@@ -1,5 +1,5 @@
 {
-  "name": "kondi-chat",
+  "name": "@thispointon/kondi-chat",
   "version": "0.1.0",
   "description": "Multi-model AI coding CLI with intelligent routing, budget profiles, and council deliberation",
   "license": "MIT",
