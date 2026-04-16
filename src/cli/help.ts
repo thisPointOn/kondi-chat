@@ -140,7 +140,7 @@ const TOPICS: Record<string, HelpTopic> = {
     related: ['/mode', 'zai'],
   },
   'intent-router': {
-    description: 'The LLM-based intent router is the primary model-selection tier. On every turn it reads every enabled model description + capabilities and asks a cheap classifier LLM which one best fits the task. Scoped to the active profile allowedProviders (so zai mode never picks claude-opus). Classifier LLM is also profile-scoped (zai uses glm-4.5-flash — free — instead of claude-haiku). Falls through to rule-based routing only when the intent tier errors or the profile has zero valid candidates. /routing shows the per-tier distribution.',
+    description: 'The LLM-based intent router is the primary model-selection tier. It reads every model declared in the profile (via rolePinning values, not all enabled models), sees what happened in prior pipeline phases ("Gemini just wrote the code, tests passed"), understands what each phase needs (dispatch = planning, execute = coding, reflect = review), and picks the best model for the current step. When comparable models are available (e.g. Opus and GPT-5.4 for planning), the classifier weighs capabilities against cost per turn. Profile pins serve as fallback if the intent tier fails — the router gets first shot at an intelligent pick. Classifier LLM is profile-scoped (zai uses glm-4.5-flash — free). /routing shows the per-tier distribution.',
     related: ['/routing', '/mode'],
   },
   'caching': {

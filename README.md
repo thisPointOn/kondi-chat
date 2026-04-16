@@ -2,15 +2,15 @@
 
 **A multi-provider terminal coding agent with a learned, cost-aware router.**
 
-Not another wrapper that asks you to pick a model. kondi-chat decides per task — *plan with GPT-5.4, code with Gemini 2.5 Pro, review with GLM-5.1* — declaratively, under an explicit cost cap, and logs every routing decision so the classifier learns what works for your codebase.
+Not another wrapper that asks you to pick a model. kondi-chat's intent router reads every model in your profile, understands what each phase needs, and picks the right one — *GPT-5.4 for planning, Gemini 2.5 Pro for coding, Sonnet for review* — informed by what happened in prior phases, under an explicit cost cap. The more you use it, the better it routes.
 
 <!-- Demo GIF goes here once recorded (vhs tape in scripts/demo.tape) -->
 
 ## What makes it different
 
-- **Three-tier router.** A learned NN classifier → an LLM-based intent router that reads every enabled model's description and capabilities → a rule-based fallback. The intent tier is primary; the NN tier trains on your accumulated usage and takes over once you hit 100 samples. Scoped to the active profile's `allowedProviders` so routing can never leak outside the model set you've opted into.
+- **Context-aware multi-model router.** The intent router reads every model's description and capabilities, sees what happened in prior pipeline phases ("Gemini just wrote the code, tests passed, now pick a reviewer"), and selects the best model for each step. It's not a lookup table — it's an LLM making an informed per-step decision, scoped to the models your profile declares. A learned NN tier trains on your accumulated usage and takes over for phases it's confident about. Profile pins serve as fallbacks, not overrides — the router gets first shot at an intelligent pick.
 
-- **Multi-provider pipelines as a profile field.** `rolePinning` hard-binds specific phases to specific models across providers. The bundled `orchestra` profile pins `plan=gpt-5.4`, `code=models/gemini-2.5-pro`, `review=glm-5.1`, `compress=glm-4.5-flash`. When the agent dispatches a task via `create_task`, the pipeline streams each phase's model choice live into the TUI — no opaque "thinking…" blocks.
+- **Multi-provider pipelines.** A profile declares which models are available and (optionally) which it prefers per phase. The `best-value` profile gives the router Opus, GPT-5.4, Sonnet, Gemini 2.5 Pro, and GLM-4.5-flash — the router chooses between comparable models (Opus vs. GPT-5.4 for planning) based on task complexity and cost. When the agent dispatches a task via `create_task`, the pipeline streams each phase's model choice live into the TUI — no opaque "thinking…" blocks.
 
 - **Explicit cost caps.** Every profile declares `contextBudget`, `loopIterationCap`, and `loopCostCap`. The agent loop adaptively stubs old tool results to stay under the context ceiling — no LLM call, just local string rewriting. Cross-turn compaction uses a profile-scoped cheap model (free `glm-4.5-flash` on Z.AI's Coding Plan). Cached-token discounts are tracked separately in the ledger for Anthropic, OpenAI, and Z.AI.
 
@@ -115,38 +115,36 @@ Create custom profiles by adding JSON files to `.kondi-chat/profiles/`:
 
 `contextBudget` is also the ceiling the compactor enforces. Inside an agent loop, old tool results are progressively stubbed to stay under it — no LLM calls, just local string rewriting. Between turns, cross-turn compaction fires at `contextBudget × 1.2` and summarizes older messages using the profile-scoped compression model (glm-4.5-flash in zai mode, claude-haiku in unrestricted profiles). See `/help compression` and `/help intent-router`.
 
-#### Role pinning (multi-provider pipelines)
+#### Multi-provider pipelines and model preferences
 
-A profile can hard-bind specific pipeline phases to specific model IDs via `rolePinning`. This guarantees that e.g. planning always goes to gpt-5.4, coding always goes to gemini-2.5-pro, and review always goes to glm-5.1 — no matter what the intent router would otherwise pick:
+A profile declares which models are available via `rolePinning` and the router intelligently selects among them per phase. Pins are **soft preferences with fallback semantics**, not hard overrides — the intent router gets first shot at picking the best model for each step (informed by phase context, model descriptions, and cost), and the pin only fires if the router produces no result.
+
+The `best-value` profile demonstrates the design:
 
 ```json
 {
-  "name": "orchestra",
-  "description": "Multi-provider role pipeline — plan/code/review cycle",
-  "allowedProviders": ["openai", "google", "zai"],
+  "name": "best-value",
+  "allowedProviders": ["anthropic", "openai", "google", "zai"],
   "rolePinning": {
-    "discuss":  "gpt-5.4",
-    "dispatch": "gpt-5.4",
-    "execute":  "models/gemini-2.5-pro",
-    "reflect":  "glm-5.1",
-    "compress": "glm-4.5-flash",
+    "discuss":      "claude-sonnet-4-5-20250929",
+    "dispatch":     "gpt-5.4",
+    "execute":      "models/gemini-2.5-pro",
+    "reflect":      "claude-sonnet-4-5-20250929",
+    "compress":     "glm-4.5-flash",
     "state_update": "glm-4.5-flash"
-  },
-  "contextBudget": 40000,
-  "maxIterations": 24,
-  "loopCostCap": 5.00,
-  "loopIterationCap": 24,
-  "promotionThreshold": 2,
-  "includeReflection": true,
-  "includeVerification": true,
-  "preferLocal": false,
-  "maxOutputTokens": 8192
+  }
 }
 ```
 
-When the router is asked to select for a pinned phase, it returns that exact model and skips the NN/intent/rules tiers entirely. Unpinned phases (or any phase whose pinned model is missing/disabled) route normally through the tier chain. A bundled `orchestra` profile with these settings ships in `.kondi-chat/profiles/` as a working example — activate it with `/mode orchestra`.
+The classifier sees exactly these 5 models (Sonnet, GPT-5.4, Gemini Pro, GLM-flash — plus Opus which is also enabled in the registry). For the `dispatch` phase, the profile suggests GPT-5.4 — but the classifier also sees Opus and can choose it when the task is genuinely complex enough to justify the 6× price premium. For simpler planning calls, GPT-5.4 wins on cost. The router makes that call per turn, not per session.
 
-This works naturally with the `create_task` tool: when the agent calls `create_task`, the underlying pipeline calls `router.select('dispatch')` → `router.select('execute')` → `router.select('reflect')` in sequence, each honoring the profile's pinning, so you get a deterministic plan→code→review cycle per task.
+The pipeline passes context between phases so the classifier makes informed decisions: *"Gemini just wrote the code, tests passed, now pick a reviewer — and don't pick the same model that wrote the code."* The phase descriptions are baked into the prompt so the classifier understands what `reflect` means (code review, catch bugs) vs. `dispatch` (architecture, planning, task decomposition).
+
+Two bundled profiles use this:
+- **`best-value`** — Sonnet + GPT-5.4 for chat/planning, Gemini Pro for coding (free), Sonnet for review, GLM-flash for compression (free). The router chooses between comparable models based on task complexity.
+- **`orchestra`** — deterministic pipeline: GPT-5.4 plans, Gemini codes, GLM-5.1 reviews. More rigid, for workflows where you want explicit role binding.
+
+Activate with `/mode best-value` or `/mode orchestra`.
 
 ### Agent tools
 
