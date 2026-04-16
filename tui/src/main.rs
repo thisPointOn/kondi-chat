@@ -171,14 +171,15 @@ async fn main() -> io::Result<()> {
                         if !app.input.is_empty() {
                             let text = std::mem::take(&mut app.input);
                             app.input_cursor = 0;
-                            if app.is_processing {
-                                // Current turn still running — queue and
-                                // let the main loop drain it when the turn
-                                // finishes. No concurrent submits.
-                                app.queue_submit(text);
-                            } else if text.starts_with('/') {
+                            if text.starts_with('/') {
+                                // Slash commands always fire immediately — they're
+                                // fast, non-conflicting, and must work even when
+                                // is_processing is stuck from a prior turn.
                                 send_command(&mut writer, TuiCommand::Command { text: text.clone() }).await;
                                 app.add_user_message(&text);
+                            } else if app.is_processing {
+                                // Current turn still running — queue submits only.
+                                app.queue_submit(text);
                             } else {
                                 send_command(&mut writer, TuiCommand::Submit { text: text.clone() }).await;
                                 app.add_user_message(&text);
