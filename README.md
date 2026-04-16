@@ -1,20 +1,26 @@
 # kondi-chat
 
-A multi-model AI coding CLI that routes between Claude, GPT, DeepSeek, Gemini, Grok, Z.AI (GLM), and local models. It picks the right model for each task based on cost/quality profiles, runs an agent loop with file tools, and renders inline in the terminal so scroll, select, and copy all work natively.
+**A multi-provider terminal coding agent with a learned, cost-aware router.**
 
-<!-- TODO: Add demo gif (record with `vhs` or `asciinema`) -->
+Not another wrapper that asks you to pick a model. kondi-chat decides per task — *plan with GPT-5.4, code with Gemini 2.5 Pro, review with GLM-5.1* — declaratively, under an explicit cost cap, and logs every routing decision so the classifier learns what works for your codebase.
 
-## Why kondi-chat
+<!-- Demo GIF goes here once recorded (vhs tape in scripts/demo.tape) -->
 
-Most AI coding tools lock you into one model and one provider. kondi-chat routes every request through an intelligent router that picks the best model for the job — frontier models for planning, fast models for edits, cheap models for grunt work. You set a budget profile and the router handles the rest.
+## What makes it different
 
-**What makes it different:**
+- **Three-tier router.** A learned NN classifier → an LLM-based intent router that reads every enabled model's description and capabilities → a rule-based fallback. The intent tier is primary; the NN tier trains on your accumulated usage and takes over once you hit 100 samples. Scoped to the active profile's `allowedProviders` so routing can never leak outside the model set you've opted into.
 
-- **Multi-model routing** — not just "pick a model." The router classifies your intent (coding vs discussion), consults budget profiles, and selects from all available providers. Switch from `balanced` to `quality` mid-session and the router re-targets automatically.
-- **Council deliberation** — for high-stakes decisions, spawn a multi-model debate where 3-5 models argue to consensus. No other CLI tool does this.
-- **Budget profiles** — `cheap` mode costs pennies. `quality` mode uses frontier models. `balanced` is the default. Create custom profiles for specific workflows.
-- **Provider-agnostic** — works with Anthropic, OpenAI, DeepSeek, Google, xAI, Ollama (local), and any MCP-compatible server. Add a model in one command.
-- **Real terminal app** — inline viewport rendering (like Codex). The chat scrolls in your terminal's native scrollback. Mouse wheel, text selection, copy all work. No alternate-screen capture.
+- **Multi-provider pipelines as a profile field.** `rolePinning` hard-binds specific phases to specific models across providers. The bundled `orchestra` profile pins `plan=gpt-5.4`, `code=models/gemini-2.5-pro`, `review=glm-5.1`, `compress=glm-4.5-flash`. When the agent dispatches a task via `create_task`, the pipeline streams each phase's model choice live into the TUI — no opaque "thinking…" blocks.
+
+- **Explicit cost caps.** Every profile declares `contextBudget`, `loopIterationCap`, and `loopCostCap`. The agent loop adaptively stubs old tool results to stay under the context ceiling — no LLM call, just local string rewriting. Cross-turn compaction uses a profile-scoped cheap model (free `glm-4.5-flash` on Z.AI's Coding Plan). Cached-token discounts are tracked separately in the ledger for Anthropic, OpenAI, and Z.AI.
+
+- **Domain consultants and multi-model deliberation.** Consultants are file-configurable expert personas (aerospace engineer, security auditor, database architect) with lazy-loaded persistent context; the agent calls them via the `consult` tool when a problem has a domain angle. `/council run <profile>` kicks off a structured multi-round debate among frontier models for decisions that matter more than one model can decide alone.
+
+- **Terminal UX without the gymnastics.** Rust TUI rendering into an inline viewport, so content lands in your terminal's native scrollback. Wheel scroll, drag-to-select, and copy all work like they do in `cat` or `less` — no alternate-screen capture, no escape-sequence fights with tmux.
+
+## Not a Cursor replacement
+
+kondi-chat does not integrate with an IDE. It runs in a terminal pane next to whatever editor you already use. The closest comparable is [Aider](https://github.com/Aider-AI/aider) — more mature, larger community, simpler install. kondi-chat bets on three different things than Aider: routing as the core abstraction, declarative multi-provider pipelines, and first-class cost control. If those differences don't matter to you, Aider is the right tool.
 
 ## Install
 
