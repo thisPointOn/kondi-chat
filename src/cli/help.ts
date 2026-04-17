@@ -99,7 +99,7 @@ const TOPICS: Record<string, HelpTopic> = {
   },
   // Feature topics
   'memory': {
-    description: 'KONDI.md files provide persistent project conventions. User ~/.kondi-chat/KONDI.md applies everywhere; <repo>/KONDI.md applies to a project; nearest-ancestor KONDI.md applies to a subdirectory.',
+    description: 'KONDI.md and AGENTS.md files provide persistent project conventions injected into the system prompt. AGENTS.md is an open cross-tool convention (Claude Code, Cursor, Copilot, Aider, Zed, etc.); KONDI.md is kondi-chat-specific. Both are searched at three levels: user (~/.kondi-chat/), project (<workingDir>/), and nearest-ancestor subdirectory. If both exist at the same level, both are loaded. Agent writes (update_memory tool) go to KONDI.md only — AGENTS.md is hand-authored.',
     related: ['/help update_memory'],
   },
   'permissions': {

@@ -1,10 +1,16 @@
 /**
- * Memory System — persistent KONDI.md files injected into the system prompt.
+ * Memory System — persistent KONDI.md + AGENTS.md files injected into
+ * the system prompt.
  *
  * Hierarchy (lowest to highest priority; later overrides earlier):
- *   1. user memory       ~/.kondi-chat/KONDI.md
- *   2. project memory    <workingDir>/KONDI.md
- *   3. subdir memory     nearest-ancestor KONDI.md from the active file
+ *   1. user memory       ~/.kondi-chat/KONDI.md (+ AGENTS.md)
+ *   2. project memory    <workingDir>/KONDI.md (+ AGENTS.md)
+ *   3. subdir memory     nearest-ancestor KONDI.md or AGENTS.md from the active file
+ *
+ * AGENTS.md is an open convention supported by Claude Code, Cursor,
+ * Copilot, Gemini CLI, Windsurf, Aider, Zed, and others. kondi-chat
+ * reads it at the same levels as KONDI.md. If both files exist at the
+ * same level, both are loaded (AGENTS.md first, then KONDI.md).
  *
  * No YAML frontmatter parsing, no file watcher — load() re-stats on each call
  * and re-reads only files whose mtime changed.
@@ -14,7 +20,8 @@ import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'no
 import { homedir } from 'node:os';
 import { dirname, join, resolve, relative } from 'node:path';
 
-const MEMORY_FILENAME = 'KONDI.md';
+/** Files to search at each level, in load order. */
+const MEMORY_FILENAMES = ['AGENTS.md', 'KONDI.md'];
 const MAX_FILE_BYTES = 50_000;
 const MAX_SUBDIR_DEPTH = 5;
 
@@ -44,17 +51,29 @@ export class MemoryManager {
     this.workingDir = resolve(workingDir);
   }
 
-  /** Read user-level + project-level memory, plus the nearest-ancestor KONDI.md for activeFile. */
+  /**
+   * Read user-level + project-level memory, plus the nearest-ancestor
+   * KONDI.md or AGENTS.md for activeFile. Both filenames are checked at
+   * every level; if both exist, both are loaded (AGENTS.md first).
+   */
   load(activeFile?: string): MemoryEntry[] {
     const entries: MemoryEntry[] = [];
 
-    const userPath = join(homedir(), '.kondi-chat', MEMORY_FILENAME);
-    const userEntry = this.readIfPresent(userPath, 'user');
-    if (userEntry) entries.push(userEntry);
+    // User level: ~/.kondi-chat/AGENTS.md, ~/.kondi-chat/KONDI.md
+    const userDir = join(homedir(), '.kondi-chat');
+    for (const fn of MEMORY_FILENAMES) {
+      const e = this.readIfPresent(join(userDir, fn), 'user');
+      if (e) entries.push(e);
+    }
 
-    const projectPath = join(this.workingDir, MEMORY_FILENAME);
-    const projectEntry = this.readIfPresent(projectPath, 'project');
-    if (projectEntry) entries.push(projectEntry);
+    // Project level: <workingDir>/AGENTS.md, <workingDir>/KONDI.md
+    const projectPaths = new Set<string>();
+    for (const fn of MEMORY_FILENAMES) {
+      const p = join(this.workingDir, fn);
+      projectPaths.add(p);
+      const e = this.readIfPresent(p, 'project');
+      if (e) entries.push(e);
+    }
 
     // Subdirectory: walk up from activeFile toward workingDir, stop at project root.
     if (activeFile) {
@@ -62,10 +81,15 @@ export class MemoryManager {
       if (!relative(this.workingDir, full).startsWith('..')) {
         let dir = dirname(full);
         let depth = 0;
-        while (depth < MAX_SUBDIR_DEPTH && dir.length >= this.workingDir.length && dir !== this.workingDir) {
-          const candidate = join(dir, MEMORY_FILENAME);
-          const e = this.readIfPresent(candidate, 'subdirectory');
-          if (e && e.path !== projectPath) { entries.push(e); break; }
+        let found = false;
+        while (!found && depth < MAX_SUBDIR_DEPTH && dir.length >= this.workingDir.length && dir !== this.workingDir) {
+          for (const fn of MEMORY_FILENAMES) {
+            const candidate = join(dir, fn);
+            if (projectPaths.has(candidate)) continue;
+            const e = this.readIfPresent(candidate, 'subdirectory');
+            if (e) { entries.push(e); found = true; }
+          }
+          if (found) break;
           const parent = dirname(dir);
           if (parent === dir) break;
           dir = parent;
@@ -116,9 +140,12 @@ export class MemoryManager {
     operation: 'append' | 'replace',
     content: string,
   ): { path: string } {
+    // Writes always go to KONDI.md (the kondi-chat-specific file).
+    // AGENTS.md is a cross-tool convention and is typically hand-authored
+    // or maintained by a separate process — the agent shouldn't overwrite it.
     const target = scope === 'user'
-      ? join(homedir(), '.kondi-chat', MEMORY_FILENAME)
-      : join(this.workingDir, MEMORY_FILENAME);
+      ? join(homedir(), '.kondi-chat', 'KONDI.md')
+      : join(this.workingDir, 'KONDI.md');
     mkdirSync(dirname(target), { recursive: true });
     if (operation === 'append' && existsSync(target)) {
       const existing = readFileSync(target, 'utf-8');
