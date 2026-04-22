@@ -213,7 +213,7 @@ const DEFAULT_MODELS: ModelEntry[] = [
     enabled: true,
   },
   {
-    id: 'phi3.5',
+    id: 'phi3.5:3.8b',
     name: 'Phi 3.5',
     alias: 'phi',
     provider: 'ollama',
