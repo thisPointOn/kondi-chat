@@ -172,10 +172,10 @@ async fn main() -> io::Result<()> {
                 if permission_open {
                     let pending_id = app.pending_permissions[0].id.clone();
                     let decision: Option<&str> = match (key.code, key.modifiers) {
-                        (KeyCode::Char('y'), _) | (KeyCode::Char('Y'), _) | (KeyCode::Enter, _) => Some("approved"),
-                        (KeyCode::Char('n'), _) | (KeyCode::Char('N'), _) | (KeyCode::Esc, _) => Some("denied"),
-                        (KeyCode::Char('a'), _) | (KeyCode::Char('A'), _) => Some("approved-session"),
-                        (KeyCode::Char('t'), _) | (KeyCode::Char('T'), _) => Some("approved-turn"),
+                        (KeyCode::Char('1'), _) | (KeyCode::Enter, _) => Some("approved"),
+                        (KeyCode::Char('2'), _) | (KeyCode::Esc, _) => Some("denied"),
+                        (KeyCode::Char('3'), _) => Some("approved-session"),
+                        (KeyCode::Char('4'), _) => Some("approved-turn"),
                         (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                             send_command(&mut writer, TuiCommand::Quit).await;
                             break;

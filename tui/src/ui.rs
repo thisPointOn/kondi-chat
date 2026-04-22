@@ -359,11 +359,11 @@ fn draw_permission_overlay(f: &mut Frame, p: &crate::app::PermissionDialog, anch
         Line::from(Span::raw(format!(" {}", truncate(&p.summary, (w as usize).saturating_sub(2))))),
         Line::from(""),
         Line::from(Span::styled(
-            " [y/⏎] approve   [n] deny   [a] same cmd (session)",
+            " [1/⏎] approve   [2/Esc] deny   [3] same cmd (session)",
             Style::default().fg(Color::Cyan),
         )),
         Line::from(Span::styled(
-            " [t] yolo — approve everything for the rest of this turn",
+            " [4] yolo — approve everything for the rest of this turn",
             Style::default().fg(Color::Magenta),
         )),
     ];
