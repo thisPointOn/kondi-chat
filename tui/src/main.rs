@@ -4,8 +4,9 @@ mod ui;
 
 use std::io;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, Event, KeyCode, KeyModifiers, EnableBracketedPaste, DisableBracketedPaste},
     terminal::{disable_raw_mode, enable_raw_mode},
+    execute,
 };
 use ratatui::{backend::CrosstermBackend, Terminal, TerminalOptions, Viewport};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -108,6 +109,11 @@ async fn main() -> io::Result<()> {
     // `terminal.insert_before`. The user's terminal then handles wheel
     // scroll, drag-to-select, and copy natively, exactly like cat or less.
     enable_raw_mode()?;
+    // Bracketed paste: the terminal wraps pasted text in escape sequences
+    // so it arrives as a single Event::Paste(String) instead of a stream
+    // of individual Key events. Without this, pasting "hello\nworld"
+    // triggers Enter (which submits "hello") before "world" even starts.
+    execute!(io::stderr(), EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(io::stderr());
     let mut terminal = Terminal::with_options(
         backend,
@@ -147,6 +153,19 @@ async fn main() -> io::Result<()> {
         if crossterm::event::poll(std::time::Duration::from_millis(poll_ms))? {
             let evt = event::read()?;
             needs_draw = true; // any event → redraw
+
+            // Bracketed paste: entire pasted text arrives as one event.
+            // Insert it into the input buffer at the cursor position.
+            // Newlines in the paste become literal \n in the input — the
+            // user can send it as a multi-line message or clean it up.
+            // Critically: this does NOT trigger Enter/submit.
+            if let Event::Paste(text) = &evt {
+                for ch in text.chars() {
+                    app.insert_char(ch);
+                }
+                // Don't fall through to key handling.
+            }
+
             if let Event::Key(key) = evt {
                 // Spec 01 — when a permission dialog is open, intercept y/n/a.
                 let permission_open = !app.pending_permissions.is_empty();
@@ -278,6 +297,7 @@ async fn main() -> io::Result<()> {
     // Inline viewport: just clear our viewport area and leave the
     // scrollback intact so the chat history is still visible after exit.
     terminal.clear()?;
+    execute!(io::stderr(), DisableBracketedPaste)?;
     disable_raw_mode()?;
     terminal.show_cursor()?;
     Ok(())

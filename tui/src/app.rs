@@ -32,6 +32,7 @@ pub struct App {
     /// message (one user/assistant turn or one system note). The main loop
     /// drains this on every iteration via terminal.insert_before(...) so the
     /// lines land in normal scrollback above the inline viewport.
+    ///
     pub pending_history: Vec<Vec<Line<'static>>>,
     /// Bash-style input history.
     pub user_inputs: Vec<String>,
