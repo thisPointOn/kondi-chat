@@ -296,7 +296,19 @@ async fn main() -> io::Result<()> {
         }
 
         // Spinner tick: if processing and poll timed out, still redraw.
-        if app.is_processing { needs_draw = true; }
+        if app.is_processing {
+            needs_draw = true;
+            // Watchdog: if is_processing has been true for >5 minutes with
+            // no backend events clearing it, the backend probably dropped
+            // the response (timeout, crash, silent error). Auto-clear so
+            // the user isn't permanently locked out. Queued messages will
+            // drain on the next loop iteration.
+            if app.start_time.elapsed().as_secs() > 300 {
+                app.is_processing = false;
+                app.status = String::new();
+                app.push_system_public("(turn timed out — no response from backend after 5 minutes)".into());
+            }
+        }
     }
 
     // Inline viewport: just clear our viewport area and leave the

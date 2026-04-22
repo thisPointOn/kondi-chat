@@ -323,6 +323,10 @@ impl App {
         }
     }
 
+    pub fn push_system_public(&mut self, text: String) {
+        self.push_system(text);
+    }
+
     fn push_system(&mut self, text: String) {
         let lines = render_system_lines(&text);
         self.pending_history.push(lines);
