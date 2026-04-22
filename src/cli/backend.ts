@@ -72,7 +72,12 @@ function loadEnv(): void {
 
 async function main() {
   loadEnv();
-  const workingDir = process.cwd();
+  // The TUI passes --cwd <dir> with the user's actual working directory
+  // (where they ran `kondi-chat`). Without it, fall back to process.cwd().
+  const cwdIdx = process.argv.indexOf('--cwd');
+  const workingDir = (cwdIdx >= 0 && process.argv[cwdIdx + 1])
+    ? resolve(process.argv[cwdIdx + 1])
+    : process.cwd();
   const storageDir = resolve(workingDir, '.kondi-chat');
   mkdirSync(storageDir, { recursive: true });
 

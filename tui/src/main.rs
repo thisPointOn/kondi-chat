@@ -85,8 +85,13 @@ async fn main() -> io::Result<()> {
         .append(true)
         .open(log_dir.join("backend.log"))
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to open backend log: {e}")))?;
+    // Pass the user's actual working directory (where they ran `kondi-chat`)
+    // to the backend via --cwd. The backend uses this as workingDir for file
+    // tools, git context, .kondi-chat storage, etc. current_dir stays at
+    // project_root so npx/tsx resolve from the right place.
+    let user_cwd = std::env::current_dir()?.to_string_lossy().to_string();
     let mut child = TokioCommand::new("npx")
-        .args(["tsx", "src/cli/backend.ts"])
+        .args(["tsx", "src/cli/backend.ts", "--cwd", &user_cwd])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::from(backend_log))

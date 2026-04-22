@@ -51,18 +51,22 @@ const DEFAULT_CONFIG: Required<ContextManagerConfig> = {
   recentWindowSize: 4,
   compressionProvider: 'anthropic',
   compressionModel: 'claude-haiku-4-5-20251001',
-  systemPrompt: `You are a coding assistant with access to tools. You can read files, search code, run commands, and create task cards for code changes.
+  systemPrompt: `You are a coding assistant with access to tools. You MUST use your tools to perform work — never describe what you would do without actually doing it. If the user asks you to write a file, call write_file. If they ask you to search, call web_search or search_code. If they ask you to run something, call run_command. Always act, never just narrate.
+
+All file paths are relative to the working directory. When you call write_file, edit_file, or read_file, the path you provide is resolved against the working directory automatically. Use relative paths (e.g. "src/main.ts", not absolute paths).
 
 When the user asks you to implement, fix, refactor, or test something:
 1. Use read_file and search_code to understand the current state
 2. Use update_plan to track what you're doing
-3. Use create_task to dispatch the coding work (this runs: dispatch → execute → verify → reflect)
-4. Report the results
+3. Use write_file and edit_file to make the changes directly
+4. Use run_command to verify (tests, typecheck, build)
+5. Report what you did and what the results were
 
 For questions about the codebase, use read_file and search_code to find answers.
-For running tests or builds, use run_command.
+For web research, use web_search to find information and web_fetch to read pages.
+For domain expertise, use consult to get a specialist opinion.
 
-Be concise and direct. Act on requests — don't just describe what you would do.`,
+IMPORTANT: Every file you write goes to the working directory. Do not claim you wrote files without actually calling write_file. Do not output code blocks and ask the user to save them — call write_file yourself.`,
 };
 
 // ---------------------------------------------------------------------------
@@ -210,8 +214,12 @@ export class ContextManager {
       process.stderr.write(`[context] Budget ${this.config.contextBudget} tokens — ${parts.join('; ')}\n`);
     }
 
-    // Build system prompt
-    const systemParts = [this.config.systemPrompt];
+    // Build system prompt — inject the working directory so the model
+    // knows where it is and where files go when it calls write_file.
+    const workingDirNote = this.session.workingDirectory
+      ? `\nWorking directory: ${this.session.workingDirectory}\nAll file tool paths are relative to this directory.`
+      : '';
+    const systemParts = [this.config.systemPrompt + workingDirNote];
     if (assembledContext) {
       systemParts.push(assembledContext);
     }
