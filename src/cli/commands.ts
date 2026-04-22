@@ -33,6 +33,9 @@ import type { SessionStore } from '../session/store.ts';
 import type { RateLimiter } from '../providers/rate-limiter.ts';
 import type { TelemetryEmitter } from '../audit/telemetry.ts';
 import type { ToolContext } from '../engine/tools.ts';
+import type { McpClientManager } from '../mcp/client.ts';
+import type { ToolManager } from '../mcp/tool-manager.ts';
+import { saveMcpServer, removeMcpServer } from '../mcp/config.ts';
 import { formatHelp } from './help.ts';
 import { writeActiveProfile } from './wizard.ts';
 import { pickCompressionModel } from './submit-helpers.ts';
@@ -44,6 +47,8 @@ export interface CommandDeps {
   registry: ModelRegistry;
   collector: RoutingCollector;
   toolCtx: ToolContext;
+  mcpClient: McpClientManager;
+  toolManager: ToolManager;
   workingDir: string;
   profiles: ProfileManager;
   router: UnifiedRouter;
@@ -61,7 +66,8 @@ export interface CommandDeps {
 
 export async function handleCommand(input: string, deps: CommandDeps): Promise<string> {
   const {
-    session, contextManager, ledger, registry, collector, toolCtx, workingDir,
+    session, contextManager, ledger, registry, collector, toolCtx,
+    mcpClient, toolManager, workingDir,
     profiles, router, councilProfiles, councilPath, analytics,
     checkpointManager, sessionStore, rateLimiter, pendingImages, telemetry, emit,
   } = deps;
@@ -239,6 +245,62 @@ export async function handleCommand(input: string, deps: CommandDeps): Promise<s
       } catch (e) {
         return `Undo failed: ${(e as Error).message}`;
       }
+    }
+    case '/mcp': {
+      const sub = parts[1];
+      if (!sub) return mcpClient.format();
+      if (sub === 'add' && parts[2]) {
+        // /mcp add <name> <command> [args...]
+        // /mcp add <name> http <url>
+        const name = parts[2];
+        if (parts[3] === 'http' || parts[3] === 'https') {
+          const url = parts[4];
+          if (!url) return 'Usage: /mcp add <name> http <url>';
+          saveMcpServer(workingDir, name, { type: 'http', url } as any);
+          await mcpClient.connect(name, { type: 'http', url, scope: 'project' } as any);
+          return `Added HTTP MCP server: ${name} → ${url}`;
+        }
+        const command = parts[3];
+        const args = parts.slice(4);
+        if (!command) return 'Usage: /mcp add <name> <command> [args...]';
+        saveMcpServer(workingDir, name, { command, args });
+        await mcpClient.connect(name, { command, args, scope: 'project' } as any);
+        return `Added stdio MCP server: ${name} → ${command} ${args.join(' ')}`;
+      }
+      if (sub === 'remove' && parts[2]) {
+        const name = parts[2];
+        await mcpClient.disconnect(name);
+        const removed = removeMcpServer(workingDir, name) || removeMcpServer(workingDir, name, 'user');
+        return removed ? `Removed MCP server: ${name}` : `Server not found in config: ${name}`;
+      }
+      if (sub === 'reconnect') {
+        const name = parts[2];
+        if (name) {
+          const server = mcpClient.getServer(name);
+          if (!server) return `Unknown server: ${name}`;
+          await mcpClient.disconnect(name);
+          await mcpClient.connect(name, server.config);
+          return `Reconnected: ${name}`;
+        }
+        // Reconnect all
+        const servers = mcpClient.getServers();
+        for (const s of servers) {
+          await mcpClient.disconnect(s.name);
+          await mcpClient.connect(s.name, s.config);
+        }
+        return `Reconnected ${servers.length} server(s)`;
+      }
+      return 'Usage: /mcp [add <name> <command> [args...] | remove <name> | reconnect [name]]';
+    }
+    case '/tools': {
+      const all = toolManager.getTools();
+      const summary = toolManager.getSummary();
+      const lines = [
+        `Tools: ${all.length} total (${summary.builtIn} built-in, ${summary.mcp} MCP across ${summary.servers} server(s))`,
+        '',
+        ...all.map(t => `  ${t.name.padEnd(20)} ${(t.description || '').slice(0, 60)}`),
+      ];
+      return lines.join('\n');
     }
     case '/help': return formatHelp(parts[1]);
     default: return `Unknown: ${cmd}. Try /help`;

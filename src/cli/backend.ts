@@ -411,6 +411,7 @@ async function main() {
       }
       const output = await handleCommand(cmd.text, {
         session, contextManager, ledger, registry, collector, toolCtx,
+        mcpClient, toolManager,
         workingDir, profiles, router, councilProfiles, councilPath,
         analytics, checkpointManager, sessionStore, rateLimiter,
         pendingImages, telemetry, emit,
