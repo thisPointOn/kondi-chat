@@ -21,17 +21,38 @@ const VIEWPORT_HEIGHT: u16 = 18;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    // Start the Node.js backend as a child process
-    // Find project root — walk up from current dir until we find package.json
+    // Start the Node.js backend as a child process.
+    // Find project root from the binary's own path — NOT from cwd.
+    // The binary lives at <project>/tui/target/release/kondi-tui, so
+    // the project root is always 3 levels up. This works regardless of
+    // which directory the user runs `kondi-chat` from.
     let project_root = {
-        let mut dir = std::env::current_dir()?;
-        loop {
-            if dir.join("package.json").exists() { break dir; }
-            if dir.join("tui").join("Cargo.toml").exists() { break dir; }
-            if !dir.pop() {
-                // Fallback: assume parent of tui/
-                dir = std::env::current_dir()?.parent().unwrap_or(&std::env::current_dir()?).to_path_buf();
-                break dir;
+        let exe = std::env::current_exe()
+            .and_then(|p| std::fs::canonicalize(p))
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Cannot locate binary: {e}")))?;
+        // exe = .../tui/target/release/kondi-tui → parent³ = project root
+        let from_exe = exe.parent()  // release/
+            .and_then(|p| p.parent()) // target/
+            .and_then(|p| p.parent()) // tui/
+            .and_then(|p| p.parent()) // project root
+            .map(|p| p.to_path_buf());
+        match from_exe {
+            Some(ref root) if root.join("package.json").exists() => root.clone(),
+            _ => {
+                // Fallback: walk up from cwd (legacy behavior for dev builds
+                // where the binary might be in an unexpected location).
+                let mut dir = std::env::current_dir()?;
+                loop {
+                    if dir.join("package.json").exists()
+                        && dir.join("src").join("cli").join("backend.ts").exists() { break dir; }
+                    if !dir.pop() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::NotFound,
+                            "Cannot find kondi-chat project root (no package.json with src/cli/backend.ts). \
+                             Make sure you installed via `npm install -g @thispointon/kondi-chat` or `npm link`.",
+                        ));
+                    }
+                }
             }
         }
     };

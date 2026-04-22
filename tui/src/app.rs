@@ -652,23 +652,29 @@ pub fn render_assistant_lines(msg: &ChatMessage) -> Vec<Line<'static>> {
     out
 }
 
-/// K logo: 60x52 pixels in 30x13 braille cells. Slightly larger than
-/// the previous 24x11 so the dots read as bigger pixels.
+/// Splash screen: K braille logo + "kondi" inside a compact pink border.
 pub fn splash_lines() -> Vec<Line<'static>> {
-    // Full-span rules: 120 cols covers any reasonable terminal width.
-    let rule_style = Style::default().fg(Color::Rgb(255, 20, 147));
-    let rule_line = Line::from(Span::styled("─".repeat(120), rule_style));
+    let pink = Style::default().fg(PINK);
+    let cyan = Color::Rgb(80, 200, 230);
+    let text_row = BH / 2;
 
-    // "kondi" in large block letters beside the K logo. 5 rows tall to
-    // roughly match the logo height. Each letter is ~6 cols wide.
-    let text_start = BH / 2;
+    // Inner width: 1 pad + 30 braille + "  kondi" (8) + 1 pad = 40.
+    // The border chars add 2 more (║ on each side) but we don't count those.
+    let inner = 40usize;
 
     let mut lines: Vec<Line<'static>> = vec![
-        rule_line.clone(),
+        Line::from(""),
+        // Top border
+        Line::from(Span::styled(
+            format!(" ╔{}╗", "═".repeat(inner)),
+            pink,
+        )),
     ];
-    let cyan = Color::Rgb(80, 200, 230);
+
     for row in 0..BH {
-        let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
+        let mut spans: Vec<Span<'static>> = vec![
+            Span::styled(" ║ ", pink),
+        ];
         for col in 0..BW {
             let (color, ch) = BRAILLE_CELLS[row * BW + col];
             match color {
@@ -676,15 +682,28 @@ pub fn splash_lines() -> Vec<Line<'static>> {
                 None => spans.push(Span::raw(ch)),
             }
         }
-        if row == text_start {
+        if row == text_row {
             spans.push(Span::styled(
                 "  kondi",
                 Style::default().fg(cyan).add_modifier(Modifier::BOLD),
             ));
         }
+        // Right padding + border. Compute how many chars we've used inside.
+        let used = 1 + BW + if row == text_row { 7 } else { 0 }; // " " + braille + maybe "  kondi"
+        let pad = inner.saturating_sub(used);
+        if pad > 0 {
+            spans.push(Span::raw(" ".repeat(pad)));
+        }
+        spans.push(Span::styled("║", pink));
         lines.push(Line::from(spans));
     }
-    lines.push(rule_line);
+
+    // Bottom border
+    lines.push(Line::from(Span::styled(
+        format!(" ╚{}╝", "═".repeat(inner)),
+        pink,
+    )));
+    lines.push(Line::from(""));
     lines
 }
 
