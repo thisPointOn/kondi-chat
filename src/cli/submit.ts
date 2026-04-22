@@ -100,17 +100,24 @@ export async function handleSubmit(
 
     contextManager.addUserMessage(input);
     const { systemPrompt, userMessage, cacheablePrefix } = contextManager.assemblePrompt();
-    emit({ type: 'status', text: `@${alias} thinking...` });
+    const msgId = `msg-${Date.now()}`;
+    emit({ type: 'message', id: msgId, role: 'assistant', content: '', model_label: targetModel.alias || targetModel.name });
+    emit({ type: 'status', text: `@${alias} ...` });
 
+    let streamedContent = '';
     const response = await callLLM({
       provider: targetModel.provider,
       model: targetModel.id,
       systemPrompt, userMessage,
       maxOutputTokens: 8192, cacheablePrefix,
+      stream: true,
+      onToken: (token: string) => {
+        streamedContent += token;
+        emit({ type: 'message_update', id: msgId, content: streamedContent });
+      },
     });
 
     const cost = estimateCost(response.model, response.inputTokens, response.outputTokens);
-    const msgId = `msg-${Date.now()}`;
     contextManager.addAssistantMessage(response);
     ledger.record('discuss', response, message.slice(0, 200));
 
@@ -182,12 +189,18 @@ export async function handleSubmit(
       });
     }
 
+    let streamedContent = '';
     const response = await callLLM({
       provider: decision.model.provider,
       model: decision.model.id,
       systemPrompt, messages,
       tools: toolManager.getTools('discuss'),
       maxOutputTokens: 8192, cacheablePrefix,
+      stream: true,
+      onToken: (token: string) => {
+        streamedContent += token;
+        emit({ type: 'message_update', id: msgId, content: streamedContent });
+      },
     });
 
     const iterCost = estimateCost(response.model, response.inputTokens, response.outputTokens);

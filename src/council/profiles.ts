@@ -54,7 +54,7 @@ const PRESETS: CouncilProfile[] = [
     manager: { provider: 'openai-api', model: 'gpt-5.4-nano' },
     consultants: [
       { provider: 'ollama', model: 'qwen2.5:3b', stance: 'advocate' },
-      { provider: 'ollama', model: 'phi3.5', stance: 'critic' },
+      { provider: 'ollama', model: 'phi3.5:3.8b', stance: 'critic' },
     ],
     worker: { provider: 'ollama', model: 'qwen2.5:3b' },
     maxRounds: 2,
