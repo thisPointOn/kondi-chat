@@ -454,10 +454,11 @@ async function callOpenAICompatible(
         req.onToken(delta.content);
       }
 
-      // Reasoning content (z.ai GLM-5.x, OpenAI o-series, DeepSeek-R1).
-      // Not surfaced via onToken — kept hidden and shown in the TUI's reasoning panel.
-      if (delta.reasoning_content) {
-        reasoningContent += delta.reasoning_content;
+      // Reasoning content (z.ai GLM-5.x, OpenAI o-series, DeepSeek-R1, Ollama Qwopus).
+      // Ollama uses `delta.reasoning`; others use `delta.reasoning_content`.
+      const reasoning = delta.reasoning_content || delta.reasoning;
+      if (reasoning) {
+        reasoningContent += reasoning;
       }
 
       // Tool calls (streamed incrementally)
@@ -530,7 +531,7 @@ async function callOpenAICompatible(
     latencyMs: Date.now() - start,
     ...(cachedInputTokensNs > 0 ? { cachedInputTokens: cachedInputTokensNs, cached: true } : {}),
     ...(toolCalls.length > 0 ? { toolCalls } : {}),
-    ...(choice.reasoning_content ? { reasoningContent: choice.reasoning_content } : {}),
+    ...((choice.reasoning_content || choice.reasoning) ? { reasoningContent: choice.reasoning_content || choice.reasoning } : {}),
   };
 }
 
