@@ -172,8 +172,10 @@ export class PermissionManager {
     const tier = this.check(tool, args);
     if (tier === 'auto-approve') return 'approved';
 
-    // Yolo-for-this-turn covers everything except always-confirm.
-    if (tier !== 'always-confirm' && this.turnApproveAll) return 'approved';
+    // Yolo-for-this-turn: user pressed 4, they mean approve EVERYTHING
+    // for the rest of this turn — including always-confirm tier. The flag
+    // resets automatically at endTurn().
+    if (this.turnApproveAll) return 'approved';
 
     const fp = fingerprint(tool, args);
     if (tier !== 'always-confirm' && this.sessionApprovals.has(fp)) return 'approved';
@@ -199,7 +201,7 @@ export class PermissionManager {
       if (decision === 'approved-session' && tier !== 'always-confirm') {
         this.sessionApprovals.add(fp);
       }
-      if (decision === 'approved-turn' && tier !== 'always-confirm') {
+      if (decision === 'approved-turn') {
         this.turnApproveAll = true;
       }
       return decision;
