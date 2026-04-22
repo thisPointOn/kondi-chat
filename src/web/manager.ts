@@ -1,17 +1,20 @@
 /**
- * Web Tools — web_search and web_fetch backed by Brave Search API.
+ * Web Tools — web_search and web_fetch, always available.
  *
- * v1: single backend, in-memory LRU cache, reuses the provider rate limiter
- * bucket machinery under a synthetic 'brave' provider. SSRF guards on fetch
- * block localhost and private ranges. HTML is stripped to plain text with
- * a small regex pipeline — not perfect but keeps the dependency surface at
- * zero.
+ * web_search: DuckDuckGo HTML scrape by default (zero config). If
+ * BRAVE_SEARCH_API_KEY is set, upgrades to Brave's structured API
+ * for better results. Either way the tool is always registered —
+ * the model always sees web_search in its tool list.
+ *
+ * web_fetch: fetches any public URL, strips HTML to readable text.
+ * SSRF guards block localhost and private ranges. No API key needed.
+ *
+ * Both tools work on any machine with Node and an internet connection.
+ * No Docker, no MCP server, no external service.
  */
 
 import type { ToolDefinition } from '../types.ts';
-import { getRateLimiter } from '../providers/rate-limiter.ts';
 
-const RATE_LIMIT_RPM = 60;
 const CACHE_TTL_MS = 60 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 100;
 const MAX_FETCH_BYTES = 1_048_576;
@@ -24,60 +27,78 @@ export interface FetchResult { url: string; content: string; contentType: string
 
 interface CacheEntry { value: unknown; expiresAt: number; }
 
+// ---------------------------------------------------------------------------
+// SSRF guards
+// ---------------------------------------------------------------------------
+
 const PRIVATE_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0']);
 function isPrivateHost(host: string): boolean {
   const h = host.toLowerCase();
   if (PRIVATE_HOSTS.has(h)) return true;
   if (h.endsWith('.local') || h.endsWith('.internal')) return true;
-  // RFC1918
   if (/^10\./.test(h)) return true;
   if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(h)) return true;
   if (/^192\.168\./.test(h)) return true;
-  // Link-local
   if (/^169\.254\./.test(h)) return true;
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// HTML processing
+// ---------------------------------------------------------------------------
+
 function htmlToPlain(html: string): string {
-  // Strip scripts/styles first, then tags, then collapse whitespace.
   let s = html.replace(/<script[\s\S]*?<\/script>/gi, '')
               .replace(/<style[\s\S]*?<\/style>/gi, '')
               .replace(/<nav[\s\S]*?<\/nav>/gi, '')
               .replace(/<footer[\s\S]*?<\/footer>/gi, '')
               .replace(/<header[\s\S]*?<\/header>/gi, '');
-  // Preserve some structure
   s = s.replace(/<h([1-6])[^>]*>/gi, (_m, lvl) => '\n\n' + '#'.repeat(parseInt(lvl)) + ' ')
        .replace(/<\/h[1-6]>/gi, '\n')
        .replace(/<li[^>]*>/gi, '\n- ')
        .replace(/<br\s*\/?>/gi, '\n')
        .replace(/<\/p>/gi, '\n\n')
        .replace(/<[^>]+>/g, '');
-  // Decode a few common entities
   s = s.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
   s = s.replace(/\n{3,}/g, '\n\n').replace(/[ \t]+/g, ' ').trim();
   if (s.length > MAX_MARKDOWN_BYTES) s = s.slice(0, MAX_MARKDOWN_BYTES) + '\n\n(truncated)';
   return s;
 }
 
+// ---------------------------------------------------------------------------
+// URL safety check (re-applied at every redirect hop)
+// ---------------------------------------------------------------------------
+
+function assertSafeUrl(candidate: string): URL {
+  let p: URL;
+  try { p = new URL(candidate); } catch { throw new Error(`Invalid URL: ${candidate}`); }
+  if (p.protocol !== 'https:' && p.protocol !== 'http:') {
+    throw new Error(`Unsupported scheme: ${p.protocol}`);
+  }
+  if (isPrivateHost(p.hostname)) {
+    throw new Error(`Blocked private/localhost host: ${p.hostname}`);
+  }
+  return p;
+}
+
+// ---------------------------------------------------------------------------
+// Web Tools Manager
+// ---------------------------------------------------------------------------
+
 export class WebToolsManager {
-  private apiKey: string;
+  private braveKey: string;
   private cache = new Map<string, CacheEntry>();
-  private enabled: boolean;
 
   constructor() {
-    this.apiKey = process.env.BRAVE_SEARCH_API_KEY || '';
-    this.enabled = this.apiKey !== '';
-    // No stderr write: absence of an optional env var is not an error and
-    // fires on every single startup. getTools() returns [] when disabled
-    // so the agent simply never sees the web tools.
+    this.braveKey = process.env.BRAVE_SEARCH_API_KEY || '';
   }
 
-  isEnabled(): boolean { return this.enabled; }
+  /** Always true — web tools are always available. */
+  isEnabled(): boolean { return true; }
 
-  getTools(): ToolDefinition[] {
-    if (!this.enabled) return [];
-    return WEB_TOOLS;
-  }
+  getTools(): ToolDefinition[] { return WEB_TOOLS; }
+
+  // ── Cache ────────────────────────────────────────────────────────────
 
   private cacheGet<T>(key: string): T | null {
     const entry = this.cache.get(key);
@@ -94,64 +115,109 @@ export class WebToolsManager {
     this.cache.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
   }
 
+  // ── Search ───────────────────────────────────────────────────────────
+
   async search(query: string, count = 5): Promise<SearchResult[]> {
-    if (!this.enabled) throw new Error('web_search disabled: BRAVE_SEARCH_API_KEY not set');
     const key = `search:${query}:${count}`;
     const cached = this.cacheGet<SearchResult[]>(key);
     if (cached) return cached;
 
-    const limiter = getRateLimiter();
-    if (limiter) await limiter.acquire('brave', 1);
+    const results = this.braveKey
+      ? await this.searchBrave(query, count)
+      : await this.searchDuckDuckGo(query, count);
 
-    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${count}`;
-    const resp = await fetch(url, {
-      headers: { 'Accept': 'application/json', 'X-Subscription-Token': this.apiKey },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
-    if (!resp.ok) throw new Error(`brave search ${resp.status}`);
-    const data = await resp.json() as any;
-    const results: SearchResult[] = (data.web?.results || []).slice(0, count).map((r: any) => ({
-      title: String(r.title || ''),
-      url: String(r.url || ''),
-      snippet: String(r.description || ''),
-    }));
     this.cacheSet(key, results);
     return results;
   }
 
+  /** Brave Search API — structured JSON, better quality, requires API key. */
+  private async searchBrave(query: string, count: number): Promise<SearchResult[]> {
+    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${count}`;
+    const resp = await fetch(url, {
+      headers: { 'Accept': 'application/json', 'X-Subscription-Token': this.braveKey },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!resp.ok) throw new Error(`Brave search HTTP ${resp.status}`);
+    const data = await resp.json() as any;
+    return (data.web?.results || []).slice(0, count).map((r: any) => ({
+      title: String(r.title || ''),
+      url: String(r.url || ''),
+      snippet: String(r.description || ''),
+    }));
+  }
+
+  /**
+   * DuckDuckGo HTML scrape — zero config, no API key. Fetches the
+   * lite/HTML version of DuckDuckGo and parses result links + snippets
+   * from the page. Not as structured as Brave but works everywhere
+   * with no signup.
+   */
+  private async searchDuckDuckGo(query: string, count: number): Promise<SearchResult[]> {
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const resp = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; kondi-chat/0.1)',
+      },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!resp.ok) throw new Error(`DuckDuckGo search HTTP ${resp.status}`);
+    const html = await resp.text();
+
+    // Parse result blocks from the DDG HTML lite page.
+    // Each result is an <a class="result__a"> with the title/URL,
+    // followed by <a class="result__snippet"> with the snippet.
+    const results: SearchResult[] = [];
+    const resultBlockRe = /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+    const snippetRe = /<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
+
+    const titles: Array<{ url: string; title: string }> = [];
+    let match;
+    while ((match = resultBlockRe.exec(html)) !== null) {
+      // DDG wraps the real URL in a redirect: /l/?uddg=<encoded_url>&...
+      let href = match[1];
+      const uddg = href.match(/uddg=([^&]+)/);
+      if (uddg) href = decodeURIComponent(uddg[1]);
+      const title = match[2].replace(/<[^>]+>/g, '').trim();
+      titles.push({ url: href, title });
+    }
+
+    const snippets: string[] = [];
+    while ((match = snippetRe.exec(html)) !== null) {
+      snippets.push(match[1].replace(/<[^>]+>/g, '').trim());
+    }
+
+    for (let i = 0; i < Math.min(titles.length, count); i++) {
+      results.push({
+        title: titles[i].title,
+        url: titles[i].url,
+        snippet: snippets[i] || '',
+      });
+    }
+
+    return results;
+  }
+
+  // ── Fetch ────────────────────────────────────────────────────────────
+
   async fetch(url: string): Promise<FetchResult> {
-    if (!this.enabled) throw new Error('web_fetch disabled: BRAVE_SEARCH_API_KEY not set (web tools are gated together in v1)');
     const key = `fetch:${url}`;
     const cached = this.cacheGet<FetchResult>(key);
     if (cached) return cached;
 
-    // SSRF guard — re-applied at every redirect hop so a public URL that
-    // 302s to 127.0.0.1 (or an RFC1918 host) is blocked on the final target.
-    const assertSafe = (candidate: string): URL => {
-      let p: URL;
-      try { p = new URL(candidate); } catch { throw new Error(`Invalid URL: ${candidate}`); }
-      if (p.protocol !== 'https:' && p.protocol !== 'http:') {
-        throw new Error(`Unsupported scheme: ${p.protocol}`);
-      }
-      if (isPrivateHost(p.hostname)) {
-        throw new Error(`Blocked private/localhost host: ${p.hostname}`);
-      }
-      return p;
-    };
-
-    let parsed = assertSafe(url);
+    let parsed = assertSafeUrl(url);
     let resp: Response;
     let hops = 0;
     while (true) {
       resp = await fetch(parsed.toString(), {
         redirect: 'manual',
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; kondi-chat/0.1)' },
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
       if (resp.status >= 300 && resp.status < 400) {
         const loc = resp.headers.get('location');
         if (!loc) throw new Error(`fetch ${resp.status} with no Location header`);
         if (++hops > MAX_REDIRECTS) throw new Error(`Too many redirects (>${MAX_REDIRECTS})`);
-        parsed = assertSafe(new URL(loc, parsed).toString());
+        parsed = assertSafeUrl(new URL(loc, parsed).toString());
         continue;
       }
       break;
@@ -186,6 +252,8 @@ export class WebToolsManager {
     return out;
   }
 
+  // ── Tool executor ────────────────────────────────────────────────────
+
   async executeTool(name: string, args: Record<string, unknown>): Promise<{ content: string; isError?: boolean }> {
     try {
       if (name === 'web_search') {
@@ -194,15 +262,16 @@ export class WebToolsManager {
         const count = (args.count as number) || 5;
         const results = await this.search(query, count);
         if (results.length === 0) return { content: `No results for: ${query}` };
+        const backend = this.braveKey ? 'brave' : 'duckduckgo';
         return {
-          content: results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`).join('\n'),
+          content: `(via ${backend})\n\n` + results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`).join('\n\n'),
         };
       }
       if (name === 'web_fetch') {
         const url = String(args.url || '');
         if (!url) return { content: 'web_fetch requires a url', isError: true };
         const r = await this.fetch(url);
-        return { content: `${r.url} (${r.contentType})\n\n${r.content}` };
+        return { content: `${r.url} (${r.contentType}, ${r.sizeBytes} bytes)\n\n${r.content}` };
       }
       return { content: `Unknown web tool: ${name}`, isError: true };
     } catch (e) {
@@ -211,26 +280,30 @@ export class WebToolsManager {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Tool definitions — always registered, no API key gate
+// ---------------------------------------------------------------------------
+
 const WEB_TOOLS: ToolDefinition[] = [
   {
     name: 'web_search',
-    description: 'Search the web via Brave Search. Returns top results with title, URL, and snippet.',
+    description: 'Search the web. Returns top results with title, URL, and snippet. Works out of the box with no API key (uses DuckDuckGo). Set BRAVE_SEARCH_API_KEY for better results via Brave.',
     parameters: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Search query' },
-        count: { type: 'number', description: 'Number of results (default 5)' },
+        count: { type: 'number', description: 'Max results (default 5, max 10)' },
       },
       required: ['query'],
     },
   },
   {
     name: 'web_fetch',
-    description: 'Fetch a URL and return its main content as plain text. HTML is stripped of scripts/styles/nav. Blocks localhost and private IPs.',
+    description: 'Fetch a web page and extract its readable text content. Strips HTML to clean text. Blocks private/localhost URLs (SSRF protection).',
     parameters: {
       type: 'object',
       properties: {
-        url: { type: 'string', description: 'Absolute http(s) URL' },
+        url: { type: 'string', description: 'URL to fetch (http or https)' },
       },
       required: ['url'],
     },

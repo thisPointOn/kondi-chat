@@ -132,12 +132,11 @@ async function main() {
   const hookRunner = new HookRunner(join(storageDir, 'hooks.json'), workingDir);
   toolManager.setHookRunner(hookRunner);
 
-  // Spec 11 — web tools (only enabled when BRAVE_SEARCH_API_KEY is present)
+  // Web tools — always registered. Uses DuckDuckGo by default (no API key
+  // needed). Upgrades to Brave Search if BRAVE_SEARCH_API_KEY is set.
   const webTools = new WebToolsManager();
-  if (webTools.isEnabled()) {
-    for (const tool of webTools.getTools()) {
-      toolManager.registerTool(tool, async (args) => webTools.executeTool(tool.name, args));
-    }
+  for (const tool of webTools.getTools()) {
+    toolManager.registerTool(tool, async (args) => webTools.executeTool(tool.name, args));
   }
 
   const councilProfiles = new CouncilProfileManager(storageDir);
