@@ -29,6 +29,7 @@ import { callLLM } from '../providers/llm-caller.ts';
 import { LoopGuard } from '../engine/loop-guard.ts';
 import { isMutatingToolCall, predictedMutations } from '../engine/checkpoints.ts';
 import { compactInLoop, classifyPhase } from './submit-helpers.ts';
+import { classifyTask, frameProblem, formatFrame, type TaskClassification } from '../engine/task-router.ts';
 
 export interface SubmitDeps {
   session: Session;
@@ -137,8 +138,89 @@ export async function handleSubmit(
     return;
   }
 
+  // ── Task classification — decide what kind of thinking this needs ──
+  //
+  // Before starting the agent loop, a cheap classifier call decides:
+  //   execute_now          → run the agent loop directly
+  //   frame_then_execute   → frame the problem first, then execute the framed goal
+  //   ask_clarifying_question → ask the user one focused question, don't start working
+  //   council_deliberation → suggest /council (not auto-invoked)
+  //
+  // The classifier uses the cheapest model in the profile (same as the
+  // intent router's classifier). If classification fails, default to execute_now.
+
+  // Use the profile-scoped classifier (same cheap model the intent router uses).
+  const classifier = router.getClassifier();
+  const cheapProvider: ProviderId = classifier?.provider || 'anthropic';
+  const cheapModel = classifier?.model;
+
+  // Pass recent session context so the classifier can see prior conversation.
+  const recentMessages = session.messages.slice(-4).map(m => `${m.role}: ${(m.content || '').slice(0, 200)}`).join('\n');
+  const taskClass = await classifyTask(
+    input,
+    recentMessages,
+    cheapProvider,
+    cheapModel,
+  );
+
+  // Handle ask_clarifying_question — emit the question and stop. The user
+  // will respond, and the next submit will be more concrete.
+  if (taskClass.mode === 'ask_clarifying_question' && taskClass.suggestedQuestions.length > 0) {
+    const question = taskClass.suggestedQuestions[0];
+    const msgId = `msg-${Date.now()}`;
+    contextManager.addUserMessage(input);
+    emit({ type: 'message', id: msgId, role: 'assistant', content: `Before I start — ${question}`, model_label: 'kondi' });
+    emit({ type: 'message_update', id: msgId, stats: {
+      input_tokens: 0, output_tokens: 0, cost_usd: 0,
+      models: ['classifier'], provider: cheapProvider,
+      route_reason: `task-router: ${taskClass.reason}`, iterations: 0,
+    }});
+    return;
+  }
+
+  // Handle council_deliberation — suggest the user run /council explicitly.
+  if (taskClass.mode === 'council_deliberation') {
+    const msgId = `msg-${Date.now()}`;
+    contextManager.addUserMessage(input);
+    emit({ type: 'message', id: msgId, role: 'assistant',
+      content: `This looks like a design decision that would benefit from multiple perspectives.\n\nConsider: \`/council run architecture "${input.slice(0, 100)}"\`\n\nOr if you want me to proceed with my own judgment, just rephrase more concretely.`,
+      model_label: 'kondi',
+    });
+    emit({ type: 'message_update', id: msgId, stats: {
+      input_tokens: 0, output_tokens: 0, cost_usd: 0,
+      models: ['classifier'], provider: cheapProvider,
+      route_reason: `task-router: ${taskClass.reason}`, iterations: 0,
+    }});
+    return;
+  }
+
+  // Handle frame_then_execute — frame the problem, show the frame, then
+  // run the agent loop against the framed goal instead of the raw input.
+  let effectiveInput = input;
+  if (taskClass.mode === 'frame_then_execute') {
+    emit({ type: 'activity', text: `task-router: framing problem (${taskClass.reason})`, activity_type: 'step' });
+    try {
+      const frame = await frameProblem(input, '', cheapProvider, cheapModel);
+      const frameText = formatFrame(frame);
+      emit({ type: 'activity', text: `frame: ${frame.interpretedGoal}`, activity_type: 'step' });
+      if (frame.successCriteria.length > 0) {
+        emit({ type: 'activity', text: `success: ${frame.successCriteria.join('; ')}`, activity_type: 'step' });
+      }
+      if (frame.proposedPlan.length > 0) {
+        emit({ type: 'activity', text: `plan: ${frame.proposedPlan.join(' → ')}`, activity_type: 'step' });
+      }
+      // Use the framed goal as the effective input for the agent loop.
+      effectiveInput = `${frame.interpretedGoal}\n\nSuccess criteria: ${frame.successCriteria.join('; ')}\n\nPlan: ${frame.proposedPlan.join('; ')}\n\nOriginal request: ${input}`;
+    } catch {
+      // If framing fails, proceed with the original input.
+      emit({ type: 'activity', text: 'task-router: framing failed, proceeding with original request', activity_type: 'step' });
+    }
+  } else {
+    emit({ type: 'activity', text: `task-router: ${taskClass.mode} (${taskClass.reason})`, activity_type: 'step' });
+  }
+
   // ── Regular agent loop ──────────────────────────────────────────────
-  contextManager.addUserMessage(input);
+  contextManager.addUserMessage(effectiveInput);
   const { systemPrompt, userMessage, cacheablePrefix } = contextManager.assemblePrompt();
   const messages: LLMMessage[] = [{ role: 'user', content: userMessage }];
 
@@ -156,7 +238,7 @@ export async function handleSubmit(
 
   // Classify the user's request once. The phase drives the budget profile's
   // preference list inside the router (executionPreference vs planningPreference).
-  const phase = classifyPhase(input);
+  const phase = classifyPhase(effectiveInput);
   emit({
     type: 'activity',
     text: `router: phase=${phase} (${phase === 'execute' ? 'coding intent detected' : 'discussion / reasoning'})`,

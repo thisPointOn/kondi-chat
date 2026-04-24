@@ -109,6 +109,11 @@ export class Router {
     this.profileScope = scope;
   }
 
+  /** Get the profile-scoped classifier model (for task-router, compactor, etc.) */
+  getClassifier(): { provider: ProviderId; model: string } | undefined {
+    return this.profileScope.classifier;
+  }
+
   /**
    * Select the best model. Tries NN → Intent → Pin fallback → Rules.
    *
