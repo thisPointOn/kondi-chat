@@ -154,6 +154,8 @@ export async function handleSubmit(
   const cheapProvider: ProviderId = classifier?.provider || 'anthropic';
   const cheapModel = classifier?.model;
 
+  emit({ type: 'status', text: 'classifying task...' });
+
   // Pass recent session context so the classifier can see prior conversation.
   const recentMessages = session.messages.slice(-4).map(m => `${m.role}: ${(m.content || '').slice(0, 200)}`).join('\n');
   const taskClass = await classifyTask(
