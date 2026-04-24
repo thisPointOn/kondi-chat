@@ -150,9 +150,26 @@ export async function handleSubmit(
   // intent router's classifier). If classification fails, default to execute_now.
 
   // Use the profile-scoped classifier (same cheap model the intent router uses).
+  // If no classifier is scoped, pick the cheapest model from the active
+  // profile's allowed providers so we never escape the profile's fence.
   const classifier = router.getClassifier();
-  const cheapProvider: ProviderId = classifier?.provider || 'anthropic';
-  const cheapModel = classifier?.model;
+  let cheapProvider: ProviderId;
+  let cheapModel: string | undefined;
+  if (classifier) {
+    cheapProvider = classifier.provider;
+    cheapModel = classifier.model;
+  } else {
+    // Fallback: use the first allowed provider's cheapest model.
+    const allowed = profiles.getActive().allowedProviders;
+    if (allowed && allowed.length > 0) {
+      const candidates = router.registry.getAvailable().filter(m => allowed.includes(m.provider));
+      candidates.sort((a, b) => a.inputCostPer1M - b.inputCostPer1M);
+      cheapProvider = candidates[0]?.provider || 'anthropic';
+      cheapModel = candidates[0]?.id;
+    } else {
+      cheapProvider = 'anthropic';
+    }
+  }
 
   emit({ type: 'status', text: 'classifying task...' });
 
