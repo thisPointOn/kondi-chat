@@ -102,25 +102,24 @@ export class Router {
    * Called from backend.ts whenever the active profile changes.
    */
   setProfileScope(scope: {
-    allowedProviders?: ProviderId[];
     classifier?: { provider: ProviderId; model: string };
     rolePinning?: Record<string, string>;
   }): void {
-    // If the profile has rolePinning but no explicit allowedProviders,
-    // derive it automatically from the pinned models' providers. This
-    // makes it impossible to create a profile that accidentally leaks
-    // to providers outside its model set.
-    if (!scope.allowedProviders && scope.rolePinning) {
+    // Derive allowedProviders from rolePinning automatically.
+    // The profile declares models, and the providers follow from those.
+    // No separate allowedProviders field needed.
+    let allowedProviders: ProviderId[] | undefined;
+    if (scope.rolePinning) {
       const providers = new Set<ProviderId>();
       for (const modelId of Object.values(scope.rolePinning)) {
         const m = this.registry.getById(modelId);
         if (m) providers.add(m.provider);
       }
       if (providers.size > 0) {
-        scope.allowedProviders = [...providers];
+        allowedProviders = [...providers];
       }
     }
-    this.profileScope = scope;
+    this.profileScope = { ...scope, allowedProviders };
   }
 
   /** Get the profile-scoped classifier model (for task-router, compactor, etc.) */

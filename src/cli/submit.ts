@@ -159,15 +159,19 @@ export async function handleSubmit(
     cheapProvider = classifier.provider;
     cheapModel = classifier.model;
   } else {
-    // Fallback: use the first allowed provider's cheapest model.
-    const allowed = profiles.getActive().allowedProviders;
-    if (allowed && allowed.length > 0) {
-      const candidates = router.registry.getAvailable().filter(m => allowed.includes(m.provider));
+    // Fallback: cheapest model from rolePinning, or cheapest enabled model.
+    const pinning = profiles.getActive().rolePinning;
+    if (pinning) {
+      const pinIds = new Set(Object.values(pinning));
+      const candidates = router.registry.getAvailable().filter(m => pinIds.has(m.id));
       candidates.sort((a, b) => a.inputCostPer1M - b.inputCostPer1M);
       cheapProvider = candidates[0]?.provider || 'anthropic';
       cheapModel = candidates[0]?.id;
     } else {
-      cheapProvider = 'anthropic';
+      const all = router.registry.getAvailable();
+      all.sort((a, b) => a.inputCostPer1M - b.inputCostPer1M);
+      cheapProvider = all[0]?.provider || 'anthropic';
+      cheapModel = all[0]?.id;
     }
   }
 

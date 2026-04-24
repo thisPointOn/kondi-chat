@@ -85,16 +85,10 @@ export async function handleCommand(input: string, deps: CommandDeps): Promise<s
 
       // Build a model roster: collect all unique models from rolePinning
       // and resolve their registry entries for display.
+      // Collect models from rolePinning — these are the profile's declared models.
       const modelIds = new Set<string>();
       if (p.rolePinning) {
         for (const id of Object.values(p.rolePinning)) modelIds.add(id as string);
-      }
-      // Also find models from allowed providers that aren't pinned.
-      const allowed = p.allowedProviders;
-      if (allowed && allowed.length > 0) {
-        for (const m of registry.getEnabled()) {
-          if (allowed.includes(m.provider)) modelIds.add(m.id);
-        }
       }
 
       const lines: string[] = [
@@ -150,9 +144,6 @@ export async function handleCommand(input: string, deps: CommandDeps): Promise<s
       lines.push(`  Reflection:        ${p.includeReflection ? 'yes' : 'no'}`);
       lines.push(`  Verification:      ${p.includeVerification ? 'yes' : 'no'}`);
       lines.push(`  Promotion after:   ${p.promotionThreshold} failures`);
-      if (allowed && allowed.length > 0) {
-        lines.push(`  Allowed providers: ${allowed.join(', ')}`);
-      }
 
       // Capability preferences
       lines.push('');
@@ -175,7 +166,6 @@ export async function handleCommand(input: string, deps: CommandDeps): Promise<s
         const cheap = pickCompressionModel(registry, p);
         if (cheap) contextManager.setCompressionModel(cheap.provider, cheap.id);
         router.setProfileScope({
-          allowedProviders: p.allowedProviders,
           classifier: cheap ? { provider: cheap.provider, model: cheap.id } : undefined,
           rolePinning: p.rolePinning,
         });

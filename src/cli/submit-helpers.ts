@@ -100,20 +100,29 @@ export function compactInLoop(
 
 /**
  * Pick the cheapest enabled model for compaction-style LLM calls.
- * Respects the active profile's allowedProviders so `zai` mode compacts
- * with glm-4.5-flash (free) instead of bleeding out to claude-haiku.
- * Returns undefined if nothing suitable is enabled — caller keeps the
- * hardcoded ContextManager default in that case.
+ * Scoped to the profile's rolePinning models so a profile that declares
+ * GLM models compacts with glm-4.5-flash (free), not claude-haiku.
+ * Returns undefined if nothing suitable is enabled.
  */
 export function pickCompressionModel(
   registry: ModelRegistry,
   profile: BudgetProfile,
 ): { provider: ProviderId; id: string } | undefined {
-  const allowed = profile.allowedProviders;
   const candidates: ModelEntry[] = registry.getAvailable();
-  const inScope = allowed && allowed.length > 0
-    ? candidates.filter(m => allowed.includes(m.provider))
-    : candidates;
+  // If the profile has rolePinning, only consider models from pinned providers.
+  let inScope: ModelEntry[];
+  if (profile.rolePinning) {
+    const providers = new Set<string>();
+    for (const modelId of Object.values(profile.rolePinning)) {
+      const m = registry.getById(modelId);
+      if (m) providers.add(m.provider);
+    }
+    inScope = providers.size > 0
+      ? candidates.filter(m => providers.has(m.provider))
+      : candidates;
+  } else {
+    inScope = candidates;
+  }
   const withSummarization = inScope.filter(m => m.capabilities.includes('summarization'));
   const pool = withSummarization.length > 0 ? withSummarization : inScope;
   if (pool.length === 0) return undefined;

@@ -71,11 +71,16 @@ export class RuleRouter {
     this.profile = profile;
   }
 
-  /** Registry view scoped to the active profile's provider allow-list, if any. */
+  /** Registry view scoped to the profile's declared models (via rolePinning). */
   private reg(): RegistryView {
-    const allowed = this.profile?.allowedProviders;
-    return allowed && allowed.length > 0
-      ? scopedRegistry(this.registry, allowed)
+    if (!this.profile?.rolePinning) return this.registry;
+    const providers = new Set<ProviderId>();
+    for (const modelId of Object.values(this.profile.rolePinning)) {
+      const m = this.registry.getById(modelId);
+      if (m) providers.add(m.provider);
+    }
+    return providers.size > 0
+      ? scopedRegistry(this.registry, [...providers])
       : this.registry;
   }
 

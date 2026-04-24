@@ -172,7 +172,6 @@ async function main() {
     const cheap = pickCompressionModel(registry, p);
     if (cheap) contextManager.setCompressionModel(cheap.provider, cheap.id);
     router.setProfileScope({
-      allowedProviders: p.allowedProviders,
       classifier: cheap ? { provider: cheap.provider, model: cheap.id } : undefined,
       rolePinning: p.rolePinning,
     });
