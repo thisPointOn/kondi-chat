@@ -25,6 +25,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -133,7 +134,13 @@ export class ProfileManager {
     if (this.profileDir) {
       mkdirSync(this.profileDir, { recursive: true });
       this.ensureBuiltins();
-      this.loadCustom();
+      // Load user-level profiles first (~/.kondi-chat/profiles/), then
+      // project-level profiles (which override user-level on name collision).
+      // This way custom profiles like glm/best-value/orchestra are available
+      // in every project, not just the one they were created in.
+      const userProfileDir = join(homedir(), '.kondi-chat', 'profiles');
+      this.loadFromDir(userProfileDir);
+      this.loadFromDir(this.profileDir);
     }
     this.active = { ...(this.getAll()[initial] || BUILTIN_PROFILES.balanced) };
   }
@@ -179,13 +186,13 @@ export class ProfileManager {
     return { ...BUILTIN_PROFILES, ...this.custom };
   }
 
-  /** Load custom profiles from .kondi-chat/profiles/*.json */
-  private loadCustom(): void {
-    if (!this.profileDir || !existsSync(this.profileDir)) return;
-    const files = readdirSync(this.profileDir).filter(f => f.endsWith('.json'));
+  /** Load profiles from a directory into this.custom */
+  private loadFromDir(dir: string): void {
+    if (!dir || !existsSync(dir)) return;
+    const files = readdirSync(dir).filter(f => f.endsWith('.json'));
     for (const file of files) {
       try {
-        const raw = readFileSync(join(this.profileDir, file), 'utf-8');
+        const raw = readFileSync(join(dir, file), 'utf-8');
         const profile = JSON.parse(raw) as BudgetProfile;
         if (profile.name) {
           this.custom[profile.name] = profile;
@@ -196,10 +203,12 @@ export class ProfileManager {
     }
   }
 
-  /** Reload custom profiles from disk */
+  /** Reload profiles from disk (user-level + project-level) */
   reload(): void {
     this.custom = {};
-    this.loadCustom();
+    const userProfileDir = join(homedir(), '.kondi-chat', 'profiles');
+    this.loadFromDir(userProfileDir);
+    this.loadFromDir(this.profileDir);
   }
 
   format(): string {
