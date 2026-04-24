@@ -76,42 +76,43 @@ export async function handleCommand(input: string, deps: CommandDeps): Promise<s
   const cmd = parts[0];
 
   switch (cmd) {
+    case '/mode-details': {
+      // Show full config for a profile. No arg = active profile.
+      const name = parts[1] || profiles.getActive().name;
+      const all = profiles.getAll();
+      const p = all[name];
+      if (!p) return `Unknown profile: ${name}. Available: ${profiles.getNames().join(', ')}`;
+      const lines: string[] = [
+        `═══ ${p.name}${p.name === profiles.getActive().name ? ' (active)' : ''} ═══`,
+        p.description,
+        '',
+        `Context budget:    ${p.contextBudget.toLocaleString()} tokens`,
+        `Loop caps:         ${p.loopIterationCap} iterations, $${p.loopCostCap.toFixed(2)}`,
+        `Max output tokens: ${p.maxOutputTokens.toLocaleString()}`,
+        `Prefer local:      ${p.preferLocal ? 'yes' : 'no'}`,
+        `Reflection:        ${p.includeReflection ? 'yes' : 'no'}`,
+        `Verification:      ${p.includeVerification ? 'yes' : 'no'}`,
+        `Promotion after:   ${p.promotionThreshold} failures`,
+      ];
+      if (p.allowedProviders && p.allowedProviders.length > 0) {
+        lines.push(`Allowed providers: ${p.allowedProviders.join(', ')}`);
+      }
+      if (p.rolePinning && Object.keys(p.rolePinning).length > 0) {
+        lines.push('');
+        lines.push('Role preferences (intent router picks first, pin is fallback):');
+        for (const [phase, modelId] of Object.entries(p.rolePinning)) {
+          lines.push(`  ${phase.padEnd(14)} → ${modelId}`);
+        }
+      }
+      lines.push('');
+      lines.push(`Planning:  [${p.planningPreference.join(', ')}]`);
+      lines.push(`Execution: [${p.executionPreference.join(', ')}]`);
+      lines.push(`Review:    [${p.reviewPreference.join(', ')}]`);
+      return lines.join('\n');
+    }
     case '/mode': {
       const mode = parts[1];
       if (!mode) return profiles.format();
-      // /mode <name> details — show full config for a profile without switching
-      if (parts[2] === 'details' || parts[2] === 'info') {
-        const all = profiles.getAll();
-        const p = all[mode];
-        if (!p) return `Unknown profile: ${mode}. Available: ${profiles.getNames().join(', ')}`;
-        const lines: string[] = [
-          `═══ ${p.name} ═══`,
-          p.description,
-          '',
-          `Context budget:    ${p.contextBudget.toLocaleString()} tokens`,
-          `Loop caps:         ${p.loopIterationCap} iterations, $${p.loopCostCap.toFixed(2)}`,
-          `Max output tokens: ${p.maxOutputTokens.toLocaleString()}`,
-          `Prefer local:      ${p.preferLocal ? 'yes' : 'no'}`,
-          `Reflection:        ${p.includeReflection ? 'yes' : 'no'}`,
-          `Verification:      ${p.includeVerification ? 'yes' : 'no'}`,
-          `Promotion after:   ${p.promotionThreshold} failures`,
-        ];
-        if (p.allowedProviders && p.allowedProviders.length > 0) {
-          lines.push(`Allowed providers: ${p.allowedProviders.join(', ')}`);
-        }
-        if (p.rolePinning && Object.keys(p.rolePinning).length > 0) {
-          lines.push('');
-          lines.push('Role preferences (intent router picks first, pin is fallback):');
-          for (const [phase, modelId] of Object.entries(p.rolePinning)) {
-            lines.push(`  ${phase.padEnd(14)} → ${modelId}`);
-          }
-        }
-        lines.push('');
-        lines.push(`Planning:  [${p.planningPreference.join(', ')}]`);
-        lines.push(`Execution: [${p.executionPreference.join(', ')}]`);
-        lines.push(`Review:    [${p.reviewPreference.join(', ')}]`);
-        return lines.join('\n');
-      }
       try {
         profiles.setProfile(mode);
         router.rules.setProfile(profiles.getActive());

@@ -477,6 +477,7 @@ struct Suggestion { value: String, desc: String }
 
 const COMMANDS: &[(&str, &str)] = &[
     ("/mode", "show/set cost mode"),
+    ("/mode-details", "[name] — full config for a profile"),
     ("/use", "<alias> — force a model"),
     ("/models", "list models and aliases"),
     ("/health", "check model availability"),
