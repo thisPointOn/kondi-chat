@@ -82,32 +82,85 @@ export async function handleCommand(input: string, deps: CommandDeps): Promise<s
       const all = profiles.getAll();
       const p = all[name];
       if (!p) return `Unknown profile: ${name}. Available: ${profiles.getNames().join(', ')}`;
+
+      // Build a model roster: collect all unique models from rolePinning
+      // and resolve their registry entries for display.
+      const modelIds = new Set<string>();
+      if (p.rolePinning) {
+        for (const id of Object.values(p.rolePinning)) modelIds.add(id as string);
+      }
+      // Also find models from allowed providers that aren't pinned.
+      const allowed = p.allowedProviders;
+      if (allowed && allowed.length > 0) {
+        for (const m of registry.getEnabled()) {
+          if (allowed.includes(m.provider)) modelIds.add(m.id);
+        }
+      }
+
       const lines: string[] = [
         `═══ ${p.name}${p.name === profiles.getActive().name ? ' (active)' : ''} ═══`,
         p.description,
         '',
-        `Context budget:    ${p.contextBudget.toLocaleString()} tokens`,
-        `Loop caps:         ${p.loopIterationCap} iterations, $${p.loopCostCap.toFixed(2)}`,
-        `Max output tokens: ${p.maxOutputTokens.toLocaleString()}`,
-        `Prefer local:      ${p.preferLocal ? 'yes' : 'no'}`,
-        `Reflection:        ${p.includeReflection ? 'yes' : 'no'}`,
-        `Verification:      ${p.includeVerification ? 'yes' : 'no'}`,
-        `Promotion after:   ${p.promotionThreshold} failures`,
       ];
-      if (p.allowedProviders && p.allowedProviders.length > 0) {
-        lines.push(`Allowed providers: ${p.allowedProviders.join(', ')}`);
-      }
-      if (p.rolePinning && Object.keys(p.rolePinning).length > 0) {
-        lines.push('');
-        lines.push('Role preferences (intent router picks first, pin is fallback):');
-        for (const [phase, modelId] of Object.entries(p.rolePinning)) {
-          lines.push(`  ${phase.padEnd(14)} → ${modelId}`);
+
+      // Models in this profile
+      if (modelIds.size > 0) {
+        lines.push('── Models ────────────────────────────────────────────');
+        for (const id of modelIds) {
+          const m = registry.getById(id);
+          if (m) {
+            const alias = m.alias ? `@${m.alias}` : '';
+            const cost = m.inputCostPer1M === 0 && m.outputCostPer1M === 0
+              ? 'free'
+              : `$${m.inputCostPer1M}/$${m.outputCostPer1M} per 1M`;
+            // Find which phases this model is pinned to
+            const phases: string[] = [];
+            if (p.rolePinning) {
+              for (const [phase, pinId] of Object.entries(p.rolePinning)) {
+                if (pinId === id) phases.push(phase);
+              }
+            }
+            const phaseStr = phases.length > 0 ? ` ← ${phases.join(', ')}` : '';
+            lines.push(`  ${m.name} ${alias} (${m.provider}, ${cost})${phaseStr}`);
+            lines.push(`    capabilities: ${m.capabilities.join(', ')}`);
+          } else {
+            lines.push(`  ${id} (not in registry)`);
+          }
         }
+        lines.push('');
       }
+
+      // Role assignments
+      if (p.rolePinning && Object.keys(p.rolePinning).length > 0) {
+        lines.push('── Phase → Model ─────────────────────────────────────');
+        for (const [phase, modelId] of Object.entries(p.rolePinning)) {
+          const m = registry.getById(modelId as string);
+          const label = m ? `${m.name} @${m.alias || m.id}` : modelId;
+          lines.push(`  ${(phase as string).padEnd(14)} → ${label}`);
+        }
+        lines.push('');
+      }
+
+      // Settings
+      lines.push('── Settings ──────────────────────────────────────────');
+      lines.push(`  Context budget:    ${p.contextBudget.toLocaleString()} tokens`);
+      lines.push(`  Loop caps:         ${p.loopIterationCap} iterations, $${p.loopCostCap.toFixed(2)}`);
+      lines.push(`  Max output tokens: ${p.maxOutputTokens.toLocaleString()}`);
+      lines.push(`  Prefer local:      ${p.preferLocal ? 'yes' : 'no'}`);
+      lines.push(`  Reflection:        ${p.includeReflection ? 'yes' : 'no'}`);
+      lines.push(`  Verification:      ${p.includeVerification ? 'yes' : 'no'}`);
+      lines.push(`  Promotion after:   ${p.promotionThreshold} failures`);
+      if (allowed && allowed.length > 0) {
+        lines.push(`  Allowed providers: ${allowed.join(', ')}`);
+      }
+
+      // Capability preferences
       lines.push('');
-      lines.push(`Planning:  [${p.planningPreference.join(', ')}]`);
-      lines.push(`Execution: [${p.executionPreference.join(', ')}]`);
-      lines.push(`Review:    [${p.reviewPreference.join(', ')}]`);
+      lines.push('── Capability Preferences ────────────────────────────');
+      lines.push(`  Planning:  [${p.planningPreference.join(', ')}]`);
+      lines.push(`  Execution: [${p.executionPreference.join(', ')}]`);
+      lines.push(`  Review:    [${p.reviewPreference.join(', ')}]`);
+
       return lines.join('\n');
     }
     case '/mode': {
