@@ -106,6 +106,20 @@ export class Router {
     classifier?: { provider: ProviderId; model: string };
     rolePinning?: Record<string, string>;
   }): void {
+    // If the profile has rolePinning but no explicit allowedProviders,
+    // derive it automatically from the pinned models' providers. This
+    // makes it impossible to create a profile that accidentally leaks
+    // to providers outside its model set.
+    if (!scope.allowedProviders && scope.rolePinning) {
+      const providers = new Set<ProviderId>();
+      for (const modelId of Object.values(scope.rolePinning)) {
+        const m = this.registry.getById(modelId);
+        if (m) providers.add(m.provider);
+      }
+      if (providers.size > 0) {
+        scope.allowedProviders = [...providers];
+      }
+    }
     this.profileScope = scope;
   }
 
