@@ -140,6 +140,28 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'find_symbol',
+    description: 'Search the codebase for a function, class, interface, type, or export by name. Returns file path and line number. Faster and more precise than search_code for navigating code structure.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Symbol name to search for (prefix match)' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'related_files',
+    description: 'Find files that import or are imported by a given file. Use to understand dependencies and impact of changes.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Relative file path' },
+      },
+      required: ['path'],
+    },
+  },
+  {
     name: 'run_command',
     description: 'Run a shell command in the working directory. Use for tests, builds, linting, or other local operations.',
     parameters: {
@@ -274,6 +296,8 @@ export interface ToolContext {
   loopGuard?: LoopGuard;
   /** Domain-expert consultants loaded from .kondi-chat/consultants.json. */
   consultants?: import('./consultants.ts').Consultant[];
+  /** Symbol index for find_symbol and related_files tools. */
+  symbolIndex?: import('../context/symbol-index.ts').SymbolIndexer;
 }
 
 // ---------------------------------------------------------------------------
@@ -299,6 +323,20 @@ export async function executeTool(
       case 'consult': {
         const { executeConsult } = await import('./consultants.ts');
         return await executeConsult(args, ctx.consultants ?? [], ctx.ledger, ctx.workingDir);
+      }
+      case 'find_symbol': {
+        if (!ctx.symbolIndex) return { content: 'Symbol index not available' };
+        const results = ctx.symbolIndex.findSymbol(String(args.name || ''));
+        if (results.length === 0) return { content: `No symbols matching "${args.name}"` };
+        return {
+          content: results.map(s => `${s.kind} ${s.name} → ${s.file}:${s.line}`).join('\n'),
+        };
+      }
+      case 'related_files': {
+        if (!ctx.symbolIndex) return { content: 'Symbol index not available' };
+        const related = ctx.symbolIndex.relatedFiles(String(args.path || ''));
+        if (related.length === 0) return { content: `No related files for "${args.path}"` };
+        return { content: related.join('\n') };
       }
       case 'read_file':
         return await toolReadFile(args, ctx);

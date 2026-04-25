@@ -18,6 +18,7 @@ import { bootstrapDirectory } from '../context/bootstrap.ts';
 import { Ledger, estimateCost } from '../audit/ledger.ts';
 import { AGENT_TOOLS, type ToolContext } from '../engine/tools.ts';
 import { loadConsultants } from '../engine/consultants.ts';
+import { SymbolIndexer } from '../context/symbol-index.ts';
 import { PermissionManager } from '../engine/permissions.ts';
 import { detectGitRepo, formatGitContextForPrompt, GIT_TOOLS, executeGitTool, type GitContext } from '../engine/git-tools.ts';
 import { CheckpointManager, isMutatingToolCall, predictedMutations } from '../engine/checkpoints.ts';
@@ -247,6 +248,12 @@ async function main() {
     setActiveFile: (p: string) => contextManager.setActiveFile(p),
     permissionManager,
     consultants: loadConsultants(storageDir),
+    symbolIndex: (() => {
+      const indexer = new SymbolIndexer(workingDir);
+      const scanned = indexer.build();
+      if (scanned > 0) process.stderr.write(`[symbol-index] scanned ${scanned} files\n`);
+      return indexer;
+    })(),
     emit,
     spawnSubAgent: async (type, instruction) => {
       emit({ type: 'activity', text: `spawn_agent(${type}): ${instruction.slice(0, 80)}`, activity_type: 'sub_agent' });

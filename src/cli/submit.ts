@@ -15,6 +15,7 @@
  *      continuation when `opts.loop` is true (the /loop command).
  */
 
+import { join } from 'node:path';
 import type { Session, LLMMessage, ProviderId, ToolCall } from '../types.ts';
 import type { ContextManager } from '../context/manager.ts';
 import type { Ledger } from '../audit/ledger.ts';
@@ -30,6 +31,8 @@ import { LoopGuard } from '../engine/loop-guard.ts';
 import { isMutatingToolCall, predictedMutations } from '../engine/checkpoints.ts';
 import { compactInLoop, classifyPhase } from './submit-helpers.ts';
 import { classifyTask, frameProblem, formatFrame, type TaskClassification } from '../engine/task-router.ts';
+import { ReceiptStore, buildReceipt } from '../context/receipts.ts';
+import { assembleBrainContext } from '../context/project-brain.ts';
 
 export interface SubmitDeps {
   session: Session;
@@ -242,9 +245,26 @@ export async function handleSubmit(
     emit({ type: 'activity', text: `task-router: ${taskClass.mode} (${taskClass.reason})`, activity_type: 'step' });
   }
 
+  const workingDir = session.workingDirectory || process.cwd();
+  const storageDir = join(workingDir, '.kondi-chat');
+  const receipts = new ReceiptStore(storageDir, session.id);
+
+  // ── Project Brain: assemble all context (memory, receipts, skills, preflight) ──
+  const brain = assembleBrainContext(workingDir, session, effectiveInput);
+  if (brain.preflightFiles.length > 0) {
+    emit({ type: 'activity', text: `preflight: loaded ${brain.preflightFiles.join(', ')}`, activity_type: 'step' });
+  }
+  if (brain.skillsUsed.length > 0) {
+    emit({ type: 'activity', text: `skills: ${brain.skillsUsed.join(', ')}`, activity_type: 'step' });
+  }
+
   // ── Regular agent loop ──────────────────────────────────────────────
   contextManager.addUserMessage(effectiveInput);
-  const { systemPrompt, userMessage, cacheablePrefix } = contextManager.assemblePrompt();
+  const { systemPrompt: rawSystemPrompt, userMessage, cacheablePrefix } = contextManager.assemblePrompt();
+  // Inject brain context (memory + receipts + skills + preflight files).
+  const systemPrompt = brain.fullContext
+    ? `${rawSystemPrompt}\n\n${brain.fullContext}`
+    : rawSystemPrompt;
   const messages: LLMMessage[] = [{ role: 'user', content: userMessage }];
 
   let totalInputTokens = 0, totalOutputTokens = 0, totalCost = 0;
@@ -377,6 +397,33 @@ export async function handleSubmit(
       }
 
       const result = await toolManager.execute(tc.name, tc.arguments, toolCtx);
+
+      // Post-edit verification policy: after any file mutation, run
+      // typecheck automatically. The result is appended to the tool
+      // output so the model sees failures immediately without needing
+      // to call run_command itself. The router is unaffected — this
+      // is a policy on the tool layer, not a routing decision.
+      if (isMutatingToolCall(tc.name, tc.arguments) && !result.isError) {
+        try {
+          const { execSync: execSyncVerify } = await import('node:child_process');
+          const verifyCmd = session.repoMap?.commands?.typecheck || 'npx tsc --noEmit 2>&1 | tail -20';
+          const verifyResult = execSyncVerify(verifyCmd, {
+            cwd: workingDir,
+            encoding: 'utf-8',
+            timeout: 30_000,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          }).trim();
+          if (verifyResult) {
+            result.content += `\n\n[auto-verify: ${verifyResult.includes('error') ? 'ISSUES FOUND' : 'clean'}]\n${verifyResult.slice(0, 500)}`;
+          }
+        } catch (verifyErr: any) {
+          const output = (verifyErr.stdout || verifyErr.stderr || verifyErr.message || '').toString().trim();
+          if (output) {
+            result.content += `\n\n[auto-verify: FAILED]\n${output.slice(0, 500)}`;
+          }
+        }
+      }
+
       const capped = result.content.length > 3000 ? result.content.slice(0, 3000) + '...' : result.content;
 
       allToolCalls.push({
@@ -461,6 +508,16 @@ export async function handleSubmit(
 
   emit({ type: 'status', text: '' });
   toolCtx.permissionManager?.endTurn();
+
+  // Record a context receipt for cross-turn continuity.
+  receipts.record(buildReceipt(
+    turnNumber,
+    input.slice(0, 200),
+    respondingModel,
+    allToolCalls,
+    finalContent,
+  ));
+
   await contextManager.maybeCompact();
   await contextManager.updateSessionState();
 }
