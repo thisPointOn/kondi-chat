@@ -19,6 +19,7 @@ import { Ledger, estimateCost } from '../audit/ledger.ts';
 import { AGENT_TOOLS, type ToolContext } from '../engine/tools.ts';
 import { loadConsultants } from '../engine/consultants.ts';
 import { SymbolIndexer } from '../context/symbol-index.ts';
+import { TaskStore } from '../engine/task-store.ts';
 import { PermissionManager } from '../engine/permissions.ts';
 import { detectGitRepo, formatGitContextForPrompt, GIT_TOOLS, executeGitTool, type GitContext } from '../engine/git-tools.ts';
 import { CheckpointManager, isMutatingToolCall, predictedMutations } from '../engine/checkpoints.ts';
@@ -239,6 +240,7 @@ async function main() {
       promotionThreshold: 2,
       workingDir,
       autoVerify: true,
+      taskStore: new TaskStore(storageDir),
       // Stream per-phase activity events into the same emit sink the
       // agent loop uses, so create_task is visibly transparent to the TUI
       // instead of blocking as one opaque tool line.

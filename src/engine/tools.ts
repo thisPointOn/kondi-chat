@@ -140,6 +140,14 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'repo_map',
+    description: 'Get the project structure: tech stack, entry points, subsystems, build/test commands, and conventions. Useful for understanding an unfamiliar codebase before making changes.',
+    parameters: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
     name: 'find_symbol',
     description: 'Search the codebase for a function, class, interface, type, or export by name. Returns file path and line number. Faster and more precise than search_code for navigating code structure.',
     parameters: {
@@ -323,6 +331,31 @@ export async function executeTool(
       case 'consult': {
         const { executeConsult } = await import('./consultants.ts');
         return await executeConsult(args, ctx.consultants ?? [], ctx.ledger, ctx.workingDir);
+      }
+      case 'repo_map': {
+        const map = ctx.session.repoMap;
+        if (!map) return { content: 'No repo map available. The project may not have been bootstrapped.' };
+        const lines: string[] = [];
+        if (map.stack.length > 0) lines.push(`Stack: ${map.stack.join(', ')}`);
+        if (map.entrypoints.length > 0) lines.push(`Entry points: ${map.entrypoints.join(', ')}`);
+        if (map.subsystems.length > 0) {
+          lines.push('Subsystems:');
+          for (const s of map.subsystems) {
+            lines.push(`  ${s.name}: ${s.purpose} (${s.paths.join(', ')})`);
+          }
+        }
+        const cmds = map.commands;
+        if (cmds.build || cmds.test || cmds.lint || cmds.typecheck) {
+          lines.push('Commands:');
+          if (cmds.build) lines.push(`  build: ${cmds.build}`);
+          if (cmds.test) lines.push(`  test: ${cmds.test}`);
+          if (cmds.lint) lines.push(`  lint: ${cmds.lint}`);
+          if (cmds.typecheck) lines.push(`  typecheck: ${cmds.typecheck}`);
+        }
+        if (map.conventions.length > 0) lines.push(`Conventions: ${map.conventions.join('; ')}`);
+        // Add symbol index summary if available
+        if (ctx.symbolIndex) lines.push(ctx.symbolIndex.format());
+        return { content: lines.join('\n') || 'Repo map is empty.' };
       }
       case 'find_symbol': {
         if (!ctx.symbolIndex) return { content: 'Symbol index not available' };

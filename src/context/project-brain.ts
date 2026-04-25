@@ -18,6 +18,7 @@ import { ReceiptStore } from './receipts.ts';
 import { MemoryManager } from './memory.ts';
 import { runPreflight } from './preflight.ts';
 import { loadSkills, selectSkills, formatSkillsForContext, seedDefaultSkills } from './skills.ts';
+import { TaskStore } from '../engine/task-store.ts';
 import type { Session } from '../types.ts';
 
 export interface BrainContext {
@@ -52,8 +53,15 @@ export function assembleBrainContext(
     );
   }
 
-  // 2. Recent receipts
+  // 2. Active task (persisted across sessions)
   const storageDir = `${workingDir}/.kondi-chat`;
+  const taskStore = new TaskStore(storageDir);
+  const activeTask = taskStore.formatForContext();
+  if (activeTask) {
+    sections.push(activeTask);
+  }
+
+  // 3. Recent receipts
   const receipts = new ReceiptStore(storageDir, session.id);
   const recentReceipts = receipts.formatForContext(3);
   if (recentReceipts) {

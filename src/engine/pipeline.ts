@@ -18,6 +18,7 @@ import { Ledger } from '../audit/ledger.ts';
 import type { Router as UnifiedRouter } from '../router/index.ts';
 import type { RoutingCollector } from '../router/collector.ts';
 import { PipelineError } from './errors.ts';
+import { TaskStore } from './task-store.ts';
 
 // ---------------------------------------------------------------------------
 // Pipeline configuration
@@ -37,6 +38,8 @@ export interface PipelineConfig {
   workingDir: string;
   /** Run verification after execution? */
   autoVerify: boolean;
+  /** Task store for persisting task cards across sessions. */
+  taskStore?: TaskStore;
   /**
    * Optional event sink — if provided, the pipeline streams an
    * `activity` event per phase as it runs. Threaded in from
@@ -169,6 +172,7 @@ export async function runPipeline(
   card.status = 'executing';
   session.tasks.push(card);
   session.state.activeTaskId = card.id;
+  config.taskStore?.setCurrent(card);
 
   // -----------------------------------------------------------------------
   // Step 2: Execute — router picks the worker model
@@ -354,11 +358,12 @@ Summarize the results for the user. If failed, suggest what to try next.`,
 
   ledger.record('reflect', reflectionResponse, `Reflect on task ${card.id}`, { taskId: card.id });
 
-  // Clean up state
+  // Clean up state + persist completed task to history
   session.state.activeTaskId = undefined;
   if (card.status === 'passed') {
     session.state.recentFailures = session.state.recentFailures.filter(f => !f.includes(card.id));
   }
+  config.taskStore?.complete();
 
   return {
     task: card,
