@@ -142,9 +142,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let suggestion_height = if suggestions.is_empty() { 0 } else { (suggestions.len() as u16).min(6) };
 
     // Reserve fixed slots for status (1) + input + model (1) + suggestions.
-    // Anything left becomes the in-progress preview area.
+    // Preview area gets whatever's left, but collapses to 0 when idle
+    // (nothing processing, no queue) so there's no blank space.
     let fixed = 1 + input_height + 1 + suggestion_height;
-    let preview_height = area.height.saturating_sub(fixed);
+    let has_preview_content = app.is_processing || !app.messages.is_empty()
+        || !app.activity.is_empty() || !app.pending_submits.is_empty();
+    let preview_height = if has_preview_content {
+        area.height.saturating_sub(fixed)
+    } else {
+        0
+    };
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)

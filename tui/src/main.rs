@@ -18,7 +18,7 @@ use protocol::{BackendEvent, TuiCommand};
 
 /// Height of the live inline viewport (status + in-progress + input + model).
 /// 18 rows is enough for a roomy compose area + 8 lines of streaming preview.
-const VIEWPORT_HEIGHT: u16 = 18;
+const VIEWPORT_HEIGHT: u16 = 10;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
