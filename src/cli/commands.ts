@@ -83,12 +83,14 @@ export async function handleCommand(input: string, deps: CommandDeps): Promise<s
       const p = all[name];
       if (!p) return `Unknown profile: ${name}. Available: ${profiles.getNames().join(', ')}`;
 
-      // Build a model roster: collect all unique models from rolePinning
-      // and resolve their registry entries for display.
-      // Collect models from rolePinning — these are the profile's declared models.
+      // Build a model roster. If the profile has rolePinning, show those
+      // specific models. If not, show all enabled models (the profile uses
+      // whatever's available via capability preferences).
       const modelIds = new Set<string>();
-      if (p.rolePinning) {
+      if (p.rolePinning && Object.keys(p.rolePinning).length > 0) {
         for (const id of Object.values(p.rolePinning)) modelIds.add(id as string);
+      } else {
+        for (const m of registry.getEnabled()) modelIds.add(m.id);
       }
 
       const lines: string[] = [
