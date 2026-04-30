@@ -150,7 +150,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let preview_height = if has_preview_content {
         area.height.saturating_sub(fixed)
     } else {
-        0
+        2
     };
 
     let chunks = Layout::default()

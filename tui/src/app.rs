@@ -78,7 +78,7 @@ pub struct App {
     clipboard: Option<arboard::Clipboard>,
 }
 
-const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 
 impl App {
     pub fn spinner(&self) -> &str {
