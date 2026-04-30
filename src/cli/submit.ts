@@ -328,6 +328,15 @@ export async function handleSubmit(
       },
     });
 
+    // If the response came from a fallback model, update the label so the
+    // user sees which model actually responded, not just which was requested.
+    if (response.wasFallback) {
+      const fallbackAlias = router.registry.getById(response.model)?.alias || response.model;
+      respondingModel = `${respondingModel}→${fallbackAlias}`;
+      emit({ type: 'activity', text: `fallback: ${response.requestedModel || 'unknown'} failed, used ${response.model}`, activity_type: 'step' });
+      emit({ type: 'message_update', id: msgId, model_label: respondingModel });
+    }
+
     const iterCost = estimateCost(response.model, response.inputTokens, response.outputTokens);
     totalInputTokens += response.inputTokens;
     totalOutputTokens += response.outputTokens;
