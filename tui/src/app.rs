@@ -445,7 +445,7 @@ const PINK: Color = Color::Rgb(255, 20, 147);
 const BODY: Color = Color::Rgb(210, 210, 210);
 
 pub fn render_user_lines(text: &str) -> Vec<Line<'static>> {
-    let mut out = vec![Line::from("")];
+    let mut out = vec![];
     let style = Style::default().fg(PINK).add_modifier(Modifier::BOLD);
     let prefix = Span::styled("❯ ", style);
     let mut first = true;
@@ -464,7 +464,7 @@ pub fn render_user_lines(text: &str) -> Vec<Line<'static>> {
 }
 
 pub fn render_system_lines(text: &str) -> Vec<Line<'static>> {
-    let mut out = vec![Line::from("")];
+    let mut out = vec![];
     for line in text.lines() {
         out.push(Line::from(Span::styled(
             line.to_string(),
@@ -608,7 +608,7 @@ fn content_row(
 }
 
 pub fn render_assistant_lines(msg: &ChatMessage) -> Vec<Line<'static>> {
-    let mut out: Vec<Line<'static>> = vec![Line::from("")];
+    let mut out: Vec<Line<'static>> = vec![];
 
     let label = msg.model_label.clone().unwrap_or_else(|| "assistant".to_string());
     let mut header_spans = vec![
