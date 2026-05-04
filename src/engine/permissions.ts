@@ -12,7 +12,8 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 
 export type PermissionTier = 'auto-approve' | 'confirm' | 'always-confirm';
@@ -119,7 +120,17 @@ export class PermissionManager {
 
   constructor(configPath: string, skipPermissions = false) {
     this.skip = skipPermissions;
-    this.config = loadConfig(configPath);
+    // Load user-level permissions first, then project-level overrides.
+    const userConfig = loadConfig(join(homedir(), '.kondi-chat', 'permissions.json'));
+    const projectConfig = loadConfig(configPath);
+    this.config = {
+      defaultTier: projectConfig.defaultTier || userConfig.defaultTier,
+      tools: { ...userConfig.tools, ...projectConfig.tools },
+      alwaysConfirmPatterns: projectConfig.alwaysConfirmPatterns.length > 0
+        ? projectConfig.alwaysConfirmPatterns
+        : userConfig.alwaysConfirmPatterns,
+      sessionOverrides: projectConfig.sessionOverrides,
+    };
     this.patterns = this.config.alwaysConfirmPatterns.map(p => {
       try { return new RegExp(p); } catch { return null; }
     }).filter((r): r is RegExp => r !== null);
