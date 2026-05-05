@@ -279,18 +279,21 @@ export async function handleSubmit(
   const msgId = `msg-${Date.now()}`;
   emit({ type: 'message', id: msgId, role: 'assistant', content: '', model_label: '...' });
 
-  // Classify the user's request once. The phase drives the budget profile's
-  // preference list inside the router (executionPreference vs planningPreference).
-  const phase = classifyPhase(effectiveInput);
+  // Dynamic phase: reclassified per iteration based on what the model
+  // is doing. Investigation (read/search) → dispatch (planning) →
+  // execute (write/edit) → reflect (review). The router selects a
+  // different model for each phase from the profile's rolePinning.
+  // This is how the agent switches models mid-turn automatically.
+  let currentPhase: import('../types.ts').LedgerPhase = classifyPhase(effectiveInput);
   emit({
     type: 'activity',
-    text: `router: phase=${phase} (${phase === 'execute' ? 'coding intent detected' : 'discussion / reasoning'})`,
+    text: `router: phase=${currentPhase} (${currentPhase === 'execute' ? 'coding intent detected' : 'discussion / reasoning'})`,
     activity_type: 'step',
   });
 
   while (true) {
     const iteration = loopGuard.check().iteration;
-    const decision = await router.select(phase, userMessage, undefined, iteration);
+    const decision = await router.select(currentPhase, userMessage, undefined, iteration);
     respondingModel = decision.model.alias || decision.model.name;
     respondingProvider = decision.model.provider;
     respondingReason = decision.reason;
@@ -448,6 +451,34 @@ export async function handleSubmit(
     }
 
     messages.push({ role: 'tool', toolResults });
+
+    // Dynamic phase reclassification: based on what tools just ran,
+    // determine what the NEXT iteration should be. This is how the
+    // agent switches between models mid-turn — investigation uses the
+    // cheap/discuss model, coding uses the execute model, review uses
+    // the reflect model.
+    const toolsThisRound = new Set(response.toolCalls!.map(tc => tc.name));
+    const prevPhase: import('../types.ts').LedgerPhase = currentPhase;
+    if (toolsThisRound.has('write_file') || toolsThisRound.has('edit_file')) {
+      // Just wrote code → next iteration should review/reflect
+      currentPhase = 'reflect';
+    } else if (toolsThisRound.has('update_plan') || toolsThisRound.has('create_task')) {
+      // Just planned → next iteration should execute
+      currentPhase = 'execute';
+    } else if (toolsThisRound.has('read_file') || toolsThisRound.has('search_code') ||
+               toolsThisRound.has('find_symbol') || toolsThisRound.has('related_files') ||
+               toolsThisRound.has('repo_map')) {
+      // Just investigated → next iteration should plan/dispatch
+      currentPhase = 'dispatch';
+    } else if (toolsThisRound.has('run_command')) {
+      // Just ran a command (test/build) → reflect on results
+      currentPhase = 'reflect';
+    }
+    // else: keep current phase (e.g. for web_search, consult, etc.)
+
+    if (currentPhase !== prevPhase) {
+      emit({ type: 'activity', text: `phase: ${prevPhase} → ${currentPhase}`, activity_type: 'step' });
+    }
 
     // Spec 08 — drive the loop with LoopGuard. Feed the first tool error so
     // stuck detection works on ordinary turns.
