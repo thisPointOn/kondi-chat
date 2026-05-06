@@ -10,6 +10,7 @@
 import { createInterface } from 'node:readline';
 import { resolve, join } from 'node:path';
 import { existsSync, readFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import type { ProviderId, Session, LLMMessage } from '../types.ts';
 import { callLLM } from '../providers/llm-caller.ts';
 import { ContextManager, createSession } from '../context/manager.ts';
@@ -56,10 +57,9 @@ function emit(event: any) {
   process.stdout.write(JSON.stringify(event) + '\n');
 }
 
-function loadEnv(): void {
-  const envPath = resolve(process.cwd(), '.env');
-  if (!existsSync(envPath)) return;
-  for (const line of readFileSync(envPath, 'utf-8').split('\n')) {
+function loadEnvFile(path: string): void {
+  if (!existsSync(path)) return;
+  for (const line of readFileSync(path, 'utf-8').split('\n')) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
     const eq = trimmed.indexOf('=');
@@ -68,6 +68,20 @@ function loadEnv(): void {
     const val = trimmed.slice(eq + 1).trim().replace(/^["']|["']$/g, '');
     if (!process.env[key]) process.env[key] = val;
   }
+}
+
+function loadEnv(): void {
+  // Load from the kondi-chat install directory (process.cwd = project root
+  // because the TUI spawns the backend with current_dir(&project_root)).
+  loadEnvFile(resolve(process.cwd(), '.env'));
+  // Also load from the user's actual working directory (passed via --cwd)
+  // so API keys in the user's project .env are picked up too.
+  const cwdIdx = process.argv.indexOf('--cwd');
+  if (cwdIdx >= 0 && process.argv[cwdIdx + 1]) {
+    loadEnvFile(resolve(process.argv[cwdIdx + 1], '.env'));
+  }
+  // Also load from ~/.kondi-chat/.env as a user-level fallback.
+  loadEnvFile(resolve(homedir(), '.kondi-chat', '.env'));
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
