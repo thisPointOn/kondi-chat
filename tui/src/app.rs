@@ -1081,21 +1081,25 @@ mod tests {
     #[test]
     fn add_user_message_sets_processing() {
         let mut app = App::new();
+        // App::new() already has splash_lines in pending_history
+        let before = app.pending_history.len();
         app.add_user_message("hello");
         assert!(app.is_processing);
         assert_eq!(app.status, "thinking...");
         assert!(app.user_inputs.contains(&"hello".to_string()));
-        assert_eq!(app.pending_history.len(), 1);
+        assert_eq!(app.pending_history.len(), before + 1);
     }
 
     #[test]
     fn record_user_line_does_not_set_processing() {
         let mut app = App::new();
         let was_processing = app.is_processing;
+        // App::new() already has splash_lines in pending_history
+        let before = app.pending_history.len();
         app.record_user_line("typeahead");
         assert_eq!(app.is_processing, was_processing); // unchanged
         assert!(app.user_inputs.contains(&"typeahead".to_string()));
-        assert_eq!(app.pending_history.len(), 1);
+        assert_eq!(app.pending_history.len(), before + 1);
     }
 
     // ── Render functions ──────────────────────────────────────────

@@ -87,7 +87,7 @@ const EXTRACTORS: Array<{ ext: string[]; patterns: Array<{ re: RegExp; kind: Sym
 const IMPORT_RE_TS = /(?:import|from)\s+['"]([^'"]+)['"]/g;
 const IMPORT_RE_PY = /^(?:from|import)\s+(\S+)/gm;
 
-const SKIP_DIRS = new Set(['node_modules', '.git', '.kondi-chat', 'dist', 'target', '__pycache__', '.next', 'build']);
+const SKIP_DIRS = new Set(['node_modules', '.git', '.kondi-chat', '.claude', 'dist', 'target', '__pycache__', '.next', '.venv', 'venv', 'build']);
 const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.py', '.rs', '.go']);
 const MAX_FILE_SIZE = 200_000;
 

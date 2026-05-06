@@ -141,7 +141,7 @@ function inferRelatedFiles(workingDir: string, text: string): string[] {
   if (words.length === 0) return [];
 
   // Scan the file tree (max 2 levels deep, skip heavy dirs)
-  const skipDirs = new Set(['node_modules', '.git', '.kondi-chat', 'dist', 'target', '__pycache__', '.next']);
+  const skipDirs = new Set(['node_modules', '.git', '.kondi-chat', '.claude', 'dist', 'target', '__pycache__', '.next', '.venv', 'venv']);
   const matches: string[] = [];
 
   function scan(dir: string, depth: number) {

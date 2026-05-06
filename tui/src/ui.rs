@@ -544,3 +544,251 @@ fn draw_suggestions(f: &mut Frame, suggestions: &[Suggestion], area: Rect) {
     }).collect();
     f.render_widget(Paragraph::new(Text::from(lines)), area);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::style::{Color, Modifier, Style};
+
+    // ── build_input_text ──────────────────────────────────────────
+
+    fn make_styles() -> (Style, Style) {
+        (
+            Style::default().fg(Color::White),
+            Style::default().bg(Color::DarkGray).fg(Color::Black),
+        )
+    }
+
+    #[test]
+    fn build_input_text_empty() {
+        let (base, cursor_style) = make_styles();
+        let text = build_input_text("", 0, base, cursor_style);
+        // Empty input + cursor at 0 → one line with just the cursor block
+        assert_eq!(text.lines.len(), 1);
+        assert_eq!(text.lines[0].spans.len(), 1);
+        // The cursor block is a space with cursor_style
+        assert_eq!(text.lines[0].spans[0].content, " ");
+    }
+
+    #[test]
+    fn build_input_text_cursor_at_end() {
+        let (base, cursor_style) = make_styles();
+        let text = build_input_text("hi", 2, base, cursor_style);
+        assert_eq!(text.lines.len(), 1);
+        // "hi" in base + " " cursor block
+        let all: String = text.lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(all, "hi ");
+        assert_eq!(text.lines[0].spans[1].content, " ");
+    }
+
+    #[test]
+    fn build_input_text_cursor_at_start() {
+        let (base, cursor_style) = make_styles();
+        let text = build_input_text("xy", 0, base, cursor_style);
+        // cursor cell "x" + base "y"
+        assert_eq!(text.lines[0].spans.len(), 2);
+        assert_eq!(text.lines[0].spans[0].content, "x"); // highlighted
+        assert_eq!(text.lines[0].spans[1].content, "y"); // normal
+    }
+
+    #[test]
+    fn build_input_text_cursor_mid() {
+        let (base, cursor_style) = make_styles();
+        let text = build_input_text("abc", 1, base, cursor_style);
+        // "a" (base), "b" (cursor), "c" (base)
+        assert_eq!(text.lines[0].spans.len(), 3);
+        assert_eq!(text.lines[0].spans[0].content, "a");
+        assert_eq!(text.lines[0].spans[1].content, "b");
+        assert_eq!(text.lines[0].spans[2].content, "c");
+    }
+
+    #[test]
+    fn build_input_text_cursor_on_newline() {
+        let (base, cursor_style) = make_styles();
+        let text = build_input_text("line1\nline2", 5, base, cursor_style);
+        // Cursor at char 5 = the newline \n
+        // Expect: "line1" on line 1, cursor block then "line2" on line 2
+        assert_eq!(text.lines.len(), 2);
+        // Line 1: "line1" + trailing cursor block that looks like a space
+        let l0: String = text.lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(l0.contains("line1"));
+        // Line 2: "line2" in base
+        let l1: String = text.lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(l1.contains("line2"));
+    }
+
+    #[test]
+    fn build_input_text_cursor_clamped() {
+        let (base, cursor_style) = make_styles();
+        // cursor 999 > len 2 → clamped to 2
+        let text = build_input_text("hi", 999, base, cursor_style);
+        let all: String = text.lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(all, "hi ");
+    }
+
+    #[test]
+    fn build_input_text_multiline_input() {
+        let (base, cursor_style) = make_styles();
+        let text = build_input_text("a\nb\nc", 3, base, cursor_style);
+        // char 3 is 'b' (indices: 0='a', 1='\n', 2='b')
+        // Lines: "a", "b" (cursor), "c"
+        assert_eq!(text.lines.len(), 3);
+        assert_eq!(text.lines[1].spans[0].content, "b"); // cursor on 'b'
+    }
+
+    // ── wrap_lines_to_width ───────────────────────────────────────
+
+    #[test]
+    fn wrap_lines_fits_in_width() {
+        let style = Style::default();
+        let lines = vec![Line::from(Span::styled("hi", style))];
+        let wrapped = wrap_lines_to_width(&lines, 10);
+        assert_eq!(wrapped.len(), 1);
+        assert_eq!(wrapped[0].spans[0].content, "hi");
+    }
+
+    #[test]
+    fn wrap_lines_wraps_long_line() {
+        let style = Style::default();
+        let lines = vec![Line::from(Span::styled("abcdef", style))];
+        let wrapped = wrap_lines_to_width(&lines, 3);
+        assert_eq!(wrapped.len(), 2);
+        assert_eq!(wrapped[0].spans[0].content, "abc");
+        assert_eq!(wrapped[1].spans[0].content, "def");
+    }
+
+    #[test]
+    fn wrap_lines_preserves_empty() {
+        let style = Style::default();
+        let lines = vec![Line::from(Span::styled("", style))];
+        let wrapped = wrap_lines_to_width(&lines, 5);
+        assert_eq!(wrapped.len(), 1);
+        assert_eq!(wrapped[0].spans[0].content, "");
+    }
+
+    #[test]
+    fn wrap_lines_splits_on_newlines() {
+        let style = Style::default();
+        let lines = vec![Line::from(Span::styled("a\nb", style))];
+        let wrapped = wrap_lines_to_width(&lines, 10);
+        assert_eq!(wrapped.len(), 2);
+        assert_eq!(wrapped[0].spans[0].content, "a");
+        assert_eq!(wrapped[1].spans[0].content, "b");
+    }
+
+    #[test]
+    fn wrap_lines_handles_multiple_input_lines() {
+        let style = Style::default();
+        let lines = vec![
+            Line::from(Span::styled("a", style)),
+            Line::from(Span::styled("bcdef", style)),
+            Line::from(Span::styled("g", style)),
+        ];
+        let wrapped = wrap_lines_to_width(&lines, 2);
+        // "a" → fits
+        // "bcdef" → "bc", "de", "f"
+        // "g" → fits
+        assert_eq!(wrapped.len(), 5);
+        let contents: Vec<String> = wrapped.iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect();
+        assert_eq!(contents, vec!["a", "bc", "de", "f", "g"]);
+    }
+
+    // ── truncate ──────────────────────────────────────────────────
+
+    #[test]
+    fn truncate_short() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_exact() {
+        assert_eq!(truncate("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_long() {
+        assert_eq!(truncate("hello world", 6), "hello…");
+    }
+
+    #[test]
+    fn truncate_one() {
+        assert_eq!(truncate("abc", 1), "…");
+    }
+
+    #[test]
+    fn truncate_zero() {
+        assert_eq!(truncate("abc", 0), "…");
+    }
+
+    #[test]
+    fn truncate_empty() {
+        assert_eq!(truncate("", 5), "");
+    }
+
+    #[test]
+    fn truncate_utf8() {
+        // truncate(s, n): if chars > n, keeps (n-1) chars + '…' (total n).
+        // "λ☃✓" has 3 chars > 2, so take 1 char → "λ…"
+        assert_eq!(truncate("λ☃✓", 2), "λ…");
+    }
+
+    // ── get_suggestions ───────────────────────────────────────────
+
+    #[test]
+    fn suggestions_empty_input() {
+        let models = vec!["opus".into(), "haiku".into()];
+        let s = get_suggestions("", "auto", &models);
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn suggestions_slash_command_exact() {
+        let models: Vec<String> = vec![];
+        let s = get_suggestions("/help", "auto", &models);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].value, "/help");
+    }
+
+    #[test]
+    fn suggestions_slash_command_partial() {
+        let models: Vec<String> = vec![];
+        let s = get_suggestions("/mod", "auto", &models);
+        // Should match /mode and /mode-details and /models
+        assert!(s.len() >= 2);
+        let values: Vec<&str> = s.iter().map(|x| x.value.as_str()).collect();
+        assert!(values.contains(&"/mode"));
+        assert!(values.contains(&"/models") || values.contains(&"/mode-details"));
+    }
+
+    #[test]
+    fn suggestions_at_mention() {
+        let models = vec!["opus".into(), "sonnet".into(), "haiku".into()];
+        let s = get_suggestions("@op", "auto", &models);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].value, "@opus");
+    }
+
+    #[test]
+    fn suggestions_at_mention_no_match() {
+        let models = vec!["haiku".into()];
+        let s = get_suggestions("@zzz", "auto", &models);
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn suggestions_at_mention_with_space_returns_none() {
+        let models = vec!["opus".into()];
+        // If the @mention has a space, it's not a mention anymore
+        let s = get_suggestions("@op hi", "auto", &models);
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn suggestions_plain_text_no_match() {
+        let models = vec!["opus".into()];
+        let s = get_suggestions("hello", "auto", &models);
+        assert!(s.is_empty());
+    }
+}
