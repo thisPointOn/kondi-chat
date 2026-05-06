@@ -172,11 +172,10 @@ export async function handleCommand(input: string, deps: CommandDeps): Promise<s
           rolePinning: p.rolePinning,
         });
         writeActiveProfile(resolve(workingDir, '.kondi-chat'), profiles.getActive().name);
-        // If there's no manual override, let the indicator reflect the
-        // new profile name until the next turn resolves a concrete model.
-        if (!router.rules.getOverride()) {
-          emit({ type: 'model_override', label: profiles.getActive().name, pinned: false });
-        }
+        // Switching mode clears any /use override — the user wants the
+        // profile's routing, not a stale manual pin.
+        router.rules.setOverride(undefined);
+        emit({ type: 'model_override', label: profiles.getActive().name, pinned: false });
         return `Mode: ${profiles.getActive().name}`;
       } catch (e) { return (e as Error).message; }
     }
