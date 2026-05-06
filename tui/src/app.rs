@@ -761,3 +761,539 @@ fn push_diff_lines(out: &mut Vec<Line<'static>>, diff: &str, max_lines: usize, i
         )));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Input editing (cursor-aware, UTF-8 safe) ──────────────────
+
+    #[test]
+    fn insert_char_basic() {
+        let mut app = App::new();
+        app.insert_char('H');
+        app.insert_char('i');
+        assert_eq!(app.input, "Hi");
+        assert_eq!(app.input_cursor, 2);
+    }
+
+    #[test]
+    fn insert_char_mid_cursor() {
+        let mut app = App::new();
+        app.insert_char('H');
+        app.insert_char('i');
+        app.cursor_left();
+        app.insert_char('!');
+        assert_eq!(app.input, "H!i");
+        assert_eq!(app.input_cursor, 2);
+    }
+
+    #[test]
+    fn insert_char_utf8_multibyte() {
+        let mut app = App::new();
+        app.insert_char('λ');
+        app.insert_char('☃');
+        app.insert_char('a');
+        assert_eq!(app.input, "λ☃a");
+        assert_eq!(app.input_cursor, 3);
+        // byte length > char count for multibyte
+        assert!(app.input.len() > 3);
+    }
+
+    #[test]
+    fn backspace_at_start_does_nothing() {
+        let mut app = App::new();
+        app.input = "hi".into();
+        app.input_cursor = 0;
+        app.backspace_at_cursor();
+        assert_eq!(app.input, "hi");
+        assert_eq!(app.input_cursor, 0);
+    }
+
+    #[test]
+    fn backspace_at_end() {
+        let mut app = App::new();
+        app.input = "abc".into();
+        app.input_cursor = 3;
+        app.backspace_at_cursor();
+        assert_eq!(app.input, "ab");
+        assert_eq!(app.input_cursor, 2);
+    }
+
+    #[test]
+    fn backspace_mid() {
+        let mut app = App::new();
+        app.input = "abc".into();
+        app.input_cursor = 2; // after 'b'
+        app.backspace_at_cursor();
+        assert_eq!(app.input, "ac");
+        assert_eq!(app.input_cursor, 1);
+    }
+
+    #[test]
+    fn backspace_utf8_multibyte() {
+        let mut app = App::new();
+        app.input = "aλc".into();
+        app.input_cursor = 2; // after λ (index 2 = after 'λ')
+        app.backspace_at_cursor();
+        assert_eq!(app.input, "ac");
+        assert_eq!(app.input_cursor, 1);
+    }
+
+    #[test]
+    fn delete_at_end_does_nothing() {
+        let mut app = App::new();
+        app.input = "abc".into();
+        app.input_cursor = 3;
+        app.delete_at_cursor();
+        assert_eq!(app.input, "abc");
+        assert_eq!(app.input_cursor, 3);
+    }
+
+    #[test]
+    fn delete_at_start() {
+        let mut app = App::new();
+        app.input = "abc".into();
+        app.input_cursor = 0;
+        app.delete_at_cursor();
+        assert_eq!(app.input, "bc");
+        assert_eq!(app.input_cursor, 0);
+    }
+
+    #[test]
+    fn delete_mid() {
+        let mut app = App::new();
+        app.input = "abc".into();
+        app.input_cursor = 1; // after 'a'
+        app.delete_at_cursor();
+        assert_eq!(app.input, "ac");
+        assert_eq!(app.input_cursor, 1);
+    }
+
+    #[test]
+    fn cursor_left_at_start_does_nothing() {
+        let mut app = App::new();
+        app.input = "hi".into();
+        app.input_cursor = 0;
+        app.cursor_left();
+        assert_eq!(app.input_cursor, 0);
+    }
+
+    #[test]
+    fn cursor_left_normal() {
+        let mut app = App::new();
+        app.input = "hi".into();
+        app.input_cursor = 2;
+        app.cursor_left();
+        assert_eq!(app.input_cursor, 1);
+    }
+
+    #[test]
+    fn cursor_right_at_end_does_nothing() {
+        let mut app = App::new();
+        app.input = "hi".into();
+        app.input_cursor = 2;
+        app.cursor_right();
+        assert_eq!(app.input_cursor, 2);
+    }
+
+    #[test]
+    fn cursor_right_normal() {
+        let mut app = App::new();
+        app.input = "hi".into();
+        app.input_cursor = 0;
+        app.cursor_right();
+        assert_eq!(app.input_cursor, 1);
+    }
+
+    #[test]
+    fn cursor_home() {
+        let mut app = App::new();
+        app.input = "hello".into();
+        app.input_cursor = 5;
+        app.cursor_home();
+        assert_eq!(app.input_cursor, 0);
+    }
+
+    #[test]
+    fn cursor_end() {
+        let mut app = App::new();
+        app.input = "hello".into();
+        app.input_cursor = 0;
+        app.cursor_end();
+        assert_eq!(app.input_cursor, 5);
+    }
+
+    #[test]
+    fn cursor_end_utf8() {
+        let mut app = App::new();
+        app.input = "λ☃".into();
+        app.input_cursor = 0;
+        app.cursor_end();
+        assert_eq!(app.input_cursor, 2); // 2 chars, not bytes
+    }
+
+    #[test]
+    fn clear_input() {
+        let mut app = App::new();
+        app.input = "something long".into();
+        app.input_cursor = 5;
+        app.clear_input();
+        assert_eq!(app.input, "");
+        assert_eq!(app.input_cursor, 0);
+    }
+
+    // ── History navigation ────────────────────────────────────────
+
+    #[test]
+    fn history_prev_empty_does_nothing() {
+        let mut app = App::new();
+        app.history_prev();
+        assert!(app.history_idx.is_none());
+    }
+
+    #[test]
+    fn history_prev_first_time_saves_draft() {
+        let mut app = App::new();
+        app.user_inputs = vec!["old1".into(), "old2".into()];
+        app.input = "draft".into();
+        app.input_cursor = 5;
+        app.history_prev();
+        // history_idx 0 = most recent entry = "old2" (newest-last convention)
+        assert_eq!(app.history_idx, Some(0));
+        assert_eq!(app.input, "old2");
+        assert_eq!(app.history_draft, "draft");
+        assert_eq!(app.input_cursor, 4); // "old2".chars().count()
+    }
+
+    #[test]
+    fn history_prev_wrap_at_bottom() {
+        let mut app = App::new();
+        app.user_inputs = vec!["old1".into()];
+        app.input = "draft".into();
+        app.history_prev();
+        assert_eq!(app.history_idx, Some(0));
+        assert_eq!(app.input, "old1");
+        // Press again — stays at last
+        app.history_prev();
+        assert_eq!(app.history_idx, Some(0));
+        assert_eq!(app.input, "old1");
+    }
+
+    #[test]
+    fn history_next_returns_to_draft() {
+        let mut app = App::new();
+        app.user_inputs = vec!["old1".into()];
+        app.input = "draft".into();
+        app.history_prev(); // idx=0
+        app.history_next(); // idx=None, restore draft
+        assert!(app.history_idx.is_none());
+        assert_eq!(app.input, "draft");
+    }
+
+    #[test]
+    fn history_next_empty_does_nothing() {
+        let mut app = App::new();
+        app.history_next();
+        assert!(app.history_idx.is_none());
+    }
+
+    #[test]
+    fn history_next_from_none_does_nothing() {
+        let mut app = App::new();
+        app.user_inputs = vec!["a".into()];
+        app.history_next(); // None -> no-op
+        assert!(app.history_idx.is_none());
+    }
+
+    #[test]
+    fn history_traversal_walks_both_directions() {
+        let mut app = App::new();
+        // user_inputs: newest-last, so [0]="third", [1]="second", [2]="first"
+        app.user_inputs = vec!["first".into(), "second".into(), "third".into()];
+        app.input = "fresh".into();
+        // prev 1 → third (idx=0, most recent)
+        app.history_prev();
+        assert_eq!(app.history_idx, Some(0));
+        assert_eq!(app.input, "third");
+        // prev 2 → second (idx=1)
+        app.history_prev();
+        assert_eq!(app.history_idx, Some(1));
+        assert_eq!(app.input, "second");
+        // next → third (idx=0)
+        app.history_next();
+        assert_eq!(app.history_idx, Some(0));
+        assert_eq!(app.input, "third");
+        // next → draft (idx=None)
+        app.history_next();
+        assert!(app.history_idx.is_none());
+        assert_eq!(app.input, "fresh");
+    }
+
+    // ── Type-ahead queue ──────────────────────────────────────────
+
+    #[test]
+    fn queue_and_pop_submit() {
+        let mut app = App::new();
+        app.queue_submit("msg1".into());
+        app.queue_submit("msg2".into());
+        // First pop fires add_user_message → records user line + begins processing
+        let popped = app.pop_pending_submit();
+        assert_eq!(popped.as_deref(), Some("msg1"));
+        assert!(app.is_processing);
+        assert!(app.user_inputs.contains(&"msg1".to_string()));
+        // Second pop
+        // But is_processing is already true; pop_pending_submit doesn't
+        // check is_processing — it just calls add_user_message again.
+        let popped2 = app.pop_pending_submit();
+        assert_eq!(popped2.as_deref(), Some("msg2"));
+        // Queue is now empty
+        assert!(app.pop_pending_submit().is_none());
+    }
+
+    #[test]
+    fn pop_empty_queue_returns_none() {
+        let mut app = App::new();
+        assert!(app.pop_pending_submit().is_none());
+        assert!(!app.is_processing);
+    }
+
+    #[test]
+    fn clear_pending_submits_returns_count() {
+        let mut app = App::new();
+        app.queue_submit("a".into());
+        app.queue_submit("b".into());
+        app.queue_submit("c".into());
+        let n = app.clear_pending_submits();
+        assert_eq!(n, 3);
+        assert!(app.pop_pending_submit().is_none());
+    }
+
+    #[test]
+    fn clear_empty_queue_returns_zero() {
+        let mut app = App::new();
+        let n = app.clear_pending_submits();
+        assert_eq!(n, 0);
+    }
+
+    // ── add_user_message / record_user_line ───────────────────────
+
+    #[test]
+    fn add_user_message_sets_processing() {
+        let mut app = App::new();
+        app.add_user_message("hello");
+        assert!(app.is_processing);
+        assert_eq!(app.status, "thinking...");
+        assert!(app.user_inputs.contains(&"hello".to_string()));
+        assert_eq!(app.pending_history.len(), 1);
+    }
+
+    #[test]
+    fn record_user_line_does_not_set_processing() {
+        let mut app = App::new();
+        let was_processing = app.is_processing;
+        app.record_user_line("typeahead");
+        assert_eq!(app.is_processing, was_processing); // unchanged
+        assert!(app.user_inputs.contains(&"typeahead".to_string()));
+        assert_eq!(app.pending_history.len(), 1);
+    }
+
+    // ── Render functions ──────────────────────────────────────────
+
+    #[test]
+    fn render_user_lines_single_line() {
+        let lines = render_user_lines("hello");
+        assert!(!lines.is_empty());
+        // First line should contain "❯ " and "hello"
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("❯"));
+        assert!(text.contains("hello"));
+    }
+
+    #[test]
+    fn render_user_lines_multiline() {
+        let lines = render_user_lines("line1\nline2");
+        assert_eq!(lines.len(), 2);
+        let l0: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        let l1: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(l0.contains("❯"));
+        assert!(l0.contains("line1"));
+        assert!(l1.contains("line2"));
+        assert!(!l1.contains("❯"));
+    }
+
+    #[test]
+    fn render_user_lines_empty() {
+        let lines = render_user_lines("");
+        assert_eq!(lines.len(), 1);
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("❯"));
+    }
+
+    #[test]
+    fn render_system_lines_basic() {
+        let lines = render_system_lines("note");
+        assert_eq!(lines.len(), 1);
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("note"));
+    }
+
+    #[test]
+    fn render_system_lines_multiline() {
+        let lines = render_system_lines("a\nb\nc");
+        assert_eq!(lines.len(), 3);
+    }
+
+    // ── Table parsing ─────────────────────────────────────────────
+
+    #[test]
+    fn parse_row_basic() {
+        let row = parse_row("| a | b | c |");
+        assert_eq!(row, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn parse_row_whitespace() {
+        let row = parse_row("|  hello  | world |");
+        assert_eq!(row, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn parse_row_no_bars() {
+        let row = parse_row(" just text ");
+        assert_eq!(row, vec!["just text"]);
+    }
+
+    #[test]
+    fn parse_table_basic() {
+        let lines = [
+            "| Name | Age |",
+            "|------|-----|",
+            "| Alice | 30 |",
+            "| Bob   | 25 |",
+        ];
+        let (header, data) = parse_table(&lines);
+        assert_eq!(header, vec!["Name", "Age"]);
+        assert_eq!(data.len(), 2);
+        assert_eq!(data[0], vec!["Alice", "30"]);
+        assert_eq!(data[1], vec!["Bob", "25"]);
+    }
+
+    #[test]
+    fn parse_table_uneven_rows() {
+        let lines = [
+            "| A | B | C |",
+            "|---|---|---|",
+            "| 1 | 2 |",
+            "| 3 | 4 | 5 | 6 |",
+        ];
+        let (header, data) = parse_table(&lines);
+        assert_eq!(header, vec!["A", "B", "C"]);
+        // Short row gets padded to 3
+        assert_eq!(data[0], vec!["1", "2", ""]);
+        // Long row gets truncated to 3
+        assert_eq!(data[1], vec!["3", "4", "5"]);
+    }
+
+    // ── detect_table_at ───────────────────────────────────────────
+
+    #[test]
+    fn detect_table_valid() {
+        let lines = [
+            "| Col1 | Col2 |",
+            "|------|------|",
+            "| a    | b    |",
+            "| c    | d    |",
+            "plain text after",
+        ];
+        let end = detect_table_at(&lines, 0);
+        assert_eq!(end, Some(4)); // header + sep + 2 data rows
+    }
+
+    #[test]
+    fn detect_table_at_not_enough_lines() {
+        let lines = ["| H |"];
+        assert_eq!(detect_table_at(&lines, 0), None);
+    }
+
+    #[test]
+    fn detect_table_no_pipe_start() {
+        let lines = ["Not a table", "---|---"];
+        assert_eq!(detect_table_at(&lines, 0), None);
+    }
+
+    #[test]
+    fn detect_table_sep_missing_dash() {
+        let lines = ["| H |", "|   |", "| a |"];
+        assert_eq!(detect_table_at(&lines, 0), None);
+    }
+
+    #[test]
+    fn detect_table_sep_has_non_table_chars() {
+        let lines = ["| H |", "| -x- |", "| a |"];
+        assert_eq!(detect_table_at(&lines, 0), None);
+    }
+
+    #[test]
+    fn detect_table_not_starting_at_zero() {
+        let lines = [
+            "plain text",
+            "| A | B |",
+            "|---|---|",
+            "| 1 | 2 |",
+            "more plain",
+        ];
+        let end = detect_table_at(&lines, 1);
+        assert_eq!(end, Some(4));
+    }
+
+    // ── push_diff_lines ───────────────────────────────────────────
+
+    #[test]
+    fn push_diff_lines_basic() {
+        let mut out: Vec<Line<'static>> = Vec::new();
+        push_diff_lines(&mut out, "  unchanged\n+ added\n- removed", 10, "  ");
+        // Should have 3 content lines
+        assert!(out.len() >= 3);
+        // First line: "  unchanged" with dark gray / None style
+        let l0: String = out[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(l0.contains("unchanged"));
+        // Second line: "+ added" with green
+        let l1: String = out[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(l1.contains("added"));
+        // Third line: "- removed" with red
+        let l2: String = out[2].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(l2.contains("removed"));
+    }
+
+    #[test]
+    fn push_diff_lines_truncates() {
+        let mut out: Vec<Line<'static>> = Vec::new();
+        let diff = (0..20).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        push_diff_lines(&mut out, &diff, 5, "  ");
+        // show = 5 lines + 1 truncation note = 6
+        assert_eq!(out.len(), 6);
+        let last: String = out[5].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(last.contains("more lines"));
+    }
+
+    #[test]
+    fn push_diff_lines_empty() {
+        let mut out: Vec<Line<'static>> = Vec::new();
+        push_diff_lines(&mut out, "", 10, "  ");
+        assert!(out.is_empty());
+    }
+
+    // ── splash_lines ──────────────────────────────────────────────
+
+    #[test]
+    fn splash_lines_has_expected_content() {
+        let lines = splash_lines();
+        assert!(!lines.is_empty());
+        // At least one line should mention "kondi"
+        let has_kondi = lines.iter().any(|line| {
+            line.spans.iter().any(|s| s.content.contains("kondi"))
+        });
+        assert!(has_kondi || lines.len() > 5); // splash at minimum has logo lines
+    }
+}

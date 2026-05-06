@@ -120,15 +120,21 @@ export class PermissionManager {
 
   constructor(configPath: string, skipPermissions = false) {
     this.skip = skipPermissions;
-    // Load user-level permissions first, then project-level overrides.
+    // Load user-level permissions as the base, then merge any explicit
+    // project-level overrides on top. Projects that don't have a
+    // permissions.json get the user-level settings (auto-approve etc.)
+    // without any hardcoded defaults overriding them.
     const userConfig = loadConfig(join(homedir(), '.kondi-chat', 'permissions.json'));
     const projectConfig = loadConfig(configPath);
+    // Use DEFAULT_CONFIG as the ultimate fallback if neither user nor project has settings.
     this.config = {
-      defaultTier: projectConfig.defaultTier || userConfig.defaultTier,
-      tools: { ...userConfig.tools, ...projectConfig.tools },
+      defaultTier: projectConfig.defaultTier || userConfig.defaultTier || DEFAULT_CONFIG.defaultTier,
+      tools: { ...DEFAULT_TOOL_TIERS, ...userConfig.tools, ...projectConfig.tools },
       alwaysConfirmPatterns: projectConfig.alwaysConfirmPatterns.length > 0
         ? projectConfig.alwaysConfirmPatterns
-        : userConfig.alwaysConfirmPatterns,
+        : userConfig.alwaysConfirmPatterns.length > 0
+          ? userConfig.alwaysConfirmPatterns
+          : DEFAULT_ALWAYS_CONFIRM_PATTERNS,
       sessionOverrides: projectConfig.sessionOverrides,
     };
     this.patterns = this.config.alwaysConfirmPatterns.map(p => {
@@ -251,12 +257,10 @@ function summarize(tool: string, args: Record<string, unknown>): string {
 
 function loadConfig(configPath: string): PermissionConfig {
   if (!existsSync(configPath)) {
-    // Write out defaults on first run so users can customize
-    try {
-      mkdirSync(dirname(configPath), { recursive: true });
-      writeFileSync(configPath, JSON.stringify(DEFAULT_CONFIG, null, 2));
-    } catch { /* non-fatal */ }
-    return { ...DEFAULT_CONFIG };
+    // Don't write defaults to project level — let user-level handle it.
+    // Only return an empty config so the merge in the constructor picks
+    // up user-level settings without project-level overriding them.
+    return { defaultTier: '' as PermissionTier, tools: {}, alwaysConfirmPatterns: [], sessionOverrides: undefined };
   }
   try {
     const raw = JSON.parse(readFileSync(configPath, 'utf-8'));

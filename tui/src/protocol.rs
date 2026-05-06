@@ -135,3 +135,319 @@ pub enum TuiCommand {
     #[serde(rename = "permission_response")]
     PermissionResponse { id: String, decision: String },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Struct roundtrips ──────────────────────────────────────────
+
+    #[test]
+    fn tool_call_info_roundtrip() {
+        let t = ToolCallInfo {
+            name: "write_file".into(),
+            args: r#"{"path":"x"}"#.into(),
+            result: Some("ok".into()),
+            is_error: false,
+            diff: Some("@@ -1 +1 @@".into()),
+        };
+        let json = serde_json::to_string(&t).unwrap();
+        let back: ToolCallInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.name, "write_file");
+        assert_eq!(back.args, r#"{"path":"x"}"#);
+        assert_eq!(back.result.as_deref(), Some("ok"));
+        assert!(!back.is_error);
+        assert_eq!(back.diff.as_deref(), Some("@@ -1 +1 @@"));
+    }
+
+    #[test]
+    fn tool_call_info_defaults() {
+        let json = r#"{"name":"ls","args":"-la","is_error":false}"#;
+        let t: ToolCallInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(t.name, "ls");
+        assert_eq!(t.args, "-la");
+        assert!(t.result.is_none());
+        assert!(t.diff.is_none());
+    }
+
+    #[test]
+    fn git_info_roundtrip() {
+        let g = GitInfo {
+            branch: "main".into(),
+            dirty_count: 3,
+            last_commit: "abc123".into(),
+        };
+        let json = serde_json::to_string(&g).unwrap();
+        let back: GitInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.branch, "main");
+        assert_eq!(back.dirty_count, 3);
+        assert_eq!(back.last_commit, "abc123");
+    }
+
+    #[test]
+    fn message_stats_roundtrip() {
+        let s = MessageStats {
+            input_tokens: 100,
+            output_tokens: 50,
+            cost_usd: 0.003,
+            models: vec!["opus".into()],
+            provider: Some("anthropic".into()),
+            route_reason: Some("quality".into()),
+            iterations: 1,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let back: MessageStats = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.input_tokens, 100);
+        assert_eq!(back.output_tokens, 50);
+        assert!((back.cost_usd - 0.003).abs() < 1e-10);
+        assert_eq!(back.models, vec!["opus"]);
+        assert_eq!(back.provider.as_deref(), Some("anthropic"));
+        assert_eq!(back.route_reason.as_deref(), Some("quality"));
+        assert_eq!(back.iterations, 1);
+    }
+
+    // ── BackendEvent roundtrips ────────────────────────────────────
+
+    #[test]
+    fn backend_event_ready_roundtrip() {
+        let ev = BackendEvent::Ready {
+            models: vec!["opus".into()],
+            mode: "quality".into(),
+            status: "idle".into(),
+            git_info: None,
+            resumed: false,
+            resumed_session_id: None,
+            resumed_message_count: None,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: BackendEvent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, BackendEvent::Ready { .. }));
+        if let BackendEvent::Ready { models, mode, status, resumed, .. } = back {
+            assert_eq!(models, vec!["opus"]);
+            assert_eq!(mode, "quality");
+            assert_eq!(status, "idle");
+            assert!(!resumed);
+        }
+    }
+
+    #[test]
+    fn backend_event_ready_resumed_roundtrip() {
+        let ev = BackendEvent::Ready {
+            models: vec![],
+            mode: "cheap".into(),
+            status: "idle".into(),
+            git_info: Some(GitInfo { branch: "main".into(), dirty_count: 0, last_commit: "def".into() }),
+            resumed: true,
+            resumed_session_id: Some("sess-123".into()),
+            resumed_message_count: Some(5),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: BackendEvent = serde_json::from_str(&json).unwrap();
+        if let BackendEvent::Ready { resumed, resumed_session_id, resumed_message_count, git_info, .. } = back {
+            assert!(resumed);
+            assert_eq!(resumed_session_id.as_deref(), Some("sess-123"));
+            assert_eq!(resumed_message_count, Some(5));
+            assert!(git_info.is_some());
+        } else {
+            panic!("expected Ready");
+        }
+    }
+
+    #[test]
+    fn backend_event_message_roundtrip() {
+        let ev = BackendEvent::Message {
+            id: "msg-1".into(),
+            role: "assistant".into(),
+            content: "Hello".into(),
+            model_label: Some("opus".into()),
+            reasoning_content: None,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: BackendEvent = serde_json::from_str(&json).unwrap();
+        if let BackendEvent::Message { id, role, content, model_label, .. } = back {
+            assert_eq!(id, "msg-1");
+            assert_eq!(role, "assistant");
+            assert_eq!(content, "Hello");
+            assert_eq!(model_label.as_deref(), Some("opus"));
+        } else {
+            panic!("expected Message");
+        }
+    }
+
+    #[test]
+    fn backend_event_message_update_roundtrip() {
+        let ev = BackendEvent::MessageUpdate {
+            id: "msg-1".into(),
+            content: Some("streaming…".into()),
+            model_label: None,
+            tool_calls: Some(vec![ToolCallInfo {
+                name: "read_file".into(),
+                args: "{}".into(),
+                result: None,
+                is_error: false,
+                diff: None,
+            }]),
+            stats: None,
+            reasoning_content: None,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: BackendEvent = serde_json::from_str(&json).unwrap();
+        if let BackendEvent::MessageUpdate { id, content, tool_calls, .. } = back {
+            assert_eq!(id, "msg-1");
+            assert_eq!(content.as_deref(), Some("streaming…"));
+            assert_eq!(tool_calls.unwrap().len(), 1);
+        } else {
+            panic!("expected MessageUpdate");
+        }
+    }
+
+    #[test]
+    fn backend_event_tool_call_roundtrip() {
+        let ev = BackendEvent::ToolCall { name: "ls".into(), args: "-la".into(), is_error: true };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: BackendEvent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, BackendEvent::ToolCall { .. }));
+    }
+
+    #[test]
+    fn backend_event_status_roundtrip() {
+        let ev = BackendEvent::Status { text: "done".into(), git_info: None };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: BackendEvent = serde_json::from_str(&json).unwrap();
+        if let BackendEvent::Status { text, .. } = back {
+            assert_eq!(text, "done");
+        } else {
+            panic!("expected Status");
+        }
+    }
+
+    #[test]
+    fn backend_event_activity_roundtrip() {
+        let ev = BackendEvent::Activity { text: "reading file".into(), activity_type: "tool".into() };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: BackendEvent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, BackendEvent::Activity { .. }));
+    }
+
+    #[test]
+    fn backend_event_error_roundtrip() {
+        let ev = BackendEvent::Error { message: "something broke".into() };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: BackendEvent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, BackendEvent::Error { .. }));
+    }
+
+    #[test]
+    fn backend_event_command_result_roundtrip() {
+        let ev = BackendEvent::CommandResult { output: "ls: done".into() };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: BackendEvent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, BackendEvent::CommandResult { .. }));
+    }
+
+    #[test]
+    fn backend_event_model_override_roundtrip() {
+        let ev = BackendEvent::ModelOverride { label: "@opus".into(), pinned: true };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: BackendEvent = serde_json::from_str(&json).unwrap();
+        if let BackendEvent::ModelOverride { label, pinned } = back {
+            assert_eq!(label, "@opus");
+            assert!(pinned);
+        } else {
+            panic!("expected ModelOverride");
+        }
+    }
+
+    #[test]
+    fn backend_event_permission_request_roundtrip() {
+        let ev = BackendEvent::PermissionRequest {
+            id: "perm-1".into(),
+            tool: "delete_file".into(),
+            args: r#"{"path":"/tmp/x"}"#.into(),
+            summary: "Delete /tmp/x?".into(),
+            tier: "danger".into(),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: BackendEvent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, BackendEvent::PermissionRequest { .. }));
+    }
+
+    #[test]
+    fn backend_event_permission_timeout_roundtrip() {
+        let ev = BackendEvent::PermissionTimeout { id: "perm-1".into(), tool: "delete_file".into() };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: BackendEvent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, BackendEvent::PermissionTimeout { .. }));
+    }
+
+    // ── TuiCommand roundtrips ──────────────────────────────────────
+
+    #[test]
+    fn tui_command_submit_roundtrip() {
+        let cmd = TuiCommand::Submit { text: "hello".into() };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: TuiCommand = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, TuiCommand::Submit { .. }));
+        if let TuiCommand::Submit { text } = back {
+            assert_eq!(text, "hello");
+        }
+    }
+
+    #[test]
+    fn tui_command_command_roundtrip() {
+        let cmd = TuiCommand::Command { text: "/help".into() };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: TuiCommand = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, TuiCommand::Command { .. }));
+    }
+
+    #[test]
+    fn tui_command_quit_roundtrip() {
+        let cmd = TuiCommand::Quit;
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: TuiCommand = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, TuiCommand::Quit));
+    }
+
+    #[test]
+    fn tui_command_permission_response_roundtrip() {
+        let cmd = TuiCommand::PermissionResponse { id: "perm-1".into(), decision: "allow".into() };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: TuiCommand = serde_json::from_str(&json).unwrap();
+        if let TuiCommand::PermissionResponse { id, decision } = back {
+            assert_eq!(id, "perm-1");
+            assert_eq!(decision, "allow");
+        } else {
+            panic!("expected PermissionResponse");
+        }
+    }
+
+    // ── Tagged enum deserialization ────────────────────────────────
+
+    #[test]
+    fn deserialize_backend_event_from_json_with_type_field() {
+        // Real JSON as the Node backend sends it.
+        let json = r#"{"type":"status","text":"Ready.","git_info":null}"#;
+        let ev: BackendEvent = serde_json::from_str(json).unwrap();
+        assert!(matches!(ev, BackendEvent::Status { .. }));
+
+        let json2 = r#"{"type":"error","message":"ratelimit"}"#;
+        let ev2: BackendEvent = serde_json::from_str(json2).unwrap();
+        assert!(matches!(ev2, BackendEvent::Error { .. }));
+
+        let json3 = r#"{"type":"ready","models":[],"mode":"auto","status":"ok","git_info":null,"resumed":false}"#;
+        let ev3: BackendEvent = serde_json::from_str(json3).unwrap();
+        assert!(matches!(ev3, BackendEvent::Ready { .. }));
+    }
+
+    #[test]
+    fn deserialize_tui_command_from_json_with_type_field() {
+        let json = r#"{"type":"submit","text":"hi"}"#;
+        let cmd: TuiCommand = serde_json::from_str(json).unwrap();
+        assert!(matches!(cmd, TuiCommand::Submit { .. }));
+
+        let json2 = r#"{"type":"quit"}"#;
+        let cmd2: TuiCommand = serde_json::from_str(json2).unwrap();
+        assert!(matches!(cmd2, TuiCommand::Quit));
+    }
+}

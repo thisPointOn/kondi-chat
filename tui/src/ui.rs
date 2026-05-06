@@ -21,7 +21,7 @@ use crate::app::{render_assistant_lines, App};
 /// cell covering the char at the cursor position, or a trailing block if
 /// the cursor is at the end. Newlines split into separate Lines so the
 /// Paragraph widget wraps as you'd expect for a multi-line compose box.
-fn build_input_text(
+pub(crate) fn build_input_text(
     input: &str,
     cursor: usize,
     base: Style,
@@ -383,7 +383,7 @@ fn draw_permission_overlay(f: &mut Frame, p: &crate::app::PermissionDialog, anch
     f.render_widget(para, dialog_area);
 }
 
-fn truncate(s: &str, n: usize) -> String {
+pub(crate) fn truncate(s: &str, n: usize) -> String {
     if s.chars().count() <= n { s.to_string() } else {
         let mut out: String = s.chars().take(n.saturating_sub(1)).collect();
         out.push('…'); out
@@ -504,7 +504,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/quit", "exit"),
 ];
 
-fn get_suggestions(input: &str, _model: &str, models: &[String]) -> Vec<Suggestion> {
+pub(crate) fn get_suggestions(input: &str, _model: &str, models: &[String]) -> Vec<Suggestion> {
     let first_line = input.split('\n').next().unwrap_or("");
     if first_line.is_empty() { return vec![]; }
 
