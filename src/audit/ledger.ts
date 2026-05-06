@@ -22,9 +22,10 @@ import type { LedgerEntry, LedgerPhase, LLMResponse, ProviderId } from '../types
  */
 const PRICING: Record<string, { input: number; output: number; cachedInput?: number }> = {
   // Anthropic (cache-read priced at ~10% of input on current plans)
-  'claude-opus-4-20250514':     { input: 15,   output: 75,  cachedInput: 1.50 },
+  // Opus 4.6 dropped to $5/$25 (was $15/$75). Sonnet 4.6 stays $3/$15.
+  'claude-opus-4-20250514':     { input: 5,    output: 25,  cachedInput: 0.50 },
   'claude-sonnet-4-5-20250929': { input: 3,    output: 15,  cachedInput: 0.30 },
-  'claude-haiku-4-5-20251001':  { input: 0.8,  output: 4,   cachedInput: 0.08 },
+  'claude-haiku-4-5-20251001':  { input: 1,    output: 5,   cachedInput: 0.10 },
   // OpenAI (cached reads at 50% of input)
   'gpt-5.4':                    { input: 2.5,  output: 15,  cachedInput: 1.25 },
   'gpt-5.4-mini':               { input: 0.75, output: 4.5, cachedInput: 0.375 },
