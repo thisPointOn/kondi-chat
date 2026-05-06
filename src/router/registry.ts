@@ -8,6 +8,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import type { ProviderId } from '../types.ts';
 
 // ---------------------------------------------------------------------------
@@ -492,19 +493,36 @@ export class ModelRegistry {
   // -------------------------------------------------------------------------
 
   private load(): void {
-    if (!existsSync(this.configPath)) {
-      this.models = [...DEFAULT_MODELS];
-      this.save();
-      return;
+    // Load project-level models first.
+    let projectModels: ModelEntry[] = [];
+    if (existsSync(this.configPath)) {
+      try {
+        projectModels = JSON.parse(readFileSync(this.configPath, 'utf-8'));
+      } catch { /* start fresh */ }
     }
 
-    try {
-      const raw = readFileSync(this.configPath, 'utf-8');
-      this.models = JSON.parse(raw);
-    } catch {
-      this.models = [...DEFAULT_MODELS];
-      this.save();
+    // Merge with user-level models (~/.kondi-chat/models.yml) so models
+    // added in one project are available everywhere. User-level entries
+    // are added only if the project doesn't already have that model ID.
+    const userPath = join(homedir(), '.kondi-chat', 'models.yml');
+    let userModels: ModelEntry[] = [];
+    if (existsSync(userPath)) {
+      try { userModels = JSON.parse(readFileSync(userPath, 'utf-8')); } catch { /* skip */ }
     }
+
+    if (projectModels.length > 0) {
+      const projectIds = new Set(projectModels.map(m => m.id));
+      // Add user-level models that aren't in the project config
+      for (const um of userModels) {
+        if (!projectIds.has(um.id)) projectModels.push(um);
+      }
+      this.models = projectModels;
+    } else if (userModels.length > 0) {
+      this.models = userModels;
+    } else {
+      this.models = [...DEFAULT_MODELS];
+    }
+    this.save();
   }
 
   private save(): void {
