@@ -33,8 +33,8 @@ const PRICING: Record<string, { input: number; output: number; cachedInput?: num
   'gpt-4o-mini':                { input: 0.15, output: 0.6, cachedInput: 0.075 },
   // DeepSeek (cached at ~10%)
   'deepseek-chat':              { input: 0.27, output: 1.10, cachedInput: 0.027 },
-  'deepseek-v4-pro':            { input: 0.50, output: 2.00, cachedInput: 0.05 },
-  'deepseek-v4-flash':          { input: 0.10, output: 0.50, cachedInput: 0.01 },
+  'deepseek-v4-pro':            { input: 1.74, output: 3.48, cachedInput: 0.174 },
+  'deepseek-v4-flash':          { input: 0.14, output: 0.28, cachedInput: 0.014 },
   // Google / xAI (no documented cache discount)
   'models/gemini-2.5-flash':    { input: 0.15, output: 0.6 },
   'grok-3':                     { input: 3,    output: 15 },
