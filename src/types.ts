@@ -255,6 +255,9 @@ export type ContentPart =
 export interface LLMMessage {
   role: 'user' | 'assistant' | 'tool';
   content?: string;
+  /** Hidden chain-of-thought from reasoning models. Must be passed back
+   *  to some providers (DeepSeek) in multi-turn conversations. */
+  reasoningContent?: string;
   /** Spec 09 — interleaved text/image parts; providers that support it use this. */
   parts?: ContentPart[];
   toolCalls?: ToolCall[];     // assistant messages with tool use

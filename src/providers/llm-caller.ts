@@ -545,6 +545,8 @@ function openaiMessages(messages: LLMMessage[]): any[] {
     } else if (msg.role === 'assistant') {
       const entry: any = { role: 'assistant' };
       if (msg.content) entry.content = msg.content;
+      // DeepSeek requires reasoning_content to be passed back in multi-turn.
+      if (msg.reasoningContent) entry.reasoning_content = msg.reasoningContent;
       if (msg.toolCalls) {
         entry.tool_calls = msg.toolCalls.map(tc => ({
           id: tc.id,

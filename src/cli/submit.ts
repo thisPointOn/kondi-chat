@@ -380,7 +380,12 @@ export async function handleSubmit(
       break;
     }
 
-    messages.push({ role: 'assistant', content: response.content || undefined, toolCalls: response.toolCalls });
+    messages.push({
+      role: 'assistant',
+      content: response.content || undefined,
+      toolCalls: response.toolCalls,
+      reasoningContent: response.reasoningContent,
+    });
 
     const toolResults = [];
     for (const tc of response.toolCalls) {

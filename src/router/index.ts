@@ -204,30 +204,37 @@ export class Router {
       process.stderr.write(`[router] Intent tier failed: ${(e as Error).message}\n`);
     }
 
-    // 3. Profile pin fallback. If the intent router didn't produce a
-    //    result (classifier error, no candidates, model hallucination),
-    //    honor the profile's rolePinning as a hard guarantee. This
-    //    preserves the deterministic behavior users relied on while the
-    //    intent router was the primary path — pins only fire when the
-    //    intelligent tiers fail.
+    // 3. Profile pin fallback.
     const pinnedId = this.profileScope.rolePinning?.[phase];
     if (pinnedId) {
       const pinned = this.registry.getById(pinnedId);
       if (pinned && pinned.enabled) {
         return {
           model: pinned,
-          reason: `pin fallback: ${phase} → ${pinned.alias || pinned.id}`,
+          reason: `pin: ${pinned.alias || pinned.id} (intent failed, using profile default)`,
           tier: 'rules',
           promoted: false,
         };
       }
+      // Pin exists but model not found — this is a config error.
+      // Log clearly so the user knows why their profile isn't working.
+      process.stderr.write(
+        `[router] ⚠ profile pin "${pinnedId}" for phase "${phase}" not found in registry. ` +
+        `Check that the model ID matches an entry in models.yml. Falling back to rules.\n`
+      );
     }
 
-    // 4. Rule-based fallback — deterministic phase/task-kind heuristics.
+    // 4. Rule-based fallback — last resort. If we got here, both the
+    //    intent router AND the profile pin failed. Make the reason clear.
     const ruleResult = this.rules.select(phase, taskKind, failures, promotionThreshold);
+    const fallbackReason = pinnedId
+      ? `⚠ "${pinnedId}" not available → ${ruleResult.model.alias || ruleResult.model.id} (fallback)`
+      : ruleResult.reason;
     return {
       model: ruleResult.model,
-      reason: ruleResult.reason,
+      reason: ruleResult.promoted
+        ? `⚠ promoted after ${failures} failures → ${ruleResult.model.alias || ruleResult.model.id}`
+        : fallbackReason,
       tier: 'rules',
       promoted: ruleResult.promoted,
     };
