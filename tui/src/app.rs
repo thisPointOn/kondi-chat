@@ -63,6 +63,9 @@ pub struct App {
     pub git_info: Option<GitInfo>,
     /// Most recent completed assistant message body — used by Ctrl+Y to copy.
     pub last_assistant_content: Option<String>,
+    /// Last completed message — kept for Ctrl+T/Ctrl+O/Ctrl+R detail views
+    /// after the message has been flushed to scrollback.
+    pub last_completed_message: Option<ChatMessage>,
     /// Type-ahead queue: submits (or slash commands) that were entered
     /// while a previous turn was still running. Drained one at a time in
     /// the main loop when `is_processing` flips back to false. Prevents
@@ -115,6 +118,7 @@ impl App {
             last_assistant_content: None,
             pending_submits: VecDeque::new(),
             available_models: vec![],
+            last_completed_message: None,
             clipboard: arboard::Clipboard::new().ok(),
         }
     }
@@ -308,6 +312,7 @@ impl App {
     /// so they survive into terminal scrollback alongside the response.
     fn flush_in_progress(&mut self) {
         if let Some(msg) = self.messages.drain(..).next() {
+            self.last_completed_message = Some(msg.clone());
             let mut lines: Vec<Line<'static>> = Vec::new();
             for (kind, text) in self.activity.drain(..) {
                 if kind == "tool" { continue; }

@@ -408,7 +408,9 @@ fn draw_detail(f: &mut Frame, app: &App, view: &str) {
     lines.push(Line::from(Span::styled(format!("═══ {title} ═══"), Style::default().add_modifier(Modifier::BOLD))));
     lines.push(Line::from(""));
 
-    if let Some(msg) = app.messages.first() {
+    // Check in-progress message first, then fall back to the last completed one.
+    let msg_ref = app.messages.first().or(app.last_completed_message.as_ref());
+    if let Some(msg) = msg_ref {
         let label = msg.model_label.as_deref().unwrap_or("assistant");
         lines.push(Line::from(Span::styled(format!("[{label}]"), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))));
 
