@@ -92,6 +92,34 @@ async function* parseSSE(resp: Response): AsyncGenerator<{ type?: string; data?:
 }
 
 // ---------------------------------------------------------------------------
+// DeepSeek JSON sanitizer
+// ---------------------------------------------------------------------------
+
+/**
+ * DeepSeek's JSON body parser is stricter than OpenAI/Anthropic — it
+ * interprets `\x` inside JSON string values as a hex escape and fails
+ * if the hex digits are missing or invalid. This happens when file
+ * content containing ANSI escape codes (e.g. `\x1b[31m`) or other
+ * `\xNN` sequences is embedded in the conversation context.
+ *
+ * JSON.stringify already escapes backslashes to `\\`, so the JSON
+ * contains `\\x1b` (literal backslash + x + 1 + b). But DeepSeek
+ * appears to double-parse the string, treating `\x` as a hex escape.
+ *
+ * Fix: replace `\\x` with `\\\\x` so after DeepSeek's extra parse
+ * pass it becomes the literal `\x` the model sees. Also strip null
+ * bytes and other control chars that can corrupt JSON parsing.
+ */
+function sanitizeJsonForDeepSeek(json: string): string {
+  return json
+    // \\x (escaped backslash + x) → \\\\x (double-escaped)
+    .replace(/\\\\x/g, '\\\\\\\\x')
+    // Bare control characters that snuck through (shouldn't happen
+    // with JSON.stringify, but belt-and-suspenders)
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
+}
+
+// ---------------------------------------------------------------------------
 // Default models per provider
 // ---------------------------------------------------------------------------
 
@@ -400,13 +428,22 @@ async function callOpenAICompatible(
     body.max_tokens = max; // legacy / compatible providers
   }
 
+  // DeepSeek's JSON parser is stricter than most — it rejects bare \x
+  // hex escapes and broken \u sequences that appear in file content
+  // (ANSI codes, binary fragments, CSV artifacts). Sanitize the body
+  // JSON string to replace these with safe placeholders.
+  let bodyJson = JSON.stringify(body);
+  if (provider === 'deepseek') {
+    bodyJson = sanitizeJsonForDeepSeek(bodyJson);
+  }
+
   const resp = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
     },
-    body: JSON.stringify(body),
+    body: bodyJson,
   });
 
   if (!resp.ok) {

@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{render_assistant_lines, App};
+use crate::app::{render_assistant_lines, render_content_lines, App};
 
 /// Wrap a list of styled `Line`s to a fixed display width.
 ///
@@ -182,21 +182,30 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
     if area.height == 0 { return; }
     let mut lines: Vec<Line> = Vec::new();
 
-    // Activity stream (router decisions, step announcements). Render these
-    // inline above the message so the user can see "router: phase=execute"
-    // and "→ gpt-5.4 (rules: balanced: coding)" land in real time. Tool
-    // activity lines are skipped because tool_calls already shows them on
-    // the message itself.
-    for (kind, text) in &app.activity {
-        if kind == "tool" { continue; }
-        lines.push(Line::from(Span::styled(
-            format!("  {}", text),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::DIM),
-        )));
+    // Activity stream — skip if header was already flushed to scrollback.
+    if app.stream_lines_flushed == 0 {
+        for (kind, text) in &app.activity {
+            if kind == "tool" { continue; }
+            lines.push(Line::from(Span::styled(
+                format!("  {}", text),
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::DIM),
+            )));
+        }
     }
 
     if let Some(msg) = app.messages.first() {
-        lines.extend(render_assistant_lines(msg));
+        if app.stream_lines_flushed > 0 {
+            // Header and early content already in scrollback.
+            // Show only tool calls (capped) + remaining content tail.
+            let content_lines = render_content_lines(&msg.content);
+            let remaining: Vec<Line> = content_lines.into_iter()
+                .skip(app.stream_lines_flushed)
+                .collect();
+            lines.extend(remaining);
+        } else {
+            // Nothing flushed yet — show the full render.
+            lines.extend(render_assistant_lines(msg));
+        }
     }
     if app.is_processing && app.messages.is_empty() && app.activity.is_empty() {
         let spinner = app.spinner();

@@ -146,6 +146,104 @@ async fn main() -> io::Result<()> {
                     }
                 })?;
             }
+
+            // Progressive streaming flush: push the LLM's TEXT content
+            // into terminal scrollback as it streams. Header and tool
+            // call lines stay in the compact preview area — only the
+            // actual model output scrolls up naturally.
+            //
+            // Table lines (box-drawing chars) are NEVER flushed during
+            // streaming because column widths change as new rows arrive.
+            // Tables stay in the preview until the message completes.
+            //
+            // stream_lines_flushed counts CONTENT lines (from
+            // render_content_lines), not the full render_assistant_lines.
+            if app.is_processing {
+                if let Some(msg) = app.messages.first() {
+                    let content_lines = app::render_content_lines(&msg.content);
+                    let total = content_lines.len();
+                    let keep_tail = 4usize;
+
+                    // Find the safe flush boundary: only flush lines that
+                    // won't change as more content arrives. Table lines
+                    // (containing box-drawing chars) are unstable because
+                    // new rows can widen columns.
+                    let safe_end = {
+                        let mut end = total.saturating_sub(keep_tail);
+                        // Walk backward from the flush boundary to skip any
+                        // table block that's still being streamed. A table
+                        // ends when we hit a non-table line going backward.
+                        while end > app.stream_lines_flushed {
+                            let line_text: String = content_lines[end - 1]
+                                .spans.iter()
+                                .map(|s| s.content.as_ref())
+                                .collect();
+                            if line_text.contains('│') || line_text.contains('┌')
+                                || line_text.contains('├') || line_text.contains('└')
+                                || line_text.contains('─')
+                            {
+                                end -= 1;
+                            } else {
+                                break;
+                            }
+                        }
+                        // Also skip backward past the table's preceding
+                        // content that was rendered before it — a table
+                        // re-render could shift line indices.
+                        end
+                    };
+
+                    if safe_end > app.stream_lines_flushed + 2 {
+                        // On the very first content flush, push the header
+                        // (● model) + activity lines to scrollback first.
+                        if app.stream_lines_flushed == 0 {
+                            let mut header_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+                            for (kind, text) in &app.activity {
+                                if kind == "tool" { continue; }
+                                header_lines.push(ratatui::text::Line::from(
+                                    ratatui::text::Span::styled(
+                                        format!("  {}", text),
+                                        ratatui::style::Style::default()
+                                            .fg(ratatui::style::Color::Yellow)
+                                            .add_modifier(ratatui::style::Modifier::DIM),
+                                    ),
+                                ));
+                            }
+                            let label = msg.model_label.clone().unwrap_or_else(|| "assistant".into());
+                            header_lines.push(ratatui::text::Line::from(vec![
+                                ratatui::text::Span::styled("● ", ratatui::style::Style::default()
+                                    .fg(ratatui::style::Color::Green)
+                                    .add_modifier(ratatui::style::Modifier::BOLD)),
+                                ratatui::text::Span::styled(label, ratatui::style::Style::default()
+                                    .fg(ratatui::style::Color::Green)
+                                    .add_modifier(ratatui::style::Modifier::BOLD)),
+                            ]));
+                            if !header_lines.is_empty() {
+                                let wrapped = ui::wrap_lines_to_width(&header_lines, term_width);
+                                let h = wrapped.len() as u16;
+                                terminal.insert_before(h, |buf| {
+                                    for (i, line) in wrapped.iter().enumerate() {
+                                        buf.set_line(0, i as u16, line, buf.area.width);
+                                    }
+                                })?;
+                            }
+                        }
+                        let to_flush: Vec<ratatui::text::Line<'static>> = content_lines[app.stream_lines_flushed..safe_end]
+                            .to_vec();
+                        if !to_flush.is_empty() {
+                            let wrapped = ui::wrap_lines_to_width(&to_flush, term_width);
+                            let h = wrapped.len() as u16;
+                            terminal.insert_before(h, |buf| {
+                                for (i, line) in wrapped.iter().enumerate() {
+                                    buf.set_line(0, i as u16, line, buf.area.width);
+                                }
+                            })?;
+                            app.stream_lines_flushed = safe_end;
+                        }
+                    }
+                }
+            }
+
             terminal.draw(|f| ui::draw(f, &mut app))?;
             needs_draw = false;
         }
@@ -267,12 +365,22 @@ async fn main() -> io::Result<()> {
         }
 
         // Drain whatever backend messages are immediately available.
+        // When a turn completes (pending_history grows), break out so the
+        // draw phase can flush the completed message to terminal scrollback
+        // before processing more events. This ensures each turn's output
+        // appears in real time rather than all at once at the end.
         loop {
+            let had_pending = app.pending_history.len();
             match tokio::time::timeout(std::time::Duration::from_millis(0), reader.next_line()).await {
                 Ok(Ok(Some(line))) => {
                     if let Ok(event) = serde_json::from_str::<BackendEvent>(&line) {
                         app.handle_backend_event(event);
                         needs_draw = true;
+                        // A turn just completed — break so we flush to
+                        // scrollback before the next turn's events arrive.
+                        if app.pending_history.len() > had_pending {
+                            break;
+                        }
                     }
                 }
                 Ok(Ok(None)) => break,

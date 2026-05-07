@@ -38,6 +38,7 @@ export function assembleBrainContext(
   workingDir: string,
   session: Session,
   task: string,
+  opts?: { skipPreflight?: boolean },
 ): BrainContext {
   const sections: string[] = [];
   const preflightFiles: string[] = [];
@@ -77,11 +78,13 @@ export function assembleBrainContext(
     skillsUsed.push(...matched.map(s => s.name));
   }
 
-  // 4. Preflight (relevant files)
-  const preflight = runPreflight(workingDir, task);
-  if (preflight.context) {
-    sections.push(preflight.context);
-    preflightFiles.push(...preflight.filesRead);
+  // 4. Preflight (relevant files) — skipped for short/follow-up messages
+  if (!opts?.skipPreflight) {
+    const preflight = runPreflight(workingDir, task);
+    if (preflight.context) {
+      sections.push(preflight.context);
+      preflightFiles.push(...preflight.filesRead);
+    }
   }
 
   // 5. Repo summary (grounding context from bootstrap, if available)

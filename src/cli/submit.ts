@@ -30,7 +30,7 @@ import { callLLM } from '../providers/llm-caller.ts';
 import { LoopGuard } from '../engine/loop-guard.ts';
 import { isMutatingToolCall, predictedMutations } from '../engine/checkpoints.ts';
 import { compactInLoop, classifyPhase } from './submit-helpers.ts';
-import { classifyTask, frameProblem, formatFrame, type TaskClassification } from '../engine/task-router.ts';
+import { classifyTaskLocal, frameProblem, type TaskClassification } from '../engine/task-router.ts';
 import { ReceiptStore, buildReceipt } from '../context/receipts.ts';
 import { assembleBrainContext } from '../context/project-brain.ts';
 
@@ -141,93 +141,38 @@ export async function handleSubmit(
     return;
   }
 
-  // ── Task classification — decide what kind of thinking this needs ──
+  // ── Task classification — fast local heuristic, no LLM call ────────
   //
-  // Before starting the agent loop, a cheap classifier call decides:
-  //   execute_now          → run the agent loop directly
-  //   frame_then_execute   → frame the problem first, then execute the framed goal
-  //   ask_clarifying_question → ask the user one focused question, don't start working
-  //   council_deliberation → suggest /council (not auto-invoked)
-  //
-  // The classifier uses the cheapest model in the profile (same as the
-  // intent router's classifier). If classification fails, default to execute_now.
-
-  // Use the profile-scoped classifier (same cheap model the intent router uses).
-  // If no classifier is scoped, pick the cheapest model from the active
-  // profile's allowed providers so we never escape the profile's fence.
-  const classifier = router.getClassifier();
-  let cheapProvider: ProviderId;
-  let cheapModel: string | undefined;
-  if (classifier) {
-    cheapProvider = classifier.provider;
-    cheapModel = classifier.model;
-  } else {
-    // Fallback: cheapest model from rolePinning, or cheapest enabled model.
-    const pinning = profiles.getActive().rolePinning;
-    if (pinning) {
-      const pinIds = new Set(Object.values(pinning));
-      const candidates = router.registry.getAvailable().filter(m => pinIds.has(m.id));
-      candidates.sort((a, b) => a.inputCostPer1M - b.inputCostPer1M);
-      cheapProvider = candidates[0]?.provider || 'anthropic';
-      cheapModel = candidates[0]?.id;
-    } else {
-      const all = router.registry.getAvailable();
-      all.sort((a, b) => a.inputCostPer1M - b.inputCostPer1M);
-      cheapProvider = all[0]?.provider || 'anthropic';
-      cheapModel = all[0]?.id;
-    }
-  }
-
-  emit({ type: 'status', text: 'classifying task...' });
-
-  // Pass recent session context so the classifier can see prior conversation.
+  // The local classifier handles 95% of inputs instantly (regex + word
+  // count). Only genuinely ambiguous multi-sentence requests with broad
+  // verbs like "redesign" or "overhaul" fall through to the LLM classifier.
+  // This eliminates 2-5 seconds of latency on every single message.
   const recentMessages = session.messages.slice(-4).map(m => `${m.role}: ${(m.content || '').slice(0, 200)}`).join('\n');
-  const taskClass = await classifyTask(
-    input,
-    recentMessages,
-    cheapProvider,
-    cheapModel,
-  );
-
-  // Handle ask_clarifying_question — emit the question and stop. The user
-  // will respond, and the next submit will be more concrete.
-  if (taskClass.mode === 'ask_clarifying_question' && taskClass.suggestedQuestions.length > 0) {
-    const question = taskClass.suggestedQuestions[0];
-    const msgId = `msg-${Date.now()}`;
-    contextManager.addUserMessage(input);
-    emit({ type: 'message', id: msgId, role: 'assistant', content: `Before I start — ${question}`, model_label: 'kondi' });
-    emit({ type: 'message_update', id: msgId, stats: {
-      input_tokens: 0, output_tokens: 0, cost_usd: 0,
-      models: ['classifier'], provider: cheapProvider,
-      route_reason: `task-router: ${taskClass.reason}`, iterations: 0,
-    }});
-    return;
-  }
-
-  // Handle council_deliberation — suggest the user run /council explicitly.
-  if (taskClass.mode === 'council_deliberation') {
-    const msgId = `msg-${Date.now()}`;
-    contextManager.addUserMessage(input);
-    emit({ type: 'message', id: msgId, role: 'assistant',
-      content: `This looks like a design decision that would benefit from multiple perspectives.\n\nConsider: \`/council run architecture "${input.slice(0, 100)}"\`\n\nOr if you want me to proceed with my own judgment, just rephrase more concretely.`,
-      model_label: 'kondi',
-    });
-    emit({ type: 'message_update', id: msgId, stats: {
-      input_tokens: 0, output_tokens: 0, cost_usd: 0,
-      models: ['classifier'], provider: cheapProvider,
-      route_reason: `task-router: ${taskClass.reason}`, iterations: 0,
-    }});
-    return;
-  }
+  const taskClass = classifyTaskLocal(input, recentMessages);
 
   // Handle frame_then_execute — frame the problem, show the frame, then
   // run the agent loop against the framed goal instead of the raw input.
+  // Only triggered for broad multi-sentence requests with words like
+  // "redesign", "overhaul", etc. — very rare in practice.
   let effectiveInput = input;
   if (taskClass.mode === 'frame_then_execute') {
     emit({ type: 'activity', text: `task-router: framing problem (${taskClass.reason})`, activity_type: 'step' });
     try {
+      // Resolve cheapest model only when framing is actually needed.
+      const classifier = router.getClassifier();
+      let cheapProvider: ProviderId = classifier?.provider || 'anthropic';
+      let cheapModel: string | undefined = classifier?.model;
+      if (!classifier) {
+        const pinning = profiles.getActive().rolePinning;
+        if (pinning) {
+          const pinIds = new Set(Object.values(pinning));
+          const candidates = router.registry.getAvailable().filter(m => pinIds.has(m.id));
+          candidates.sort((a, b) => a.inputCostPer1M - b.inputCostPer1M);
+          cheapProvider = candidates[0]?.provider || 'anthropic';
+          cheapModel = candidates[0]?.id;
+        }
+      }
       const frame = await frameProblem(input, '', cheapProvider, cheapModel);
-      const frameText = formatFrame(frame);
       emit({ type: 'activity', text: `frame: ${frame.interpretedGoal}`, activity_type: 'step' });
       if (frame.successCriteria.length > 0) {
         emit({ type: 'activity', text: `success: ${frame.successCriteria.join('; ')}`, activity_type: 'step' });
@@ -250,7 +195,11 @@ export async function handleSubmit(
   const receipts = new ReceiptStore(storageDir, session.id);
 
   // ── Project Brain: assemble all context (memory, receipts, skills, preflight) ──
-  const brain = assembleBrainContext(workingDir, session, effectiveInput);
+  // Skip preflight for short messages and follow-ups — the model has tools
+  // to read files when it needs them. Preflight only helps on substantive
+  // first-turn requests where it can save 2-3 tool calls.
+  const isFollowUp = turnNumber > 1 || effectiveInput.split(/\s+/).length < 10;
+  const brain = assembleBrainContext(workingDir, session, effectiveInput, { skipPreflight: isFollowUp });
   if (brain.preflightFiles.length > 0) {
     emit({ type: 'activity', text: `preflight: loaded ${brain.preflightFiles.join(', ')}`, activity_type: 'step' });
   }

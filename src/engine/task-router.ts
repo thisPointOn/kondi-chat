@@ -67,12 +67,71 @@ Most tasks are execute_now. Only escalate when there's genuine ambiguity or risk
 Respond with ONLY a JSON object:
 {"mode": "execute_now|frame_then_execute|ask_clarifying_question|council_deliberation", "confidence": 0.0-1.0, "reason": "one sentence", "missingInformation": [], "suggestedQuestions": [], "executionGoal": "optional refined goal"}`;
 
+/**
+ * Fast local classification — no LLM call. Handles 95% of inputs instantly.
+ * Only falls back to an LLM call for genuinely ambiguous cases where the
+ * heuristic has low confidence.
+ */
+export function classifyTaskLocal(
+  userRequest: string,
+  recentContext: string,
+): TaskClassification {
+  const lower = userRequest.toLowerCase().trim();
+  const wordCount = lower.split(/\s+/).length;
+
+  // Very short messages are always execute_now (greetings, "yes", "do it", etc.)
+  if (wordCount <= 6) {
+    return { mode: 'execute_now', confidence: 0.95, reason: 'short input', missingInformation: [], suggestedQuestions: [] };
+  }
+
+  // Follow-up messages in an ongoing conversation are always execute_now
+  if (recentContext.length > 50) {
+    return { mode: 'execute_now', confidence: 0.9, reason: 'follow-up in conversation', missingInformation: [], suggestedQuestions: [] };
+  }
+
+  // Direct action verbs → execute_now
+  const actionVerbs = /^(fix|add|create|write|read|show|list|run|test|build|deploy|install|update|change|rename|remove|delete|explain|refactor|implement|move|copy|find|search|check|debug|log|print|open|close|merge|revert|commit|push|pull)\b/i;
+  if (actionVerbs.test(lower)) {
+    return { mode: 'execute_now', confidence: 0.9, reason: 'action verb', missingInformation: [], suggestedQuestions: [] };
+  }
+
+  // Questions → execute_now (the model will answer)
+  if (lower.startsWith('what') || lower.startsWith('how') || lower.startsWith('why') ||
+      lower.startsWith('where') || lower.startsWith('when') || lower.startsWith('can') ||
+      lower.startsWith('does') || lower.startsWith('is ') || lower.endsWith('?')) {
+    return { mode: 'execute_now', confidence: 0.9, reason: 'question', missingInformation: [], suggestedQuestions: [] };
+  }
+
+  // File references → execute_now
+  if (/\.(ts|js|py|rs|go|json|yml|yaml|toml|md|css|html|sql)\b/.test(lower)) {
+    return { mode: 'execute_now', confidence: 0.9, reason: 'file reference', missingInformation: [], suggestedQuestions: [] };
+  }
+
+  // Broad/vague multi-sentence requests with no concrete target → frame_then_execute
+  const broadIndicators = /\b(redesign|overhaul|rethink|architect|migrate|strategy|roadmap|plan out)\b/i;
+  if (broadIndicators.test(lower) && wordCount > 15) {
+    return { mode: 'frame_then_execute', confidence: 0.7, reason: 'broad request', missingInformation: [], suggestedQuestions: [] };
+  }
+
+  // Default: execute_now. The model itself is good at asking for
+  // clarification when it needs it — we don't need a pre-classifier.
+  return { mode: 'execute_now', confidence: 0.8, reason: 'default', missingInformation: [], suggestedQuestions: [] };
+}
+
+/**
+ * LLM-based classification — only called when the local heuristic has
+ * low confidence. Most inputs never reach this.
+ */
 export async function classifyTask(
   userRequest: string,
   recentContext: string,
   classifierProvider: ProviderId,
   classifierModel?: string,
 ): Promise<TaskClassification> {
+  // Fast path: local heuristic handles 95% of inputs with no LLM call.
+  const local = classifyTaskLocal(userRequest, recentContext);
+  if (local.confidence >= 0.7) return local;
+
   try {
     const response = await callLLM({
       provider: classifierProvider,

@@ -144,6 +144,24 @@ export class Router {
     promotionThreshold?: number,
     phaseContext?: PhaseContext,
   ): Promise<UnifiedRouteDecision> {
+    // Fast path: if the profile has a direct pin for this phase, use it
+    // immediately. No LLM call, no embedding, no latency. This is the
+    // common case — most profiles pin every phase, so the intent router
+    // is unnecessary overhead. The intent router only adds value when
+    // multiple models could serve a phase and the choice is non-obvious.
+    const directPin = this.profileScope.rolePinning?.[phase];
+    if (directPin) {
+      const pinned = this.registry.getById(directPin);
+      if (pinned && pinned.enabled) {
+        return {
+          model: pinned,
+          reason: `pin: ${pinned.alias || pinned.id}`,
+          tier: 'rules',
+          promoted: false,
+        };
+      }
+    }
+
     // 1. Try NN router (fast, no LLM call).
     try {
       if (this.nn.isAvailable()) {
@@ -170,10 +188,9 @@ export class Router {
       process.stderr.write(`[router] NN tier failed: ${(e as Error).message}\n`);
     }
 
-    // 2. Intent router with enriched phase context. When the profile has
-    //    rolePinning, derive the exact candidate model IDs from the pin
-    //    values so the classifier sees only those 4–5 models, not every
-    //    model from 3 providers. Much less noise, much better picks.
+    // 2. Intent router with enriched phase context. Only reached when
+    //    no direct pin exists for this phase — i.e. the profile leaves
+    //    this phase unspecified and wants intelligent model selection.
     const pinnedModelIds = this.profileScope.rolePinning
       ? [...new Set(Object.values(this.profileScope.rolePinning))]
       : undefined;
@@ -204,7 +221,8 @@ export class Router {
       process.stderr.write(`[router] Intent tier failed: ${(e as Error).message}\n`);
     }
 
-    // 3. Profile pin fallback.
+    // 3. Profile pin fallback (already checked above for direct phase pin,
+    //    but the pin might have been for a model that wasn't enabled).
     const pinnedId = this.profileScope.rolePinning?.[phase];
     if (pinnedId) {
       const pinned = this.registry.getById(pinnedId);

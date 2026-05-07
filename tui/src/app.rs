@@ -79,6 +79,12 @@ pub struct App {
     /// each copy the contents disappear instantly. Kept alive for the
     /// lifetime of the TUI so pastes work.
     clipboard: Option<arboard::Clipboard>,
+    /// Progressive streaming: how many rendered+wrapped lines of the
+    /// current streaming message have already been flushed to terminal
+    /// scrollback via insert_before. Reset to 0 when the message completes.
+    /// This lets long streaming responses scroll naturally into scrollback
+    /// instead of being trapped in the small preview area.
+    pub stream_lines_flushed: usize,
 }
 
 const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
@@ -120,6 +126,7 @@ impl App {
             available_models: vec![],
             last_completed_message: None,
             clipboard: arboard::Clipboard::new().ok(),
+            stream_lines_flushed: 0,
         }
     }
 
@@ -314,15 +321,51 @@ impl App {
         if let Some(msg) = self.messages.drain(..).next() {
             self.last_completed_message = Some(msg.clone());
             let mut lines: Vec<Line<'static>> = Vec::new();
-            for (kind, text) in self.activity.drain(..) {
-                if kind == "tool" { continue; }
-                lines.push(Line::from(Span::styled(
-                    format!("  {}", text),
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::DIM),
-                )));
+
+            if self.stream_lines_flushed > 0 {
+                // Progressive streaming was active — header, activity,
+                // and most content are already in scrollback. Only push
+                // the remaining content tail + tool calls + stats.
+                self.activity.clear();
+
+                // Remaining content lines
+                let content_lines = render_content_lines(&msg.content);
+                let remaining: Vec<Line<'static>> = content_lines.into_iter()
+                    .skip(self.stream_lines_flushed)
+                    .collect();
+                lines.extend(remaining);
+
+                // Stats footer
+                if let Some(ref stats) = msg.stats {
+                    let models = stats.models.join(", ");
+                    let mut parts = format!(
+                        "  ▸ {}in / {}out · ${:.4} · {}",
+                        stats.input_tokens, stats.output_tokens, stats.cost_usd, models
+                    );
+                    if stats.iterations > 1 {
+                        parts.push_str(&format!(" · {} steps", stats.iterations));
+                    }
+                    if let Some(ref reason) = &stats.route_reason {
+                        parts.push_str(&format!(" · route: {}", reason));
+                    }
+                    lines.push(Line::from(Span::styled(parts, Style::default().fg(Color::DarkGray))));
+                }
+            } else {
+                // No progressive flush happened — render everything.
+                for (kind, text) in self.activity.drain(..) {
+                    if kind == "tool" { continue; }
+                    lines.push(Line::from(Span::styled(
+                        format!("  {}", text),
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::DIM),
+                    )));
+                }
+                lines.extend(render_assistant_lines(&msg));
             }
-            lines.extend(render_assistant_lines(&msg));
-            self.pending_history.push(lines);
+
+            if !lines.is_empty() {
+                self.pending_history.push(lines);
+            }
+            self.stream_lines_flushed = 0;
         } else {
             self.activity.clear();
         }
@@ -539,74 +582,113 @@ fn parse_table(lines: &[&str]) -> (Vec<String>, Vec<Vec<String>>) {
     (header, data)
 }
 
+/// Strip inline markdown formatting so we measure and display plain text.
+fn strip_md(s: &str) -> String {
+    s.replace("**", "").replace('`', "")
+}
+
+/// Display width of a string in terminal columns. Emoji and CJK chars
+/// take 2 columns; variation selectors and zero-width joiners take 0.
+fn display_width(s: &str) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    UnicodeWidthStr::width(s)
+}
+
 fn render_table(out: &mut Vec<Line<'static>>, table: &(Vec<String>, Vec<Vec<String>>)) {
     let (header, data) = table;
     let cols = header.len();
     if cols == 0 { return; }
-    let mut widths: Vec<usize> = header.iter().map(|h| h.chars().count()).collect();
-    for row in data {
+
+    // 1. Strip markdown from ALL cells, compute widths from display width.
+    let clean_header: Vec<String> = header.iter().map(|h| strip_md(h)).collect();
+    let clean_data: Vec<Vec<String>> = data.iter().map(|row|
+        row.iter().map(|c| strip_md(c)).collect()
+    ).collect();
+
+    let mut widths: Vec<usize> = clean_header.iter().map(|h| display_width(h)).collect();
+    for row in &clean_data {
         for (i, cell) in row.iter().enumerate() {
-            let w = cell.chars().count();
+            let w = display_width(cell);
             if w > widths[i] { widths[i] = w; }
         }
     }
-    let pad = 1usize;
-    let cell_widths: Vec<usize> = widths.iter().map(|w| w + pad * 2).collect();
 
+    // 2. Cap to fit within 120 columns.
+    // Row layout: "  │" + for each col: " " + content(width) + " " + "│" = 3 + sum(width+3)
+    let max_w = 120usize;
+    let overhead = 3 + 3 * cols;
+    let budget = max_w.saturating_sub(overhead);
+    let total: usize = widths.iter().sum();
+
+    if total > budget && budget > 0 {
+        let min_col = 6usize;
+        let mut new_widths: Vec<usize> = widths.iter()
+            .map(|w| ((*w as f64 / total as f64) * budget as f64).floor() as usize)
+            .map(|w| w.max(min_col))
+            .collect();
+        loop {
+            let sum: usize = new_widths.iter().sum();
+            if sum <= budget { break; }
+            if let Some(max_idx) = new_widths.iter().enumerate().max_by_key(|(_, w)| *w).map(|(i, _)| i) {
+                new_widths[max_idx] = new_widths[max_idx].saturating_sub(1).max(min_col);
+                if new_widths[max_idx] == min_col { break; }
+            } else { break; }
+        }
+        widths = new_widths;
+    }
+
+    // 3. Render — border and data lines use the same widths array.
     let header_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
     let border_style = Style::default().fg(Color::DarkGray);
     let body_style = Style::default().fg(BODY);
 
-    // Top border
-    out.push(Line::from(Span::styled(
-        format!("  {}", border_row(&cell_widths, '┌', '┬', '┐')),
-        border_style,
-    )));
-    // Header row
-    out.push(content_row(header, &widths, pad, header_style, border_style));
-    // Separator
-    out.push(Line::from(Span::styled(
-        format!("  {}", border_row(&cell_widths, '├', '┼', '┤')),
-        border_style,
-    )));
-    // Data rows
-    for row in data {
-        out.push(content_row(row, &widths, pad, body_style, border_style));
+    out.push(border_line(&widths, '┌', '┬', '┐', border_style));
+    out.push(data_line(&clean_header, &widths, header_style, border_style));
+    out.push(border_line(&widths, '├', '┼', '┤', border_style));
+    for row in &clean_data {
+        out.push(data_line(row, &widths, body_style, border_style));
     }
-    // Bottom border
-    out.push(Line::from(Span::styled(
-        format!("  {}", border_row(&cell_widths, '└', '┴', '┘')),
-        border_style,
-    )));
+    out.push(border_line(&widths, '└', '┴', '┘', border_style));
 }
 
-fn border_row(cell_widths: &[usize], left: char, mid: char, right: char) -> String {
-    let mut s = String::new();
+/// Render a border row: `  ┌──────┬──────┐`
+fn border_line(widths: &[usize], left: char, mid: char, right: char, style: Style) -> Line<'static> {
+    let mut s = String::from("  ");
     s.push(left);
-    for (i, w) in cell_widths.iter().enumerate() {
-        for _ in 0..*w { s.push('─'); }
-        s.push(if i + 1 == cell_widths.len() { right } else { mid });
+    for (i, w) in widths.iter().enumerate() {
+        for _ in 0..(w + 2) { s.push('─'); }
+        s.push(if i + 1 == widths.len() { right } else { mid });
     }
-    s
+    Line::from(Span::styled(s, style))
 }
 
-fn content_row(
-    cells: &[String],
-    widths: &[usize],
-    pad: usize,
-    cell_style: Style,
-    border_style: Style,
-) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
-    spans.push(Span::styled("│", border_style));
+/// Render a data row: `  │ text  │ text │`
+/// Uses display_width for padding so emoji/CJK chars align correctly.
+fn data_line(cells: &[String], widths: &[usize], cell_style: Style, border_style: Style) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = vec![Span::styled("  │", border_style)];
     for (i, cell) in cells.iter().enumerate() {
-        let cell_chars = cell.chars().count();
-        let extra = widths[i].saturating_sub(cell_chars);
-        let mut content = " ".repeat(pad);
-        content.push_str(cell);
-        for _ in 0..extra { content.push(' '); }
-        for _ in 0..pad { content.push(' '); }
-        spans.push(Span::styled(content, cell_style));
+        let w = widths[i];
+        let dw = display_width(cell);
+        let display: String = if dw > w {
+            // Truncate by display width, not char count.
+            let mut t = String::new();
+            let mut tw = 0usize;
+            for ch in cell.chars() {
+                let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                if tw + cw >= w { break; }
+                t.push(ch);
+                tw += cw;
+            }
+            // Pad if truncation left us short (e.g. skipped a 2-wide char).
+            while tw + 1 < w { t.push(' '); tw += 1; }
+            t.push('…');
+            t
+        } else {
+            let mut t = cell.clone();
+            for _ in 0..(w - dw) { t.push(' '); }
+            t
+        };
+        spans.push(Span::styled(format!(" {} ", display), cell_style));
         spans.push(Span::styled("│", border_style));
     }
     Line::from(spans)
@@ -628,7 +710,20 @@ pub fn render_assistant_lines(msg: &ChatMessage) -> Vec<Line<'static>> {
     }
     out.push(Line::from(header_spans));
 
-    for tc in &msg.tool_calls {
+    // Cap tool call display to avoid the list dominating the viewport.
+    // Show the first few and last one, with a "... and N more" in between.
+    let max_visible = 5;
+    let tc_count = msg.tool_calls.len();
+    for (i, tc) in msg.tool_calls.iter().enumerate() {
+        if tc_count > max_visible + 1 && i >= max_visible - 1 && i < tc_count - 1 {
+            if i == max_visible - 1 {
+                out.push(Line::from(Span::styled(
+                    format!("  … and {} more tool calls", tc_count - max_visible),
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+                )));
+            }
+            continue;
+        }
         let color = if tc.is_error { Color::Red } else { Color::Cyan };
         out.push(Line::from(vec![
             Span::raw("  "),
@@ -643,6 +738,10 @@ pub fn render_assistant_lines(msg: &ChatMessage) -> Vec<Line<'static>> {
     if !msg.content.is_empty() {
         render_markdown_body(&mut out, &msg.content);
     }
+
+    // Mark where content ends — used by progressive streaming flush.
+    // Everything before this point (header + tool calls + content) is the
+    // "body". Stats are appended only on completion.
 
     if let Some(ref stats) = msg.stats {
         let models = stats.models.join(", ");
@@ -659,6 +758,18 @@ pub fn render_assistant_lines(msg: &ChatMessage) -> Vec<Line<'static>> {
         out.push(Line::from(Span::styled(parts, Style::default().fg(Color::DarkGray))));
     }
 
+    out
+}
+
+/// Render only the markdown body content of a message — no header, no tool
+/// calls, no stats. Used by the progressive streaming flush so that only
+/// the LLM's text output scrolls into the terminal scrollback, while the
+/// tool call list and header stay compact in the preview area.
+pub fn render_content_lines(content: &str) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = Vec::new();
+    if !content.is_empty() {
+        render_markdown_body(&mut out, content);
+    }
     out
 }
 
