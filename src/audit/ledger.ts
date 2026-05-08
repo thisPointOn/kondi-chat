@@ -32,21 +32,27 @@ const PRICING: Record<string, { input: number; output: number; cachedInput?: num
   'gpt-5.4-nano':               { input: 0.20, output: 1.25, cachedInput: 0.10 },
   'gpt-4o':                     { input: 2.5,  output: 10,  cachedInput: 1.25 },
   'gpt-4o-mini':                { input: 0.15, output: 0.6, cachedInput: 0.075 },
-  // DeepSeek (cached at ~10%)
-  'deepseek-chat':              { input: 0.27, output: 1.10, cachedInput: 0.027 },
-  'deepseek-v4-pro':            { input: 1.74, output: 3.48, cachedInput: 0.174 },
-  'deepseek-v4-flash':          { input: 0.14, output: 0.28, cachedInput: 0.014 },
-  // Google / xAI (no documented cache discount)
-  'models/gemini-2.5-flash':    { input: 0.15, output: 0.6 },
+  // DeepSeek — https://api-docs.deepseek.com/quick_start/pricing
+  // V4 Pro at 75% discount through May 31 2026.
+  // Cache hit reduced to 1/10 of launch price as of April 26 2026.
+  'deepseek-v4-pro':            { input: 0.435, output: 0.87,  cachedInput: 0.003625 },
+  'deepseek-v4-flash':          { input: 0.14,  output: 0.28,  cachedInput: 0.0028 },
+  // Legacy names (being deprecated, map to v4-flash / v4-flash-reasoning)
+  'deepseek-chat':              { input: 0.14,  output: 0.28,  cachedInput: 0.0028 },
+  'deepseek-reasoner':          { input: 0.14,  output: 0.28,  cachedInput: 0.0028 },
+  // Google — https://ai.google.dev/gemini-api/docs/pricing
+  'models/gemini-2.5-flash':    { input: 0.30, output: 2.50, cachedInput: 0.03 },
+  'models/gemini-2.5-pro':      { input: 1.25, output: 10.0, cachedInput: 0.125 },
+  // xAI
   'grok-3':                     { input: 3,    output: 15 },
-  // Z.AI GLM — per https://docs.z.ai/guides/overview/pricing (cached at 50%)
-  'glm-5.1':                    { input: 1.4,  output: 4.4, cachedInput: 0.7 },
-  'glm-5':                      { input: 1.0,  output: 3.2, cachedInput: 0.5 },
-  'glm-5-turbo':                { input: 1.2,  output: 4.0, cachedInput: 0.6 },
-  'glm-4.7':                    { input: 0.6,  output: 2.2, cachedInput: 0.3 },
-  'glm-4.6':                    { input: 0.6,  output: 2.2, cachedInput: 0.3 },
-  'glm-4.5':                    { input: 0.6,  output: 2.2, cachedInput: 0.3 },
-  'glm-4.5-air':                { input: 0.2,  output: 1.1, cachedInput: 0.1 },
+  // Z.AI GLM — https://docs.z.ai/guides/overview/pricing
+  'glm-5.1':                    { input: 1.4,  output: 4.4,  cachedInput: 0.26 },
+  'glm-5':                      { input: 1.0,  output: 3.2,  cachedInput: 0.20 },
+  'glm-5-turbo':                { input: 1.2,  output: 4.0,  cachedInput: 0.24 },
+  'glm-4.7':                    { input: 0.6,  output: 2.2,  cachedInput: 0.11 },
+  'glm-4.6':                    { input: 0.6,  output: 2.2,  cachedInput: 0.11 },
+  'glm-4.5':                    { input: 0.6,  output: 2.2,  cachedInput: 0.11 },
+  'glm-4.5-air':                { input: 0.2,  output: 1.1,  cachedInput: 0.03 },
   'glm-4.5-flash':              { input: 0,    output: 0 },
   'glm-4.7-flash':              { input: 0,    output: 0 },
 };

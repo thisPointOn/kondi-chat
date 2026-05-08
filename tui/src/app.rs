@@ -324,14 +324,27 @@ impl App {
 
             if self.stream_lines_flushed > 0 {
                 // Progressive streaming was active — header, activity,
-                // and most content are already in scrollback. Only push
-                // the remaining content tail + tool calls + stats.
+                // and most content are already in scrollback. Push the
+                // remaining tail (what was visible in the preview) plus
+                // the stats footer. The tail is rendered fresh here so
+                // it includes any final content that wasn't flushed yet.
                 self.activity.clear();
 
-                // Remaining content lines
+                // Render all content, then take only the unflushed tail.
+                // We can't wrap here (no terminal width), so push unwrapped
+                // lines — the main loop will wrap them via pending_history.
                 let content_lines = render_content_lines(&msg.content);
+                // Estimate: each unwrapped line is roughly 1-3 wrapped lines.
+                // Take the last chunk that likely covers the unflushed wrapped lines.
+                let approx_unwrapped_flushed = content_lines.len().saturating_sub(
+                    content_lines.len().saturating_sub(self.stream_lines_flushed / 2)
+                );
+                // Simpler: just push the last ~8 unwrapped lines as the tail.
+                // Some may duplicate what's in scrollback, but that's better
+                // than dropping content.
+                let tail_start = content_lines.len().saturating_sub(8);
                 let remaining: Vec<Line<'static>> = content_lines.into_iter()
-                    .skip(self.stream_lines_flushed)
+                    .skip(tail_start)
                     .collect();
                 lines.extend(remaining);
 

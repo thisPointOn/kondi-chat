@@ -92,6 +92,10 @@ export const AGENT_TOOLS: ToolDefinition[] = [
           type: 'string',
           description: 'Relative path from the working directory',
         },
+        offset: {
+          type: 'number',
+          description: 'Line number to start reading from (0-based, default: 0)',
+        },
         max_lines: {
           type: 'number',
           description: 'Maximum number of lines to return (default: 200)',
@@ -449,6 +453,7 @@ async function toolReadFile(
   ctx: ToolContext,
 ): Promise<{ content: string; isError?: boolean }> {
   const relPath = args.path as string;
+  const offset = (args.offset as number) || 0;
   const maxLines = (args.max_lines as number) || 200;
   const base = resolve(ctx.workingDir);
   const fullPath = resolve(join(ctx.workingDir, relPath));
@@ -465,13 +470,17 @@ async function toolReadFile(
     if (e?.code === 'ENOENT') return { content: `File not found: ${relPath}`, isError: true };
     return { content: `Read failed: ${e?.message || String(e)}`, isError: true };
   }
-  const lines = content.split('\n');
-  if (lines.length > maxLines) {
-    return {
-      content: lines.slice(0, maxLines).join('\n') + `\n\n... (${lines.length - maxLines} more lines)`,
-    };
-  }
-  return { content };
+  const allLines = content.split('\n');
+  const totalLines = allLines.length;
+  const start = Math.min(offset, totalLines);
+  const slice = allLines.slice(start, start + maxLines);
+  const result = slice.join('\n');
+
+  const header = offset > 0 ? `[lines ${start + 1}–${start + slice.length} of ${totalLines}]\n` : '';
+  const footer = (start + slice.length < totalLines)
+    ? `\n\n... (${totalLines - start - slice.length} more lines)`
+    : '';
+  return { content: `${header}${result}${footer}` };
 }
 
 function toolListFiles(

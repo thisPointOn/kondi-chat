@@ -161,7 +161,11 @@ async fn main() -> io::Result<()> {
             if app.is_processing {
                 if let Some(msg) = app.messages.first() {
                     let content_lines = app::render_content_lines(&msg.content);
-                    let total = content_lines.len();
+                    // Wrap to terminal width BEFORE counting — LLMs output
+                    // long paragraphs with few \n chars, so unwrapped line
+                    // count can be 4 for a visual 50-line response.
+                    let wrapped_content = ui::wrap_lines_to_width(&content_lines, term_width);
+                    let total = wrapped_content.len();
                     let keep_tail = 4usize;
 
                     // Find the safe flush boundary: only flush lines that
@@ -170,11 +174,8 @@ async fn main() -> io::Result<()> {
                     // new rows can widen columns.
                     let safe_end = {
                         let mut end = total.saturating_sub(keep_tail);
-                        // Walk backward from the flush boundary to skip any
-                        // table block that's still being streamed. A table
-                        // ends when we hit a non-table line going backward.
                         while end > app.stream_lines_flushed {
-                            let line_text: String = content_lines[end - 1]
+                            let line_text: String = wrapped_content[end - 1]
                                 .spans.iter()
                                 .map(|s| s.content.as_ref())
                                 .collect();
@@ -187,9 +188,6 @@ async fn main() -> io::Result<()> {
                                 break;
                             }
                         }
-                        // Also skip backward past the table's preceding
-                        // content that was rendered before it — a table
-                        // re-render could shift line indices.
                         end
                     };
 
@@ -228,13 +226,12 @@ async fn main() -> io::Result<()> {
                                 })?;
                             }
                         }
-                        let to_flush: Vec<ratatui::text::Line<'static>> = content_lines[app.stream_lines_flushed..safe_end]
+                        let to_flush: Vec<ratatui::text::Line<'static>> = wrapped_content[app.stream_lines_flushed..safe_end]
                             .to_vec();
                         if !to_flush.is_empty() {
-                            let wrapped = ui::wrap_lines_to_width(&to_flush, term_width);
-                            let h = wrapped.len() as u16;
+                            let h = to_flush.len() as u16;
                             terminal.insert_before(h, |buf| {
-                                for (i, line) in wrapped.iter().enumerate() {
+                                for (i, line) in to_flush.iter().enumerate() {
                                     buf.set_line(0, i as u16, line, buf.area.width);
                                 }
                             })?;
@@ -406,15 +403,17 @@ async fn main() -> io::Result<()> {
         // Spinner tick: if processing and poll timed out, still redraw.
         if app.is_processing {
             needs_draw = true;
-            // Watchdog: if is_processing has been true for >5 minutes with
+            // Watchdog: if is_processing has been true for >10 minutes with
             // no backend events clearing it, the backend probably dropped
             // the response (timeout, crash, silent error). Auto-clear so
             // the user isn't permanently locked out. Queued messages will
             // drain on the next loop iteration.
-            if app.start_time.elapsed().as_secs() > 300 {
+            // Skip the watchdog while a permission dialog is open — the
+            // user may take as long as they need to review and respond.
+            if app.pending_permissions.is_empty() && app.start_time.elapsed().as_secs() > 600 {
                 app.is_processing = false;
                 app.status = String::new();
-                app.push_system_public("(turn timed out — no response from backend after 5 minutes)".into());
+                app.push_system_public("(turn timed out — no response from backend after 10 minutes)".into());
             }
         }
     }

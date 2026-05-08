@@ -86,7 +86,9 @@ const DEFAULT_CONFIG: PermissionConfig = {
   alwaysConfirmPatterns: DEFAULT_ALWAYS_CONFIRM_PATTERNS,
 };
 
-const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+// Permission dialogs wait indefinitely — the user responds when ready.
+// No auto-deny timeout; the TUI keeps the dialog visible until dismissed.
+const REQUEST_TIMEOUT_MS = 24 * 60 * 60 * 1000; // 24h (effectively forever)
 
 interface Pending {
   resolve: (d: PermissionDecision) => void;

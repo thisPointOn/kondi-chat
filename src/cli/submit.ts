@@ -266,7 +266,7 @@ export async function handleSubmit(
       });
     }
 
-    let streamedContent = '';
+    let iterContent = '';
     const response = await callLLM({
       provider: decision.model.provider,
       model: decision.model.id,
@@ -275,8 +275,12 @@ export async function handleSubmit(
       maxOutputTokens: 8192, cacheablePrefix,
       stream: true,
       onToken: (token: string) => {
-        streamedContent += token;
-        emit({ type: 'message_update', id: msgId, content: streamedContent });
+        iterContent += token;
+        // Show accumulated content across ALL iterations, not just
+        // the current one. This prevents earlier text ("Step 3: ...")
+        // from vanishing when the model calls tools and starts a new
+        // iteration.
+        emit({ type: 'message_update', id: msgId, content: finalContent + iterContent });
       },
     });
 
@@ -304,6 +308,12 @@ export async function handleSubmit(
 
     ledger.record('discuss', response, messages[messages.length - 1]?.content?.slice(0, 200) || '');
 
+    // Accumulate this iteration's text so it persists across iterations.
+    // Without this, "Step 3: ..." vanishes when the model calls tools.
+    if (response.content) {
+      finalContent += (finalContent ? '\n\n' : '') + response.content;
+    }
+
     if (!response.toolCalls || response.toolCalls.length === 0) {
       // Autonomous-loop mode: when the model stops calling tools but the
       // goal isn't explicitly marked done, synthesize a "continue" prompt
@@ -325,7 +335,7 @@ export async function handleSubmit(
           continue;
         }
       }
-      finalContent = response.content;
+      // finalContent already accumulated above
       break;
     }
 

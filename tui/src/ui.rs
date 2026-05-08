@@ -196,9 +196,11 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
     if let Some(msg) = app.messages.first() {
         if app.stream_lines_flushed > 0 {
             // Header and early content already in scrollback.
-            // Show only tool calls (capped) + remaining content tail.
+            // Show only the remaining wrapped content tail.
+            // stream_lines_flushed counts WRAPPED lines, so wrap first.
             let content_lines = render_content_lines(&msg.content);
-            let remaining: Vec<Line> = content_lines.into_iter()
+            let wrapped = wrap_lines_to_width(&content_lines, area.width as usize);
+            let remaining: Vec<Line> = wrapped.into_iter()
                 .skip(app.stream_lines_flushed)
                 .collect();
             lines.extend(remaining);
@@ -265,12 +267,24 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     };
     let mut left_spans: Vec<Span> = Vec::new();
     if app.is_processing {
+        let elapsed = app.start_time.elapsed().as_secs();
+        let time_str = if elapsed >= 60 {
+            format!("{}m{}s", elapsed / 60, elapsed % 60)
+        } else {
+            format!("{}s", elapsed)
+        };
         left_spans.push(Span::styled(
             format!("{} ", app.spinner()),
             Style::default().fg(Color::Yellow),
         ));
+        left_spans.push(Span::styled(app.status.clone(), status_style));
+        left_spans.push(Span::styled(
+            format!(" [{}]", time_str),
+            Style::default().fg(Color::DarkGray),
+        ));
+    } else {
+        left_spans.push(Span::styled(app.status.clone(), status_style));
     }
-    left_spans.push(Span::styled(app.status.clone(), status_style));
     if !app.pending_submits.is_empty() {
         left_spans.push(Span::raw(" "));
         left_spans.push(Span::styled(
