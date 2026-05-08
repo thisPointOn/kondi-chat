@@ -505,7 +505,10 @@ fn draw_detail(f: &mut Frame, app: &App, view: &str) {
 
 // ── Suggestions ─────────────────────────────────────────────────────
 
-struct Suggestion { value: String, desc: String }
+pub(crate) struct Suggestion { 
+    pub(crate) value: String, 
+    pub(crate) desc: String 
+}
 
 const COMMANDS: &[(&str, &str)] = &[
     ("/mode", "show/set cost mode"),

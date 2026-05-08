@@ -334,11 +334,6 @@ impl App {
                 // We can't wrap here (no terminal width), so push unwrapped
                 // lines — the main loop will wrap them via pending_history.
                 let content_lines = render_content_lines(&msg.content);
-                // Estimate: each unwrapped line is roughly 1-3 wrapped lines.
-                // Take the last chunk that likely covers the unflushed wrapped lines.
-                let approx_unwrapped_flushed = content_lines.len().saturating_sub(
-                    content_lines.len().saturating_sub(self.stream_lines_flushed / 2)
-                );
                 // Simpler: just push the last ~8 unwrapped lines as the tail.
                 // Some may duplicate what's in scrollback, but that's better
                 // than dropping content.
@@ -788,27 +783,42 @@ pub fn render_content_lines(content: &str) -> Vec<Line<'static>> {
 
 /// Splash screen: K braille logo + "kondi" inside a compact pink border.
 pub fn splash_lines() -> Vec<Line<'static>> {
+    use unicode_width::UnicodeWidthStr;
+
     let pink = Style::default().fg(PINK);
     let cyan = Color::Rgb(80, 200, 230);
     let text_row = BH / 2;
 
-    // Inner width: 1 pad + 30 braille + "  kondi" (8) + 1 pad = 40.
-    // The border chars add 2 more (║ on each side) but we don't count those.
-    let inner = 40usize;
+    let value_prop_for_row = |row: usize| match row {
+        2 => "  A coding assistant that asks for help.",
+        3 => "  Built for developers, by developers.",
+        4 => "  https://kondi.chat",
+        _ => "",
+    };
+
+    // Width inside the border, excluding the leading outer margin and border
+    // glyphs themselves. This matches the actual rendered content: one left
+    // padding cell, the 30-cell logo, then whichever text appears on that row.
+    let inner = (0..BH)
+        .map(|row| {
+            let text = if row == text_row {
+                "  kondi"
+            } else {
+                value_prop_for_row(row)
+            };
+            // Interior width: logo (BW chars) + text (text.width())
+            1 + BW + text.width() // 1 for the interior space after '║'
+        })
+        .max()
+        .unwrap_or(1 + BW);
 
     let mut lines: Vec<Line<'static>> = vec![
         Line::from(""),
-        // Top border
-        Line::from(Span::styled(
-            format!(" ╔{}╗", "═".repeat(inner)),
-            pink,
-        )),
+        Line::from(Span::styled(format!(" ╔{}╗", "═".repeat(inner)), pink)),
     ];
 
     for row in 0..BH {
-        let mut spans: Vec<Span<'static>> = vec![
-            Span::styled(" ║ ", pink),
-        ];
+        let mut spans: Vec<Span<'static>> = vec![Span::styled(" ║ ", pink)];
         for col in 0..BW {
             let (color, ch) = BRAILLE_CELLS[row * BW + col];
             match color {
@@ -816,15 +826,27 @@ pub fn splash_lines() -> Vec<Line<'static>> {
                 None => spans.push(Span::raw(ch)),
             }
         }
+
+        let value_prop_line = value_prop_for_row(row);
         if row == text_row {
             spans.push(Span::styled(
                 "  kondi",
                 Style::default().fg(cyan).add_modifier(Modifier::BOLD),
             ));
+        } else if !value_prop_line.is_empty() {
+            spans.push(Span::styled(
+                value_prop_line,
+                Style::default().fg(Color::DarkGray),
+            ));
         }
-        // Right padding + border. Compute how many chars we've used inside.
-        let used = 1 + BW + if row == text_row { 7 } else { 0 }; // " " + braille + maybe "  kondi"
-        let pad = inner.saturating_sub(used);
+
+        // Interior row width: 1 (interior space from prefix) + logo + optional text
+        let logo_text_width: usize = spans[1..]
+            .iter()
+            .map(|sp| sp.content.width())
+            .sum();
+        let content_width = 1 + logo_text_width;
+        let pad = inner.saturating_sub(content_width);
         if pad > 0 {
             spans.push(Span::raw(" ".repeat(pad)));
         }
@@ -832,7 +854,6 @@ pub fn splash_lines() -> Vec<Line<'static>> {
         lines.push(Line::from(spans));
     }
 
-    // Bottom border
     lines.push(Line::from(Span::styled(
         format!(" ╚{}╝", "═".repeat(inner)),
         pink,
