@@ -229,11 +229,23 @@ export async function handleCommand(input: string, deps: CommandDeps): Promise<s
     case '/cost': {
       const totals = ledger.getTotals();
       if (totals.calls === 0) return 'No calls yet.';
-      const lines = [`Total: ${totals.calls} calls | $${totals.costUsd.toFixed(4)}`];
-      type ModelTotal = { calls: number; costUsd: number };
+      const lines = [
+        `═══ Session Cost Breakdown ═══`,
+        `Total: ${totals.calls} calls | ${totals.inputTokens.toLocaleString()}in / ${totals.outputTokens.toLocaleString()}out | $${totals.costUsd.toFixed(4)}`,
+        '',
+        'By Model:',
+      ];
+      type ModelTotal = { calls: number; inputTokens: number; outputTokens: number; costUsd: number };
       const byModel = totals.byModel as Record<string, ModelTotal>;
       for (const [m, d] of Object.entries(byModel).sort((a, b) => b[1].costUsd - a[1].costUsd)) {
-        lines.push(`  ${m}: ${d.calls} calls $${d.costUsd.toFixed(4)}`);
+        lines.push(`  ${m.slice(0, 28).padEnd(30)} ${String(d.calls).padStart(3)} calls  ${d.inputTokens.toLocaleString().padStart(10)}in  ${d.outputTokens.toLocaleString().padStart(8)}out  $${d.costUsd.toFixed(4)}`);
+      }
+      const byPhase = totals.byPhase as Record<string, ModelTotal>;
+      if (Object.keys(byPhase).length > 1) {
+        lines.push('', 'By Phase:');
+        for (const [p, d] of Object.entries(byPhase).sort((a, b) => b[1].costUsd - a[1].costUsd)) {
+          lines.push(`  ${p.padEnd(15)} ${String(d.calls).padStart(3)} calls  ${d.inputTokens.toLocaleString().padStart(10)}in  ${d.outputTokens.toLocaleString().padStart(8)}out  $${d.costUsd.toFixed(4)}`);
+        }
       }
       return lines.join('\n');
     }
@@ -374,9 +386,31 @@ export async function handleCommand(input: string, deps: CommandDeps): Promise<s
       const all = toolManager.getTools();
       const summary = toolManager.getSummary();
       const lines = [
-        `Tools: ${all.length} total (${summary.builtIn} built-in, ${summary.mcp} MCP across ${summary.servers} server(s))`,
+        '═══ Slash Commands ═══',
+        '  /mode [name]         Show or set budget profile',
+        '  /mode-details [name] Full config for a profile',
+        '  /use <alias>         Pin to a model (/use auto to unpin)',
+        '  /models              List models and aliases',
+        '  /health              Check model availability',
+        '  /cost                Session cost breakdown by model',
+        '  /analytics [days]    Cross-session cost by model and day',
+        '  /routing             Router stats and tier distribution',
+        '  /tools               This list',
+        '  /consultants         List domain-expert consultants',
+        '  /council             Multi-model deliberation',
+        '  /tasks               List task cards',
+        '  /loop <goal>         Autonomous agent loop',
+        '  /sessions            List recent sessions',
+        '  /checkpoints         List checkpoints',
+        '  /undo [N]            Revert to checkpoint',
+        '  /attach <path>       Queue image for next message',
+        '  /mcp                 List MCP servers and tools',
+        '  /rate-limits         Per-provider RPM/TPM usage',
+        '  /help [topic]        Detailed help on any topic',
+        '  /quit                Exit',
         '',
-        ...all.map(t => `  ${t.name.padEnd(20)} ${(t.description || '').slice(0, 60)}`),
+        `═══ Agent Tools (${all.length}: ${summary.builtIn} built-in, ${summary.mcp} MCP) ═══`,
+        ...all.map(t => `  ${t.name.padEnd(22)} ${(t.description || '').slice(0, 55)}`),
       ];
       return lines.join('\n');
     }

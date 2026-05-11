@@ -211,10 +211,14 @@ export class Analytics {
       lines.push(`  ${model.slice(0, 30).padEnd(32)} ${data.calls} calls  ${data.inputTokens.toLocaleString().padStart(10)}in  ${data.outputTokens.toLocaleString().padStart(10)}out  $${data.costUsd.toFixed(4)}`);
     }
 
-    if (s.dailyBreakdown.length > 1) {
-      lines.push('', 'Daily:');
+    if (s.dailyBreakdown.length > 0) {
+      lines.push('', 'Daily (by model):');
       for (const day of s.dailyBreakdown.slice(-7)) { // Last 7 days
         lines.push(`  ${day.date}  ${day.totalCalls} calls  $${day.totalCostUsd.toFixed(4)}`);
+        const models = Object.entries(day.byModel).sort((a, b) => b[1].costUsd - a[1].costUsd);
+        for (const [model, data] of models) {
+          lines.push(`    ${model.slice(0, 26).padEnd(28)} ${data.calls} calls  ${data.inputTokens.toLocaleString().padStart(9)}in  ${data.outputTokens.toLocaleString().padStart(7)}out  $${data.costUsd.toFixed(4)}`);
+        }
       }
       if (s.dailyBreakdown.length > 7) {
         lines.push(`  ... ${s.dailyBreakdown.length - 7} earlier days`);
