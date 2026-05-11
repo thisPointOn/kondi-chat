@@ -140,8 +140,6 @@ Consultations log to the audit ledger as `phase: 'consult'` with the role id in 
 
 ## `permissions.json`
 
-## `permissions.json`
-
 ```json
 {
   "defaultTier": "confirm",

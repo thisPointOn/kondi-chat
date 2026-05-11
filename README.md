@@ -1,71 +1,104 @@
 # kondi-chat
 
-**A multi-provider terminal coding agent with a learned, cost-aware router.**
+**The terminal coding agent that picks a different model for each phase.**
 
-Not another wrapper that asks you to pick a model. kondi-chat's intent router reads every model in your profile, understands what each phase needs, and picks the right one — *GPT-5.4 for planning, Gemini 2.5 Pro for coding, Sonnet for review* — informed by what happened in prior phases, under an explicit cost cap. The more you use it, the better it routes.
+One coding task. Three models. About four cents.
+GPT-5.4 plans. Gemini 2.5 Pro codes (free). Sonnet reviews.
+kondi-chat reads what each phase actually needs and routes accordingly — every turn, under a cost cap you set.
 
-<!-- Demo GIF goes here once recorded (vhs tape in scripts/demo.tape) -->
+<!-- Demo GIF: scripts/demo.tape -->
 
-## What makes it different
+## Why route per phase?
 
-- **Context-aware multi-model router.** The intent router reads every model's description and capabilities, sees what happened in prior pipeline phases ("Gemini just wrote the code, tests passed, now pick a reviewer"), and selects the best model for each step. It's not a lookup table — it's an LLM making an informed per-step decision, scoped to the models your profile declares. A learned NN tier trains on your accumulated usage and takes over for phases it's confident about. Profile pins serve as fallbacks, not overrides — the router gets first shot at an intelligent pick.
+Every model has a sweet spot:
 
-- **Multi-provider pipelines.** A profile declares which models are available and (optionally) which it prefers per phase. The `best-value` profile gives the router Opus, GPT-5.4, Sonnet, Gemini 2.5 Pro, and GLM-4.5-flash — the router chooses between comparable models (Opus vs. GPT-5.4 for planning) based on task complexity and cost. When the agent dispatches a task via `create_task`, the pipeline streams each phase's model choice live into the TUI — no opaque "thinking…" blocks.
+- **Frontier reasoning** (Opus, GPT-5.4) — great at planning and architecture, painful on grunt work.
+- **Coding-tuned** (Gemini 2.5 Pro, DeepSeek V4, GLM-4.6) — produce good code at 1/20th the cost.
+- **Fast and cheap** (GLM-4.5-flash, Haiku) — compress context, run classifiers, summarise, often free.
 
-- **Explicit cost caps.** Every profile declares `contextBudget`, `loopIterationCap`, and `loopCostCap`. The agent loop adaptively stubs old tool results to stay under the context ceiling — no LLM call, just local string rewriting. Cross-turn compaction uses a profile-scoped cheap model (free `glm-4.5-flash` on Z.AI's Coding Plan). Cached-token discounts are tracked separately in the ledger for Anthropic, OpenAI, and Z.AI.
+Pinning to one model means you're either burning money on boilerplate or undercutting hard problems. kondi-chat looks at the current pipeline phase — `plan`, `execute`, `reflect`, `compress` — and picks from the models you've enabled. It's not a lookup table; it's an LLM intent classifier seeded with each model's description and capabilities, with a learned tier that takes over once you've accumulated enough usage data.
 
-- **Domain consultants and multi-model deliberation.** Consultants are file-configurable expert personas (aerospace engineer, security auditor, database architect) with lazy-loaded persistent context; the agent calls them via the `consult` tool when a problem has a domain angle. `/council run <profile>` kicks off a structured multi-round debate among frontier models for decisions that matter more than one model can decide alone.
+## One turn, three models
 
-- **Terminal UX without the gymnastics.** Rust TUI rendering into an inline viewport, so content lands in your terminal's native scrollback. Wheel scroll, drag-to-select, and copy all work like they do in `cat` or `less` — no alternate-screen capture, no escape-sequence fights with tmux.
+```
+> refactor src/auth into a separate module with its own tests
 
-## Not a Cursor replacement
+  router  plan      → gpt-5.4              ($0.011)
+  router  execute   → gemini-2.5-pro       (free)
+  router  reflect   → claude-sonnet-4-5    ($0.029)
 
-kondi-chat does not integrate with an IDE. It runs in a terminal pane next to whatever editor you already use. The closest comparable is [Aider](https://github.com/Aider-AI/aider) — more mature, larger community, simpler install. kondi-chat bets on three different things than Aider: routing as the core abstraction, declarative multi-provider pipelines, and first-class cost control. If those differences don't matter to you, Aider is the right tool.
+  ✓ extracted src/auth/{index.ts, session.ts, tokens.ts}
+  ✓ moved 14 tests to src/auth/__tests__/
+  ✓ all 47 tests green; typecheck clean
+
+  total: 3 models · 8 tool calls · $0.040 · 23s
+```
+
+The same task on Claude Code or Cursor runs Opus or GPT-5 end-to-end. Same outcome; ~30× the bill on the heavy bits.
+
+## How it compares
+
+|  | kondi-chat | Claude Code | Cursor CLI | Aider |
+|---|---|---|---|---|
+| Models per turn | **many, per-phase** | one (Claude) | one (configurable) | one (configurable) |
+| Cross-provider routing | **yes** | no | no | no |
+| Cost cap enforced in-loop | **yes** | no | no | partial |
+| Free-tier coding (Gemini / DeepSeek) | **yes** | no | no | manual |
+| In-terminal scrollback (no alt-screen) | **yes** | no | no | yes |
+| Local model support | yes | no | no | yes |
+| IDE integration | no | no | yes | no |
+
+If you want one polished model and don't care about cost, use Claude Code. If you want the cheapest capable model for each step of every task, kondi-chat is the one that does that.
 
 ## Install
 
 ```bash
-# One command (requires Node 18+). The postinstall script downloads
-# a prebuilt Rust TUI binary for your platform automatically.
+# Requires Node 18+. Postinstall downloads a prebuilt Rust TUI binary.
 npm install -g @thispointon/kondi-chat
 ```
 
-No Rust toolchain needed. The TUI binary is downloaded from the
-GitHub release matching your package version. Supported platforms:
-Linux x64/arm64, macOS x64/arm64, Windows x64.
+Linux x64/arm64, macOS x64/arm64, Windows x64 are all supported. No Rust toolchain needed.
 
 ```bash
-# From source (if you want to hack on it)
+# From source (hacking on it)
 git clone https://github.com/thisPointOn/kondi-chat.git
 cd kondi-chat
-npm install                              # also runs postinstall
-cd tui && cargo build --release && cd .. # optional: build TUI from source
+npm install                              # runs postinstall
+cd tui && cargo build --release && cd .. # optional
 ```
 
 ## Quick start
 
-1. Set at least one API key:
+Pick the cheapest path that matches what you have:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-# or
-export OPENAI_API_KEY=sk-proj-...
-# or both, plus any others you have
+# Free path — runs entirely on free / near-free tiers.
+# Gemini 2.5 Pro (free) for coding, GLM-4.5-flash (free on Z.AI Coding Plan) for compression.
+export GOOGLE_API_KEY=...
+export ZAI_API_KEY=...
+kondi-chat --mode zai
+
+# Cheap path — DeepSeek V3 for everything (~$0.27/M in, $1.10/M out).
+export DEEPSEEK_API_KEY=...
+kondi-chat                         # then inside the session:
+# /use deepseek                    # pin all turns to DeepSeek
+
+# Best-value path — multi-provider routing across what you have.
+export ANTHROPIC_API_KEY=...
+export OPENAI_API_KEY=...
+export GOOGLE_API_KEY=...
+kondi-chat --mode best-value
 ```
 
-2. Run:
-
-```bash
-kondi-chat
-```
-
-3. Chat:
+Then just talk:
 
 ```
 > Explain this codebase
-> Write a Python script that parses CSV files and outputs JSON
-> @opus Plan a refactor of the auth module
-> @deep Write the implementation
+> Refactor the auth module to use JWTs instead of sessions
+> @opus Architect a new ingest pipeline   # pin one turn
+> /use gemini-2.5-pro                     # pin until you say otherwise
+> /cost                                    # see who did what, for how much
+> /routing                                  # see the router's tier-by-tier decisions
 ```
 
 ## Features

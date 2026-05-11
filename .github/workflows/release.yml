@@ -99,7 +99,7 @@ jobs:
             ## Install
 
             ```bash
-            npm install -g kondi-chat
+            npm install -g @thispointon/kondi-chat
             ```
 
             The postinstall script automatically downloads the TUI binary

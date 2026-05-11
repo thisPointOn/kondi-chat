@@ -69,5 +69,14 @@ A custom frontend can speak the same protocol.
 
 ## Exit codes
 
-See `docs/non-interactive.md`. Short version: `0` success, `1` error,
-`2` max iterations, `3` max cost, `5` permission denied.
+Non-interactive runs (`--prompt`, `--pipe`, `--json`) exit with:
+
+| Code | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | Generic error |
+| `2` | Max iterations (`loopIterationCap`) hit |
+| `3` | Max cost (`loopCostCap`) hit |
+| `5` | Permission denied — a `confirm`-tier tool fired without a TUI to answer it. Pass `--auto-approve <tool>` to allow specific tools, or `--dangerously-skip-permissions` to bypass entirely |
+
+See [getting-started.md#non-interactive](getting-started.md#non-interactive) for usage examples.
