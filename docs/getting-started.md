@@ -61,13 +61,13 @@ Try some prompts:
 
 ### Free-tier path
 
-If you have `GOOGLE_API_KEY` and `ZAI_API_KEY`, you can run a session that costs essentially nothing:
+If you have `GOOGLE_API_KEY` and `ZAI_API_KEY`, you can run a session that costs essentially nothing. Launch `kondi-chat`, then inside the session:
 
-```bash
-kondi-chat --mode zai            # GLM-4.5-flash + GLM-4.6 + GLM-5.1 (all on Z.AI Coding Plan)
+```
+/mode zai            # GLM-4.5-flash + GLM-4.6 + GLM-5.1 (all on Z.AI Coding Plan)
 ```
 
-Or build a custom profile that pins coding to Gemini 2.5 Pro and compression to GLM-flash — see the free-tier example in [profiles.md](profiles.md#free-tier-only).
+The profile choice persists across restarts in `.kondi-chat/config.json`, so you only need to do this once. Or build a custom profile that pins coding to Gemini 2.5 Pro and compression to GLM-flash — see the free-tier example in [profiles.md](profiles.md#free-tier-only).
 
 ### Cheap path
 

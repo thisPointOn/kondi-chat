@@ -76,9 +76,10 @@ Pick the cheapest path that matches what you have:
 # Gemini 2.5 Pro (free) for coding, GLM-4.5-flash (free on Z.AI Coding Plan) for compression.
 export GOOGLE_API_KEY=...
 export ZAI_API_KEY=...
-kondi-chat --mode zai
+kondi-chat                         # then inside the session:
+# /mode zai                        # switch to the Z.AI-only profile
 
-# Cheap path — DeepSeek V3 for everything (~$0.27/M in, $1.10/M out).
+# Cheap path — DeepSeek V4 Flash for everything (~$0.14/M in, $0.28/M out).
 export DEEPSEEK_API_KEY=...
 kondi-chat                         # then inside the session:
 # /use deepseek                    # pin all turns to DeepSeek
@@ -87,8 +88,11 @@ kondi-chat                         # then inside the session:
 export ANTHROPIC_API_KEY=...
 export OPENAI_API_KEY=...
 export GOOGLE_API_KEY=...
-kondi-chat --mode best-value
+kondi-chat                         # then inside the session:
+# /mode best-value                 # router picks per phase across providers
 ```
+
+(Profile switching happens inside the session via `/mode <name>`. Once switched, the choice persists across restarts in `.kondi-chat/config.json`.)
 
 Then just talk:
 
