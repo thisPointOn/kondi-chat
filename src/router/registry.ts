@@ -123,13 +123,16 @@ const DEFAULT_MODELS: ModelEntry[] = [
   // --- Code generation ---
   {
     id: 'deepseek-chat',
-    name: 'DeepSeek V3',
+    // The deepseek-chat endpoint now serves V4 Flash (see ledger.ts pricing
+    // table and commit 96d8ffe). Keep name/cost/context in sync with the
+    // ledger entry — the intent router shows these values to the classifier.
+    name: 'DeepSeek V4 Flash',
     alias: 'deep',
     provider: 'deepseek',
     capabilities: ['coding', 'fast-coding', 'refactoring'],
-    inputCostPer1M: 0.27,
-    outputCostPer1M: 1.10,
-    contextWindow: 128_000,
+    inputCostPer1M: 0.14,
+    outputCostPer1M: 0.28,
+    contextWindow: 1_000_000,
     enabled: true,
   },
   // --- Code review & analysis ---

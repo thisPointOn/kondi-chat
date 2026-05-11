@@ -17,8 +17,12 @@ describe('estimateCost', () => {
   });
 
   it('uses known pricing for deepseek-chat', () => {
+    // `deepseek-chat` is aliased to DeepSeek V4 Flash pricing — the API
+    // endpoint serves V4 Flash now. See ledger.ts pricing comment and
+    // commit 96d8ffe. Update both this assertion AND the registry entry
+    // if DeepSeek changes the endpoint mapping.
     const cost = estimateCost('deepseek-chat', 1_000_000, 1_000_000);
-    expect(cost).toBeCloseTo(0.27 + 1.10, 4);
+    expect(cost).toBeCloseTo(0.14 + 0.28, 4);
   });
 
   it('falls back to default pricing for unknown models', () => {
