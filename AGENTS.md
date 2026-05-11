@@ -4,9 +4,13 @@ Universal agent guidance for any AI coding tool working on this repo.
 
 ## Project
 
-Multi-provider terminal AI coding agent with a context-aware router.
-TypeScript backend (~4k lines) + Rust TUI (~1.5k lines), talking
-JSON-RPC over stdio.
+Terminal coding agent that picks a different model per phase. The wedge is
+**multi-provider per-phase routing under explicit cost caps** — not IDE
+integration (don't have it), not a fine-tuned model (don't have one), not
+Cursor parity (not chasing it). See `ROADMAP.md` for what's in/out of scope.
+
+TypeScript backend (~14k LOC, src/) + Rust TUI (~5.9k LOC, tui/), talking
+JSON-RPC over stdio. 107 tests (vitest).
 
 ## Build & test
 
@@ -89,8 +93,9 @@ tui/src/
 - Framework: vitest
 - Run: `npm test` or `npx vitest run`
 - Test files: `src/**/*.test.ts`
-- 104 tests covering router, context, tools, providers, verify, diff
+- 107 tests covering router, context, tools, providers, verify, diff, permissions
 - No mocking of LLM calls — tests exercise local logic only
+- `PermissionManager` accepts an optional `userConfigPath` so tests don't pick up the developer's `~/.kondi-chat/permissions.json`
 
 ## Profile system
 
@@ -106,4 +111,6 @@ caps, and model selection. Key fields:
 - Do not use `execSync` for tool calls that could be async
 - Do not hardcode model IDs outside of registry.ts defaults
 - Do not bypass the permission system for tool calls
+- Do not weaken `hasShellChainOperator` or the `--auto-approve run_command` chain re-check in `cli/backend.ts` — that pair closes the shell-injection gap that was the launch blocker
 - Do not write to AGENTS.md programmatically (hand-authored convention)
+- Do not add IDE-integration features, LSP servers, or VSCode extensions — explicit non-goal (see ROADMAP.md)
