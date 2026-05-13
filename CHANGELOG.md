@@ -5,6 +5,13 @@ All notable changes to kondi-chat will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-05-12
+
+### Fixed
+- bin/kondi-chat.js no longer overrides cwd to the install directory in the Node-backend fallback path. Previously, any install where the prebuilt TUI binary failed to download would run the agent against the kondi-chat install dir instead of the user's project.
+- Both launcher scripts now print a real `--help` listing every supported flag, slash command, and exit code. Previously only `--help`/`--version` were documented.
+- npm bundle no longer ships `src/**/*.test.ts`. Reduces tarball footprint and stops test code reaching end-users.
+
 ## [Unreleased]
 
 ### Fixed

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, "..");
-const version = "0.1.0";
+const version = "0.1.1";
 
 const arg = process.argv[2];
 
