@@ -111,12 +111,19 @@ jobs:
     needs: release
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      # id-token: write is required for npm OIDC trusted publishing.
+      # No NPM_TOKEN is used — npm trusts this workflow directly. Configure
+      # the trusted publisher once at npmjs.com/package/.../access.
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Node 22 ships npm 10.9+; npm 11.5+ is required for trusted-publisher
+          # OIDC, so upgrade npm explicitly before publish.
+          node-version: 22
           registry-url: https://registry.npmjs.org
-      - run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm install -g npm@latest
+      - run: npm publish --provenance --access public
