@@ -14,18 +14,35 @@ fi
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   cat <<HELP
-kondi-chat $VERSION
-Multi-model AI coding CLI with intelligent routing and council deliberation.
+kondi-chat $VERSION — terminal coding agent that picks a different model per phase
 
 Usage:
-  kondi-chat [options]
+  kondi-chat                          Launch the TUI (default)
+  kondi-chat --prompt "…"              Run a single turn non-interactively
+  kondi-chat --resume                 Resume the latest session in this dir
+  kondi-chat --sessions               List saved sessions for this dir
 
-Options:
-  --help, -h       Show this help message
-  --version, -V    Show version number
+Non-interactive flags:
+  --prompt "…"                        Prompt text (required for non-interactive)
+  --pipe                              Read additional context from stdin
+  --json                              Emit structured JSON output instead of text
+  --max-iterations N                  Cap agent-loop iterations (overrides profile)
+  --max-cost N                        Cap per-turn USD (overrides profile)
+  --auto-approve TOOL                 Auto-approve a specific tool (e.g. run_command).
+                                      Can be repeated. Chained shell commands still
+                                      drop to confirm; always-confirm patterns still
+                                      block.
+  --dangerously-skip-permissions      Bypass all permission gates. Be sure.
 
-If the Rust TUI binary is available, it will be used. Otherwise, the Node
-backend runs directly via tsx.
+Session:
+  --resume [ID]                       Resume latest or specific session
+  --sessions                          List sessions
+  --cwd PATH                          Operate as if launched from PATH
+
+Inside the TUI: /help, /mode, /use, /cost, /routing, /undo, /loop, /council
+Exit codes: 0 ok · 1 error · 2 max iterations · 3 max cost · 5 permission denied
+
+Docs: https://github.com/thisPointOn/kondi-chat#readme
 HELP
   exit 0
 fi

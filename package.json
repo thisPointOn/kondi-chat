@@ -12,7 +12,8 @@
     "bin/",
     "scripts/",
     "package.json",
-    "LICENSE"
+    "LICENSE",
+    "!src/**/*.test.ts"
   ],
   "scripts": {
     "postinstall": "node scripts/postinstall.cjs",
