@@ -52,20 +52,29 @@ If you want one polished model and don't care about cost, use Claude Code. If yo
 
 ## Install
 
+> The npm package isn't published yet. Until it lands, install from source or grab a prebuilt binary from a [GitHub Release](https://github.com/thisPointOn/kondi-chat/releases).
+
+**Prebuilt binary (no Node, no Rust toolchain needed):**
+
 ```bash
-# Requires Node 18+. Postinstall downloads a prebuilt Rust TUI binary.
-npm install -g @thispointon/kondi-chat
+# Linux x64 — adjust filename for darwin-x64/arm64, linux-arm64, win32-x64
+curl -L -o kondi-tui \
+  https://github.com/thisPointOn/kondi-chat/releases/latest/download/kondi-tui-linux-x64
+chmod +x kondi-tui
+./kondi-tui   # the binary spawns its own Node backend via npx (Node 18+ required)
 ```
 
-Linux x64/arm64, macOS x64/arm64, Windows x64 are all supported. No Rust toolchain needed.
+**From source:**
 
 ```bash
-# From source (hacking on it)
 git clone https://github.com/thisPointOn/kondi-chat.git
 cd kondi-chat
-npm install                              # runs postinstall
-cd tui && cargo build --release && cd .. # optional
+npm install --ignore-scripts            # skip postinstall when building locally
+cd tui && cargo build --release && cd ..
+npm run chat:tui                        # run the TUI
 ```
+
+Requires Node 18+ and a Rust toolchain. Supported platforms: Linux x64/arm64, macOS x64/arm64, Windows x64.
 
 ## Quick start
 
@@ -475,29 +484,18 @@ Use `/mode zai` to activate the bundled `zai` profile, which restricts routing t
 
 **Prompt caching.** z.ai's Coding Plan endpoint serves `prompt_tokens_details.cached_tokens` automatically for repeated prefixes ≥1k tokens. kondi-chat tracks cache hits per call and discounts them 50% in the cost estimator. Cache hit totals appear in `/routing` and `/cost`.
 
-## Building from source
+## Running the backend directly
 
-Prerequisites:
-- Node.js 18+
-- Rust toolchain (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
+`npm run chat:tui` (after building, see [Install](#install)) is the interactive entry point. For non-interactive use — CI, scripts, piping a prompt — bypass the TUI and call the Node backend directly:
 
 ```bash
-git clone https://github.com/thisPointOn/kondi-chat.git
-cd kondi-chat
-npm install
-
-# Build the Rust TUI (required)
-cd tui && cargo build --release && cd ..
-
-# Run the TUI
-npm run chat:tui
-
-# Or run just the Node backend (used by `kondi-chat` in non-interactive mode,
-# and spawned as a child process by the Rust TUI at runtime)
-npm start
+npm start                              # tsx src/cli/backend.ts (JSON-RPC over stdio)
+npx tsx src/cli/backend.ts --prompt "Explain this codebase"
 ```
 
-The Rust TUI is the only frontend; the Node backend is the engine it talks to over JSON-RPC on stdio. There is no pure-Node "chat" frontend — `npm run chat:tui` is the interactive entry point, and `npm start` / `kondi-chat --prompt …` are non-interactive entry points that bypass the TUI entirely.
+The Rust TUI is the only frontend; the Node backend is the engine it talks to over JSON-RPC on stdio. There is no pure-Node "chat" frontend.
+
+Rust toolchain install (if you don't have one): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 
 ## Architecture
 

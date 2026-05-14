@@ -2,21 +2,29 @@
 
 ## Install
 
+> The npm package isn't published yet. Until it lands, install from source or grab a prebuilt binary from a [GitHub Release](https://github.com/thisPointOn/kondi-chat/releases).
+
+**Prebuilt binary (no Rust toolchain needed; Node 18+ still required at runtime):**
+
 ```bash
-# Requires Node 18+. The postinstall script downloads a prebuilt
-# Rust TUI binary for your platform automatically. No Rust toolchain
-# needed; supports Linux x64/arm64, macOS x64/arm64, Windows x64.
-npm install -g @thispointon/kondi-chat
+# Linux x64 — adjust filename for darwin-x64/arm64, linux-arm64, win32-x64.
+curl -L -o kondi-tui \
+  https://github.com/thisPointOn/kondi-chat/releases/latest/download/kondi-tui-linux-x64
+chmod +x kondi-tui
+./kondi-tui
 ```
 
-Hacking on it locally:
+**From source:**
 
 ```bash
 git clone https://github.com/thisPointOn/kondi-chat.git
 cd kondi-chat
-npm install                              # also runs postinstall
-cd tui && cargo build --release && cd ..  # optional: build TUI from source
+npm install --ignore-scripts            # skip postinstall when building locally
+cd tui && cargo build --release && cd ..
+npm run chat:tui
 ```
+
+Supported platforms: Linux x64/arm64, macOS x64/arm64, Windows x64.
 
 ## Configure
 
