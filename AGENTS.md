@@ -17,7 +17,7 @@ JSON-RPC over stdio. 107 tests (vitest).
 ```bash
 npm install                              # install deps + download TUI binary
 npm run typecheck                        # tsc --noEmit
-npm test                                 # vitest run (104 tests)
+npm test                                 # vitest run (107 tests)
 cd tui && cargo build --release && cd .. # build Rust TUI from source
 npm run chat:tui                         # run the TUI
 ```

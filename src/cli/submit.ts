@@ -29,6 +29,7 @@ import type { CheckpointManager } from '../engine/checkpoints.ts';
 import { callLLM } from '../providers/llm-caller.ts';
 import { LoopGuard } from '../engine/loop-guard.ts';
 import { isMutatingToolCall, predictedMutations } from '../engine/checkpoints.ts';
+import { detectCommands } from '../engine/verify.ts';
 import { compactInLoop, classifyPhase } from './submit-helpers.ts';
 import { classifyTaskLocal, frameProblem, type TaskClassification } from '../engine/task-router.ts';
 import { ReceiptStore, buildReceipt } from '../context/receipts.ts';
@@ -216,6 +217,18 @@ export async function handleSubmit(
     : rawSystemPrompt;
   const messages: LLMMessage[] = [{ role: 'user', content: userMessage }];
 
+  // Resolve the post-edit typecheck command once per turn. Prefer the
+  // session-level repoMap (set by bootstrap), fall back to detecting from
+  // project files (handles TS/Python/Rust/Go). `null` means "no typecheck
+  // applies here, skip auto-verify silently" — much better than blindly
+  // running `tsc --noEmit` against a Python or Rust repo.
+  const autoVerifyCmd: string | null = (() => {
+    const fromRepoMap = session.repoMap?.commands?.typecheck;
+    if (fromRepoMap) return fromRepoMap;
+    const detected = detectCommands(workingDir).typecheck;
+    return detected ?? null;
+  })();
+
   let totalInputTokens = 0, totalOutputTokens = 0, totalCost = 0;
   let finalContent = '';
   let respondingModel = '';
@@ -374,16 +387,15 @@ export async function handleSubmit(
 
       const result = await toolManager.execute(tc.name, tc.arguments, toolCtx);
 
-      // Post-edit verification policy: after any file mutation, run
-      // typecheck automatically. The result is appended to the tool
-      // output so the model sees failures immediately without needing
-      // to call run_command itself. The router is unaffected — this
-      // is a policy on the tool layer, not a routing decision.
-      if (isMutatingToolCall(tc.name, tc.arguments) && !result.isError) {
+      // Post-edit verification policy: after any file mutation, run the
+      // detected typecheck so the model sees compile errors immediately
+      // without needing to call run_command itself. Skipped entirely when
+      // the project has no typecheck (plain JS, Bash repo, etc.) — running
+      // `tsc` against a non-TS project produces noise and 30s waits.
+      if (autoVerifyCmd && isMutatingToolCall(tc.name, tc.arguments) && !result.isError) {
         try {
           const { execSync: execSyncVerify } = await import('node:child_process');
-          const verifyCmd = session.repoMap?.commands?.typecheck || 'npx tsc --noEmit 2>&1 | tail -20';
-          const verifyResult = execSyncVerify(verifyCmd, {
+          const verifyResult = execSyncVerify(autoVerifyCmd, {
             cwd: workingDir,
             encoding: 'utf-8',
             timeout: 30_000,

@@ -41,9 +41,11 @@ export function verify(workingDir: string, repoMap?: RepoMap): VerificationResul
 }
 
 /**
- * Auto-detect build/test/lint commands from project files.
+ * Auto-detect build/test/lint commands from project files. Exported so the
+ * agent loop's per-edit auto-verify can reuse the same detection instead of
+ * hardcoding `tsc --noEmit` for every project.
  */
-function detectCommands(workingDir: string): RepoMap['commands'] {
+export function detectCommands(workingDir: string): RepoMap['commands'] {
   // fs and path imported at top level
   const commands: RepoMap['commands'] = {};
 

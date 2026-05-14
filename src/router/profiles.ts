@@ -26,6 +26,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import type { ProviderId } from '../types.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -63,6 +64,15 @@ export interface BudgetProfile {
    * registry (enabled or not) or routing will fall through.
    */
   rolePinning?: Record<string, string>;
+  /**
+   * Restrict routing to a subset of providers. Applied to the intent
+   * router, rule router, classifier LLM, and compactor — nothing escapes
+   * to a provider outside this list. When unset, the scope is derived
+   * automatically from `rolePinning` (use that for the common case;
+   * declare this explicitly when you want a provider allow-list that's
+   * broader than the pinned models).
+   */
+  allowedProviders?: ProviderId[];
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +127,79 @@ const BUILTIN_PROFILES: Record<string, BudgetProfile> = {
     includeVerification: true,
     preferLocal: true,
     maxOutputTokens: 4_096,
+  },
+  zai: {
+    name: 'zai',
+    description: 'Z.AI (GLM) Coding Plan — glm-5.1 plans, glm-4.6 codes, glm-4.5-flash compresses (free)',
+    planningPreference: ['planning', 'reasoning', 'analysis', 'code-review'],
+    executionPreference: ['coding', 'fast-coding', 'general'],
+    reviewPreference: ['code-review', 'analysis', 'reasoning'],
+    contextBudget: 30_000,
+    maxIterations: 20,
+    loopCostCap: 3.00,
+    loopIterationCap: 20,
+    promotionThreshold: 2,
+    includeReflection: true,
+    includeVerification: true,
+    preferLocal: false,
+    maxOutputTokens: 8_192,
+    allowedProviders: ['zai'],
+    rolePinning: {
+      discuss: 'glm-5.1',
+      dispatch: 'glm-5.1',
+      execute: 'glm-4.6',
+      reflect: 'glm-5.1',
+      compress: 'glm-4.5-flash',
+      state_update: 'glm-4.5-flash',
+    },
+  },
+  'best-value': {
+    name: 'best-value',
+    description: 'Sonnet for chat/review, GPT-5.4 plans, Gemini codes (free), GLM-flash compresses (free)',
+    planningPreference: ['planning', 'reasoning', 'architecture', 'analysis'],
+    executionPreference: ['coding', 'fast-coding', 'refactoring'],
+    reviewPreference: ['code-review', 'analysis', 'reasoning'],
+    contextBudget: 40_000,
+    maxIterations: 24,
+    loopCostCap: 5.00,
+    loopIterationCap: 24,
+    promotionThreshold: 2,
+    includeReflection: true,
+    includeVerification: true,
+    preferLocal: false,
+    maxOutputTokens: 8_192,
+    rolePinning: {
+      discuss: 'claude-sonnet-4-5-20250929',
+      dispatch: 'gpt-5.4',
+      execute: 'models/gemini-2.5-pro',
+      reflect: 'claude-sonnet-4-5-20250929',
+      compress: 'glm-4.5-flash',
+      state_update: 'glm-4.5-flash',
+    },
+  },
+  orchestra: {
+    name: 'orchestra',
+    description: 'Multi-provider role pipeline — GPT-5.4 plans, Gemini codes, GLM-5.1 reviews',
+    planningPreference: ['planning', 'reasoning', 'analysis'],
+    executionPreference: ['coding', 'fast-coding', 'general'],
+    reviewPreference: ['code-review', 'analysis', 'reasoning'],
+    contextBudget: 40_000,
+    maxIterations: 24,
+    loopCostCap: 5.00,
+    loopIterationCap: 24,
+    promotionThreshold: 2,
+    includeReflection: true,
+    includeVerification: true,
+    preferLocal: false,
+    maxOutputTokens: 8_192,
+    rolePinning: {
+      discuss: 'gpt-5.4',
+      dispatch: 'gpt-5.4',
+      execute: 'models/gemini-2.5-pro',
+      reflect: 'glm-5.1',
+      compress: 'glm-4.5-flash',
+      state_update: 'glm-4.5-flash',
+    },
   },
 };
 

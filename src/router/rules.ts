@@ -127,8 +127,10 @@ export class RuleRouter {
     switch (phase) {
       case 'discuss':
       case 'dispatch':
-      case 'reflect':
         return this.selectForReasoning();
+
+      case 'reflect':
+        return this.selectForReview();
 
       case 'execute':
         return this.selectForExecution(taskKind);
@@ -235,6 +237,24 @@ export class RuleRouter {
           || this.fallback();
         return { model: defaultModel, reason: `${taskKind || 'unknown'} task — default`, promoted: false };
     }
+  }
+
+  private selectForReview(): RouteDecision {
+    // Honor the profile's reviewPreference capability list when set;
+    // otherwise fall back to the reasoning path so reflect still gets a
+    // strong model. Profiles with `reviewPreference: []` (e.g. `cheap`)
+    // skip directly to the reasoning fallback — that's the documented
+    // "no separate reviewer" behavior.
+    if (this.profile && this.profile.reviewPreference.length > 0) {
+      const selector = this.profile.preferLocal
+        ? (cap: string) => this.reg().getCheapest(cap)
+        : (cap: string) => this.reg().getBest(cap);
+      for (const cap of this.profile.reviewPreference) {
+        const model = selector(cap);
+        if (model) return { model, reason: `${this.profile.name}: review ${cap}`, promoted: false };
+      }
+    }
+    return this.selectForReasoning();
   }
 
   private selectForCheap(): RouteDecision {

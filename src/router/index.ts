@@ -104,12 +104,15 @@ export class Router {
   setProfileScope(scope: {
     classifier?: { provider: ProviderId; model: string };
     rolePinning?: Record<string, string>;
+    /** Explicit provider allow-list from the profile. Takes precedence
+     *  over the auto-derived one when set. */
+    allowedProviders?: ProviderId[];
   }): void {
-    // Derive allowedProviders from rolePinning automatically.
-    // The profile declares models, and the providers follow from those.
-    // No separate allowedProviders field needed.
-    let allowedProviders: ProviderId[] | undefined;
-    if (scope.rolePinning) {
+    // Prefer the profile's explicit allowedProviders. Otherwise derive
+    // it from rolePinning so a profile with only pins still gets scoped
+    // routing for free.
+    let allowedProviders: ProviderId[] | undefined = scope.allowedProviders;
+    if (!allowedProviders && scope.rolePinning) {
       const providers = new Set<ProviderId>();
       for (const modelId of Object.values(scope.rolePinning)) {
         const m = this.registry.getById(modelId);

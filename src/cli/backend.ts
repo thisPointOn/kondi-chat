@@ -190,6 +190,7 @@ async function main() {
     router.setProfileScope({
       classifier: cheap ? { provider: cheap.provider, model: cheap.id } : undefined,
       rolePinning: p.rolePinning,
+      allowedProviders: p.allowedProviders,
     });
   };
   applyProfileScope();
