@@ -28,16 +28,21 @@ Supported platforms: Linux x64/arm64, macOS x64/arm64, Windows x64.
 
 ## Configure
 
-Set at least one provider API key. The router auto-excludes providers without keys.
+Set at least one provider API key — you don't need all of them. The router auto-excludes providers without keys, so a missing key is never an error.
+
+**Recommended: a `.env` file.** Put one `KEY=value` per line. kondi-chat reads `.env` from the directory you launched it in, from `~/.kondi-chat/.env` (a global file — set keys once, use them everywhere), and from the install directory.
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-export OPENAI_API_KEY=sk-proj-...
-export GOOGLE_API_KEY=...        # Gemini — free tier is generous
-export DEEPSEEK_API_KEY=...      # DeepSeek V3 — ~$0.27/M in, $1.10/M out
-export ZAI_API_KEY=...           # Z.AI (GLM) Coding Plan — free GLM-4.5-flash
-export XAI_API_KEY=...           # Grok
+# ~/.kondi-chat/.env
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-proj-...
+GOOGLE_API_KEY=...               # Gemini — free tier is generous
+DEEPSEEK_API_KEY=...             # DeepSeek V3 — ~$0.27/M in, $1.10/M out
+ZAI_API_KEY=...                  # Z.AI (GLM) Coding Plan — free GLM-4.5-flash
+XAI_API_KEY=...                  # Grok
 ```
+
+Or `export` the same variables in your shell for a one-off / CI run.
 
 Supported providers: Anthropic, OpenAI, DeepSeek, Google (Gemini), xAI (Grok), Z.AI (GLM), Ollama (local).
 
@@ -140,6 +145,6 @@ kondi-chat --sessions         # list sessions for this directory
 - **Sub-agents** — the agent can `spawn_agent` to delegate focused subtasks (research / worker / planner roles).
 - **Consultants** — domain-expert personas (aerospace engineer, security auditor, database architect) the agent can call via the `consult` tool. Configure in `.kondi-chat/consultants.json`. See [configuration.md#consultantsjson](configuration.md#consultantsjson).
 - **Autonomous `/loop`** — `/loop <goal>` runs until the model emits `DONE` / `STUCK` or LoopGuard caps trip. See `/help /loop`.
-- **Councils** — `/council run <profile> <brief>` fans out to multi-model deliberation. Explicit-only: the agent cannot auto-invoke councils.
+- **Councils** *(advanced, optional)* — `/council run <profile> <brief>` fans out to multi-model deliberation. Explicit-only: the agent cannot auto-invoke councils. Requires the separate `kondi-council` repo cloned as a sibling directory (`../kondi-council`); skip it if you don't need councils.
 
 Run `/help` inside the TUI for the full topic index.

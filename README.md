@@ -76,6 +76,38 @@ npm run chat:tui                        # run the TUI
 
 Requires Node 18+ and a Rust toolchain. Supported platforms: Linux x64/arm64, macOS x64/arm64, Windows x64.
 
+## Set up your API keys
+
+kondi-chat talks to whatever providers you have a key for, and **skips the rest** — you do not need every key. One is enough to start.
+
+The friendliest free path: a **Google AI Studio** key (free Gemini tier) plus a **Z.AI Coding Plan** key (free GLM-4.5-flash). Each provider issues keys from its own developer console — Anthropic, OpenAI, Google AI Studio, DeepSeek, xAI, and Z.AI all have one.
+
+You can supply keys two ways:
+
+**Option A — a `.env` file (recommended, persists across runs).** Create a file named `.env` with one `KEY=value` per line. kondi-chat reads it from three places, checked in order:
+
+1. the project directory you launched `kondi-chat` from,
+2. `~/.kondi-chat/.env` — a **global** file, set your keys once and they work in every project,
+3. the kondi-chat install directory.
+
+```bash
+# ~/.kondi-chat/.env  — set once, used everywhere
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-proj-...
+GOOGLE_API_KEY=...
+ZAI_API_KEY=...
+# DEEPSEEK_API_KEY, XAI_API_KEY, BRAVE_SEARCH_API_KEY are all optional
+```
+
+**Option B — environment variables.** `export` them in your shell before launching (handy for CI or one-off runs):
+
+```bash
+export GOOGLE_API_KEY=...
+kondi-chat
+```
+
+See the [full variable list](#environment-variables) for every supported key.
+
 ## Quick start
 
 Pick the cheapest path that matches what you have:
@@ -135,14 +167,18 @@ Run `/routing` at any time to see the tier distribution (intent/nn/rules), per-m
 
 ### Budget profiles
 
+A **mode is a budget profile** — a named bundle of cost caps, iteration caps, and model preferences. You switch modes with `/mode`; the words "mode" and "profile" mean the same thing. kondi-chat ships these:
+
 | Mode | Use case | Iteration cap | Cost cap |
 |------|----------|--------------|----------|
 | `quality` | Complex architecture, frontier reasoning | 30 | $10.00 |
 | `balanced` | Everyday coding and chat (default) | 20 | $3.00 |
 | `cheap` | Quick lookups, high-volume exploration | 8 | $0.75 |
 | `zai` | Z.AI (GLM) Coding Plan — glm-5.1 plans, glm-4.6 codes, glm-4.5-flash compresses (free) | 20 | $3.00 |
+| `best-value` | Multi-provider routing — Sonnet/GPT-5.4 plan, Gemini codes (free), Sonnet reviews | 24 | $5.00 |
+| `orchestra` | Deterministic pipeline — GPT-5.4 plans, Gemini codes, GLM-5.1 reviews | 24 | $5.00 |
 
-Switch at any time: `/mode quality`. The active profile is persisted to `.kondi-chat/config.json` so it survives restarts.
+Run `/mode` with no argument to see the list and which one is active. Switch at any time: `/mode quality`. The active profile is persisted to `.kondi-chat/config.json` so it survives restarts.
 
 **Provider scoping.** A profile can restrict routing to a subset of providers by setting `allowedProviders`. When set, the intent router, rule router, cross-turn compactor, and intent classifier LLM all stay inside that allow-list — nothing leaks out. See the `zai` profile for an example.
 
@@ -218,15 +254,18 @@ The agent has access to:
 | `web_fetch` | Fetch and extract web page content |
 | `spawn_agent` | Spawn sub-agents for parallel work |
 
-### Council deliberation
+### Council deliberation (advanced, optional)
+
+> **Requires a separate repo.** Councils are run by a companion project, `kondi-council`, which is **not bundled** with kondi-chat. To use councils, clone `kondi-council` as a sibling directory next to `kondi-chat` (so it sits at `../kondi-council`). Without it, `/council run` reports an error — every other feature works fine without it. Beginners can skip this section entirely.
 
 For decisions that matter, run a multi-model council explicitly:
 
 ```
-/council run architecture "Should we use microservices or a monolith for this project?"
+/council list                                  # see configured council profiles
+/council run analysis "Should we use microservices or a monolith here?"
 ```
 
-Multiple models debate the question across several rounds, with a manager model synthesizing the final recommendation. Profiles control which models participate, how many rounds, and the debate format.
+Multiple models debate the question across several rounds, with a manager model synthesizing the final recommendation. Council profiles live in `.kondi-chat/councils/*.json` (presets are written on first run) and control which models participate, how many rounds, and the debate format.
 
 **Councils are explicit-only.** The agent cannot auto-invoke a council — `COUNCIL_TOOL` is deliberately **not** registered in the agent toolset. Councils are expensive (fan out across frontier models for multiple rounds) and blocking (synchronous subprocess) so they only run when the user types `/council` themselves.
 
@@ -426,7 +465,7 @@ Markdown tables in assistant responses are rendered with box-drawing characters.
 
 ### Environment variables
 
-Create a `.env` file in the project root or export directly:
+Set these in a `.env` file or `export` them — see [Set up your API keys](#set-up-your-api-keys) for where `.env` is read from. The router auto-excludes any provider whose key is missing, so an unset variable is never an error.
 
 | Variable | Provider |
 |----------|----------|
