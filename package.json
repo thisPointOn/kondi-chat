@@ -1,6 +1,6 @@
 {
   "name": "@thispointon/kondi-chat",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Multi-model AI coding CLI with intelligent routing, budget profiles, and council deliberation",
   "license": "MIT",
   "type": "module",
