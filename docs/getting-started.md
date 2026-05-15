@@ -145,6 +145,6 @@ kondi-chat --sessions         # list sessions for this directory
 - **Sub-agents** — the agent can `spawn_agent` to delegate focused subtasks (research / worker / planner roles).
 - **Consultants** — domain-expert personas (aerospace engineer, security auditor, database architect) the agent can call via the `consult` tool. Configure in `.kondi-chat/consultants.json`. See [configuration.md#consultantsjson](configuration.md#consultantsjson).
 - **Autonomous `/loop`** — `/loop <goal>` runs until the model emits `DONE` / `STUCK` or LoopGuard caps trip. See `/help /loop`.
-- **Councils** *(advanced, optional)* — `/council run <profile> <brief>` fans out to multi-model deliberation. Explicit-only: the agent cannot auto-invoke councils. Requires the separate `kondi-council` repo cloned as a sibling directory (`../kondi-council`); skip it if you don't need councils.
+- **Councils** — `/council run <profile> <brief>` fans out to multi-model deliberation. Explicit-only: the agent cannot auto-invoke councils. The deliberation engine is bundled; profiles live in `.kondi-chat/councils/*.json`.
 
 Run `/help` inside the TUI for the full topic index.

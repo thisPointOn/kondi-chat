@@ -53,7 +53,6 @@ export interface CommandDeps {
   profiles: ProfileManager;
   router: UnifiedRouter;
   councilProfiles: CouncilProfileManager;
-  councilPath: string;
   analytics: Analytics;
   checkpointManager: CheckpointManager;
   sessionStore: SessionStore;
@@ -68,7 +67,7 @@ export async function handleCommand(input: string, deps: CommandDeps): Promise<s
   const {
     session, contextManager, ledger, registry, collector, toolCtx,
     mcpClient, toolManager, workingDir,
-    profiles, router, councilProfiles, councilPath, analytics,
+    profiles, router, councilProfiles, analytics,
     checkpointManager, sessionStore, rateLimiter, pendingImages, telemetry, emit,
   } = deps;
 
@@ -254,7 +253,7 @@ export async function handleCommand(input: string, deps: CommandDeps): Promise<s
       if (parts[1] === 'run' && parts[2]) {
         const brief = parts.slice(3).join(' ');
         if (!brief) return 'Usage: /council run <profile> <brief>';
-        const result = await executeCouncil(parts[2], brief, [], workingDir, councilPath, councilProfiles);
+        const result = await executeCouncil(parts[2], brief, [], workingDir, councilProfiles);
         return result.content;
       }
       return 'Usage: /council [list|run <profile> <brief>]';

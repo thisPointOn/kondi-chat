@@ -1,121 +1,70 @@
 /**
- * Council Profiles — stored configurations for different council types.
+ * Council Profiles — configurations for the `/council` command.
  *
- * Each profile defines:
- *   - Council type (coding, analysis, debate, review)
- *   - Persona assignments (which models for manager, consultants, workers)
- *   - Cost tier (cheap vs quality — affects model selection and round count)
- *   - Max rounds, max tokens, output format
+ * A council profile is a kondi-council engine config file: a set of
+ * personas (manager / consultants / worker) plus orchestration settings.
+ * The deliberation engine itself is bundled at `src/council-engine/`.
  *
- * Profiles are stored in .kondi-chat/councils/ as JSON files.
- * Presets are generated on first run; users can create custom ones.
+ * Presets are seeded on first run by copying the engine's curated
+ * configs (`src/council-engine/configs/councils/*.json`) into
+ * `.kondi-chat/councils/`. Users can edit those or add their own JSON
+ * files there; the filename (without `.json`) is the profile id passed
+ * to `/council run <id>`.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, existsSync, mkdirSync, readdirSync, copyFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // ---------------------------------------------------------------------------
-// Types
+// Types — mirror the engine's CouncilConfigFile
+// (see src/council-engine/cli/council-config.ts). Kept as a local copy
+// because the engine subtree is excluded from kondi-chat's typecheck.
 // ---------------------------------------------------------------------------
 
-export interface CouncilProfile {
-  /** Profile name (filename without .json) */
+export interface CouncilPersona {
   name: string;
-  /** Description shown in /council list */
-  description: string;
-  /** Council type passed to kondi-council CLI */
-  councilType: 'coding' | 'analysis' | 'debate' | 'review' | 'custom';
-  /** Cost tier — affects model selection */
-  tier: 'cheap' | 'balanced' | 'quality';
-
-  /** Model assignments */
-  manager: { provider: string; model?: string };
-  consultants: Array<{ provider: string; model?: string; stance?: string }>;
-  worker?: { provider: string; model?: string };
-
-  /** Deliberation settings */
-  maxRounds: number;
-  maxOutputTokens: number;
-
-  /** Extra args passed to kondi-council CLI */
-  extraArgs?: string[];
+  role: 'manager' | 'worker' | 'consultant' | 'reviewer';
+  provider?: string;
+  model?: string;
+  avatar?: string;
+  systemPrompt?: string;
+  traits?: string[];
+  stance?: 'advocate' | 'critic' | 'neutral' | 'wildcard';
+  domain?: string;
+  temperature?: number;
+  suppressPersona?: boolean;
+  toolAccess?: 'full' | 'none';
 }
 
-// ---------------------------------------------------------------------------
-// Default profiles
-// ---------------------------------------------------------------------------
+export interface CouncilProfile {
+  /** Human-readable council title. */
+  name: string;
+  /** Council type — council, coding, analysis, review, agent, code_planning. */
+  type?: string;
+  personas: CouncilPersona[];
+  orchestration?: {
+    maxRounds?: number;
+    maxRevisions?: number;
+    contextTokenBudget?: number;
+    summarizeAfterRound?: number;
+    consultantExecution?: 'sequential' | 'parallel';
+    evolveContext?: boolean;
+    bootstrapContext?: boolean;
+  };
+  output?: { format?: string; directory?: string; sessionExport?: boolean };
+  expectedOutput?: string;
+  decisionCriteria?: string[];
+  testCommand?: string;
+  maxDebugCycles?: number;
+  maxReviewCycles?: number;
+}
 
-const PRESETS: CouncilProfile[] = [
-  {
-    name: 'coding-cheap',
-    description: 'Code generation council — cheap models, fast turnaround',
-    councilType: 'coding',
-    tier: 'cheap',
-    manager: { provider: 'openai-api', model: 'gpt-5.4-nano' },
-    consultants: [
-      { provider: 'ollama', model: 'qwen2.5:3b', stance: 'advocate' },
-      { provider: 'ollama', model: 'phi3.5:3.8b', stance: 'critic' },
-    ],
-    worker: { provider: 'ollama', model: 'qwen2.5:3b' },
-    maxRounds: 2,
-    maxOutputTokens: 4096,
-  },
-  {
-    name: 'coding-quality',
-    description: 'Code generation council — frontier models, thorough review',
-    councilType: 'coding',
-    tier: 'quality',
-    manager: { provider: 'anthropic-api', model: 'claude-sonnet-4-5-20250929' },
-    consultants: [
-      { provider: 'openai-api', model: 'gpt-5.4', stance: 'advocate' },
-      { provider: 'anthropic-api', model: 'claude-sonnet-4-5-20250929', stance: 'critic' },
-      { provider: 'openai-api', model: 'gpt-5.4', stance: 'wildcard' },
-    ],
-    worker: { provider: 'openai-api', model: 'gpt-5.4' },
-    maxRounds: 3,
-    maxOutputTokens: 16384,
-  },
-  {
-    name: 'analysis',
-    description: 'Code analysis — architecture review, security audit, tech debt',
-    councilType: 'analysis',
-    tier: 'balanced',
-    manager: { provider: 'openai-api', model: 'gpt-5.4' },
-    consultants: [
-      { provider: 'anthropic-api', model: 'claude-sonnet-4-5-20250929', stance: 'advocate' },
-      { provider: 'openai-api', model: 'gpt-5.4', stance: 'critic' },
-    ],
-    maxRounds: 2,
-    maxOutputTokens: 8192,
-  },
-  {
-    name: 'debate',
-    description: 'Open debate — models argue positions on a topic',
-    councilType: 'debate',
-    tier: 'balanced',
-    manager: { provider: 'openai-api', model: 'gpt-5.4' },
-    consultants: [
-      { provider: 'anthropic-api', model: 'claude-sonnet-4-5-20250929', stance: 'advocate' },
-      { provider: 'openai-api', model: 'gpt-5.4', stance: 'critic' },
-      { provider: 'ollama', model: 'nemotron-3-nano:4b', stance: 'wildcard' },
-    ],
-    maxRounds: 3,
-    maxOutputTokens: 8192,
-  },
-  {
-    name: 'security-review',
-    description: 'Security-focused code review — finds vulnerabilities',
-    councilType: 'review',
-    tier: 'quality',
-    manager: { provider: 'anthropic-api', model: 'claude-sonnet-4-5-20250929' },
-    consultants: [
-      { provider: 'openai-api', model: 'gpt-5.4', stance: 'critic' },
-      { provider: 'anthropic-api', model: 'claude-sonnet-4-5-20250929', stance: 'critic' },
-    ],
-    maxRounds: 2,
-    maxOutputTokens: 8192,
-  },
-];
+/** Bundled engine presets — copied into .kondi-chat/councils/ on first run. */
+const ENGINE_PRESETS_DIR = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..', 'council-engine', 'configs', 'councils',
+);
 
 // ---------------------------------------------------------------------------
 // Profile manager
@@ -130,90 +79,58 @@ export class CouncilProfileManager {
     this.ensurePresets();
   }
 
-  /** Get all available profiles */
-  getAll(): CouncilProfile[] {
-    const files = readdirSync(this.profileDir).filter(f => f.endsWith('.json'));
-    return files.map(f => {
-      try {
-        return JSON.parse(readFileSync(join(this.profileDir, f), 'utf-8'));
-      } catch {
-        return null;
-      }
-    }).filter(Boolean) as CouncilProfile[];
+  /** Profile ids — the JSON filenames (without extension) in the dir. */
+  ids(): string[] {
+    return readdirSync(this.profileDir)
+      .filter(f => f.endsWith('.json'))
+      .map(f => f.slice(0, -5))
+      .sort();
   }
 
-  /** Get a specific profile by name */
-  get(name: string): CouncilProfile | undefined {
-    const path = join(this.profileDir, `${name}.json`);
+  /** Load a profile by id. Returns undefined for unknown / invalid files. */
+  get(id: string): CouncilProfile | undefined {
+    const path = this.getPath(id);
     if (!existsSync(path)) return undefined;
     try {
-      return JSON.parse(readFileSync(path, 'utf-8'));
+      return JSON.parse(readFileSync(path, 'utf-8')) as CouncilProfile;
     } catch {
       return undefined;
     }
   }
 
-  /** Save a profile */
-  save(profile: CouncilProfile): void {
-    const path = join(this.profileDir, `${profile.name}.json`);
-    writeFileSync(path, JSON.stringify(profile, null, 2));
+  /** Absolute path to a profile's config file (passed to the engine). */
+  getPath(id: string): string {
+    return join(this.profileDir, `${id}.json`);
   }
 
-  /** Delete a profile */
-  delete(name: string): boolean {
-    const path = join(this.profileDir, `${name}.json`);
-    if (!existsSync(path)) return false;
-    unlinkSync(path);
-    return true;
-  }
-
-  /** Format for display */
+  /** Human-readable roster for `/council list`. */
   format(): string {
-    const profiles = this.getAll();
-    if (profiles.length === 0) return 'No council profiles configured.';
-
-    const lines: string[] = ['Council Profiles:'];
-    for (const p of profiles) {
-      const consultantNames = p.consultants.map(c => `${c.model || c.provider}(${c.stance || 'neutral'})`).join(', ');
+    const ids = this.ids();
+    if (ids.length === 0) return 'No council profiles configured.';
+    const lines: string[] = ['Council profiles — run with /council run <id> "<brief>":'];
+    for (const id of ids) {
+      const p = this.get(id);
+      if (!p) continue;
+      const rounds = p.orchestration?.maxRounds ?? '?';
+      const roster = p.personas.map(x => `${x.name}(${x.role})`).join(', ');
       lines.push('');
-      lines.push(`  ${p.name} [${p.tier}] — ${p.description}`);
-      lines.push(`    Type: ${p.councilType} | Rounds: ${p.maxRounds} | Max tokens: ${p.maxOutputTokens.toLocaleString()}`);
-      lines.push(`    Manager: ${p.manager.model || p.manager.provider}`);
-      lines.push(`    Consultants: ${consultantNames}`);
-      if (p.worker) lines.push(`    Worker: ${p.worker.model || p.worker.provider}`);
+      lines.push(`  ${id} — ${p.name}`);
+      lines.push(`    Type: ${p.type || 'council'} | Rounds: ${rounds} | ${p.personas.length} personas`);
+      lines.push(`    ${roster}`);
     }
     return lines.join('\n');
   }
 
-  /** Build CLI args for kondi-council from a profile */
-  buildArgs(profile: CouncilProfile, brief: string, workingDir: string): string[] {
-    const args = [
-      '--config', profile.councilType,
-      '--problem', brief,
-      '--dir', workingDir,
-      '--max-rounds', String(profile.maxRounds),
-      '--json-stdout',
-    ];
-
-    // Manager provider/model
-    args.push('--manager-provider', profile.manager.provider);
-    if (profile.manager.model) args.push('--manager-model', profile.manager.model);
-
-    // Extra args
-    if (profile.extraArgs) args.push(...profile.extraArgs);
-
-    return args;
-  }
-
-  // -------------------------------------------------------------------------
-  // Private
-  // -------------------------------------------------------------------------
-
+  /**
+   * Seed presets from the bundled engine configs. Only copies files that
+   * don't already exist, so user edits to a preset are never clobbered.
+   */
   private ensurePresets(): void {
-    for (const preset of PRESETS) {
-      const path = join(this.profileDir, `${preset.name}.json`);
-      if (!existsSync(path)) {
-        writeFileSync(path, JSON.stringify(preset, null, 2));
+    if (!existsSync(ENGINE_PRESETS_DIR)) return;
+    for (const file of readdirSync(ENGINE_PRESETS_DIR).filter(f => f.endsWith('.json'))) {
+      const dest = join(this.profileDir, file);
+      if (!existsSync(dest)) {
+        copyFileSync(join(ENGINE_PRESETS_DIR, file), dest);
       }
     }
   }

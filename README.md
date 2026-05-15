@@ -254,18 +254,16 @@ The agent has access to:
 | `web_fetch` | Fetch and extract web page content |
 | `spawn_agent` | Spawn sub-agents for parallel work |
 
-### Council deliberation (advanced, optional)
-
-> **Requires a separate repo.** Councils are run by a companion project, `kondi-council`, which is **not bundled** with kondi-chat. To use councils, clone `kondi-council` as a sibling directory next to `kondi-chat` (so it sits at `../kondi-council`). Without it, `/council run` reports an error — every other feature works fine without it. Beginners can skip this section entirely.
+### Council deliberation
 
 For decisions that matter, run a multi-model council explicitly:
 
 ```
-/council list                                  # see configured council profiles
+/council list                                  # see available council profiles
 /council run analysis "Should we use microservices or a monolith here?"
 ```
 
-Multiple models debate the question across several rounds, with a manager model synthesizing the final recommendation. Council profiles live in `.kondi-chat/councils/*.json` (presets are written on first run) and control which models participate, how many rounds, and the debate format.
+Multiple models debate the question across several rounds, with a manager model synthesizing the final recommendation. The deliberation engine is **bundled** — no extra install. Council profiles live in `.kondi-chat/councils/*.json` (curated presets — `coding`, `analysis`, `debate`, `code-planning` — are seeded on first run); each one defines the personas that participate, their models and stances, how many rounds run, and the debate format. Edit those files or drop in your own.
 
 **Councils are explicit-only.** The agent cannot auto-invoke a council — `COUNCIL_TOOL` is deliberately **not** registered in the agent toolset. Councils are expensive (fan out across frontier models for multiple rounds) and blocking (synchronous subprocess) so they only run when the user types `/council` themselves.
 
@@ -487,6 +485,7 @@ All configuration lives in `.kondi-chat/` in the project root:
   config.json           # General settings
   permissions.json      # Tool permission tiers
   profiles/             # Budget profiles (quality.json, balanced.json, cheap.json, + custom)
+  councils/             # Council profiles (coding.json, analysis.json, debate.json, + custom)
   models.yml            # Model registry
   sessions/             # Saved sessions
   analytics.json        # Usage data

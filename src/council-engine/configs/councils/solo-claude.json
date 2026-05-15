@@ -1,0 +1,34 @@
+{
+  "name": "Claude Solo Review",
+  "type": "analysis",
+  "personas": [
+    {
+      "name": "Reviewer",
+      "role": "manager",
+      "provider": "anthropic-api",
+      "model": "claude-sonnet-4-5-20250929",
+      "systemPrompt": "You are a security auditor. Frame the security review task clearly.",
+      "traits": ["thorough"],
+      "suppressPersona": true
+    },
+    {
+      "name": "Analyst",
+      "role": "worker",
+      "provider": "anthropic-api",
+      "model": "claude-sonnet-4-5-20250929",
+      "systemPrompt": "You are a security auditor and code reviewer. The source code is provided in the context above. Analyze it directly and list every security vulnerability, performance issue, and code quality problem you find. Include file paths and severity (critical/high/medium/low) for each issue.",
+      "traits": ["thorough", "security-focused"],
+      "suppressPersona": true
+    }
+  ],
+  "orchestration": {
+    "maxRounds": 1,
+    "maxRevisions": 0,
+    "contextTokenBudget": 120000,
+    "bootstrapContext": true
+  },
+  "output": {
+    "format": "full",
+    "sessionExport": false
+  }
+}

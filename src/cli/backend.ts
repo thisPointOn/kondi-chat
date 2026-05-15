@@ -161,7 +161,8 @@ async function main() {
   }
 
   const councilProfiles = new CouncilProfileManager(storageDir);
-  const councilPath = resolve(workingDir, '../kondi-council');
+  // The kondi-council deliberation engine is bundled at src/council-engine/;
+  // executeCouncil resolves it relative to its own module path.
   // Councils are expensive (fan out to multiple frontier models for
   // multi-round deliberation) and blocking (synchronous subprocess).
   // They must NEVER be auto-invokable by the agent — the model must not
@@ -439,7 +440,7 @@ async function main() {
       const output = await handleCommand(cmd.text, {
         session, contextManager, ledger, registry, collector, toolCtx,
         mcpClient, toolManager,
-        workingDir, profiles, router, councilProfiles, councilPath,
+        workingDir, profiles, router, councilProfiles,
         analytics, checkpointManager, sessionStore, rateLimiter,
         pendingImages, telemetry, emit,
       });
