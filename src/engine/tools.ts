@@ -15,7 +15,8 @@ function isPathSafe(base: string, fullPath: string): boolean {
   const rel = relative(base, fullPath);
   return !rel.startsWith('..') && !resolve(fullPath).includes('\0');
 }
-import { execSync, execFileSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
+import { walkFiles } from '../util/fs-walk.ts';
 import type { ToolDefinition, Session, TaskKind } from '../types.ts';
 import type { Ledger } from '../audit/ledger.ts';
 import { runPipeline, type PipelineConfig } from './pipeline.ts';
@@ -503,15 +504,8 @@ function toolListFiles(
 
   if (recursive) {
     try {
-      const output = execSync(
-        `find . -maxdepth 4 -type f ` +
-        `-not -path '*/node_modules/*' -not -path '*/.git/*' ` +
-        `-not -path '*/target/*' -not -path '*/__pycache__/*' ` +
-        `-not -path '*/.next/*' -not -path '*/dist/*' ` +
-        `| sort | head -100`,
-        { cwd: fullPath, encoding: 'utf-8', timeout: 10_000 },
-      ).trim();
-      return { content: output || '(empty directory)' };
+      const files = walkFiles(fullPath, { maxDepth: 4, maxFiles: 100 });
+      return { content: files.join('\n') || '(empty directory)' };
     } catch {
       return { content: '(failed to list files)', isError: true };
     }
@@ -546,41 +540,61 @@ function toolSearchCode(
 
   // process.stderr.write(`[tool] search_code: "${pattern}" in ${relPath}\n`);
 
-  // Sanitize glob (defense-in-depth even though execFileSync skips the shell).
-  const safeGlob = glob ? glob.replace(/[^a-zA-Z0-9.*?_\-\/]/g, '') : '';
-  const grepArgs: string[] = [
-    '-rnE',                       // recursive, line numbers, extended regex
-    '--exclude-dir=node_modules',
-    '--exclude-dir=.git',
-  ];
-  if (safeGlob) grepArgs.push(`--include=${safeGlob}`);
-  grepArgs.push('-e', pattern, searchPath);
-
+  // Cross-platform content search — pure Node, no `grep` (absent on Windows).
+  let regex: RegExp;
   try {
-    const raw = execFileSync('grep', grepArgs, {
-      encoding: 'utf-8',
-      timeout: 15_000,
-      cwd: ctx.workingDir,
-      maxBuffer: 4 * 1024 * 1024,
-    });
-    const lines = raw.split('\n');
-    const head = lines.slice(0, 50).join('\n').trim();
-    return { content: head || 'No matches found.' };
+    regex = new RegExp(pattern);
+  } catch {
+    return {
+      content: `Invalid regex: ${pattern} — could not compile it. Escape special characters or simplify the pattern.`,
+      isError: true,
+    };
+  }
+
+  // Optional filename glob → a basename matcher.
+  let nameMatches: ((name: string) => boolean) | null = null;
+  if (glob) {
+    const safeGlob = glob.replace(/[^a-zA-Z0-9.*?_\-\/]/g, '');
+    if (safeGlob) {
+      const rx = '^' + safeGlob
+        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*/g, '.*')
+        .replace(/\?/g, '.') + '$';
+      const globRe = new RegExp(rx);
+      nameMatches = (name: string) => globRe.test(name);
+    }
+  }
+
+  const MAX_MATCHES = 50;
+  const results: string[] = [];
+  let files: string[];
+  try {
+    files = walkFiles(searchPath, { maxDepth: 12, maxFiles: 5000 });
   } catch (error: any) {
-    // grep returns exit code 1 for no matches.
-    if (error.status === 1) {
-      return { content: 'No matches found.' };
-    }
-    // Exit 2 = invalid regex / IO error. Surface a useful message rather
-    // than the raw shell complaint so the model can correct its pattern.
-    if (error.status === 2) {
-      return {
-        content: `Invalid regex: ${pattern} — grep -E rejected it. Try escaping special chars or use search_files for a literal lookup.`,
-        isError: true,
-      };
-    }
     return { content: `Search error: ${error.message}`, isError: true };
   }
+
+  for (const rel of files) {
+    if (results.length >= MAX_MATCHES) break;
+    const fileName = rel.split('/').pop() || rel;
+    if (nameMatches && !nameMatches(fileName)) continue;
+    let buf: Buffer;
+    try {
+      buf = readFileSync(join(searchPath, rel));
+    } catch {
+      continue;
+    }
+    if (buf.includes(0)) continue; // skip binary files
+    const lines = buf.toString('utf-8').split('\n');
+    for (let i = 0; i < lines.length && results.length < MAX_MATCHES; i++) {
+      if (regex.test(lines[i])) {
+        const text = lines[i].length > 240 ? lines[i].slice(0, 240) + '…' : lines[i];
+        results.push(`${rel}:${i + 1}:${text}`);
+      }
+    }
+  }
+
+  return { content: results.length > 0 ? results.join('\n') : 'No matches found.' };
 }
 
 function toolRunCommand(

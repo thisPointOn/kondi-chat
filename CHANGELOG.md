@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Both launcher scripts now print a real `--help` listing every supported flag, slash command, and exit code. Previously only `--help`/`--version` were documented.
 - npm bundle no longer ships `src/**/*.test.ts`. Reduces tarball footprint and stops test code reaching end-users.
 
+## [0.1.3] - 2026-05-16
+
+### Fixed
+- **Windows: launcher missed the prebuilt TUI.** `bin/kondi-chat.js` looked for `kondi-tui`, but the postinstall writes `kondi-tui.exe` on Windows — so Windows always fell through to the Node backend. The launcher now resolves the platform-correct binary name.
+- **Windows: the Node-backend fallback ran `npx tsx`**, which in a global install can't see the package-local `tsx` and prompts to install it. It now resolves the bundled `tsx` and runs it with the current Node, via an argv array (no shell quoting pitfalls).
+- **Windows: Unix shell pipelines on the startup path.** Directory bootstrap and the `list_files` / `search_code` tools shelled out to `find | sort | head` and `grep` — none of which exist on Windows. Replaced with a pure-Node cross-platform file walk (`src/util/fs-walk.ts`) and an in-process content search.
+- **Windows: POSIX-only path check.** The bootstrap path-safety guard compared `startsWith(base + '/')`, which fails on backslash paths and could skip key files. Now uses a separator-agnostic `path.relative()` containment check.
+
 ## [0.1.2] - 2026-05-15
 
 ### Added

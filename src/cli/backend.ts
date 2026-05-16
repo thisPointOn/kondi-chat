@@ -100,7 +100,7 @@ async function main() {
   // Spec 16 — first-run setup wizard (non-interactive; safe on every start).
   runFirstRunWizard(storageDir);
   // Spec 16 — async update check; swallow failures. Don't block startup.
-  checkForUpdate('0.1.2').then(b => { if (b) emit({ type: 'status', text: b }); }).catch(() => {});
+  checkForUpdate('0.1.3').then(b => { if (b) emit({ type: 'status', text: b }); }).catch(() => {});
 
   // Spec 06 — session resume
   const sessionStore = new SessionStore(storageDir);

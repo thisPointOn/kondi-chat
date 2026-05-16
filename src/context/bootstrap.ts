@@ -5,9 +5,9 @@
  * Based on kondi-council's context-bootstrap.ts — simplified, two-tier.
  */
 
-import { execSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, relative, isAbsolute } from 'node:path';
+import { walkFiles } from '../util/fs-walk.ts';
 
 const MAX_FILE_SIZE = 2048;
 
@@ -54,19 +54,11 @@ export async function bootstrapDirectory(
     let fileList: string[] = [];
 
     try {
-      const raw = execSync(
-        `find . -maxdepth 4 -type f ` +
-        `-not -path '*/node_modules/*' -not -path '*/.git/*' ` +
-        `-not -path '*/target/*' -not -path '*/__pycache__/*' ` +
-        `-not -path '*/.next/*' -not -path '*/dist/*' ` +
-        `-not -path '*/package-lock.json' ` +
-        `| sort | head -${maxFiles}`,
-        { cwd: workingDir, encoding: 'utf-8', timeout: 10_000 },
-      ).trim();
-      tree = raw;
-      fileList = raw.split('\n').filter(Boolean);
+      fileList = walkFiles(workingDir, { maxDepth: 4, maxFiles })
+        .filter(f => f !== 'package-lock.json' && !f.endsWith('/package-lock.json'));
+      tree = fileList.join('\n');
     } catch {
-      // find failed, continue
+      // walk failed, continue
     }
 
     const files: Array<{ name: string; content: string }> = [];
@@ -125,9 +117,12 @@ export async function bootstrapDirectory(
 
 function safeRead(workingDir: string, base: string, fileName: string, maxSize: number): string | null {
   try {
-    const filePath = join(workingDir.replace(/\/$/, ''), fileName);
+    const filePath = join(workingDir, fileName);
     const resolved = resolve(filePath);
-    if (!resolved.startsWith(base + '/') && resolved !== base) return null;
+    // Cross-platform containment check — `startsWith(base + '/')` breaks on
+    // Windows backslash paths. relative() is separator-agnostic.
+    const rel = relative(base, resolved);
+    if (rel !== '' && (rel.startsWith('..') || isAbsolute(rel))) return null;
     if (!existsSync(filePath)) return null;
     const content = readFileSync(filePath, 'utf-8');
     if (!content) return null;

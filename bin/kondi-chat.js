@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 
-import { execFileSync, execSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, "..");
-const version = "0.1.2";
+const version = "0.1.3";
 
 const arg = process.argv[2];
 
@@ -49,7 +50,11 @@ if (arg === "--help" || arg === "-h") {
   process.exit(0);
 }
 
-const tuiBinary = join(projectRoot, "tui", "target", "release", "kondi-tui");
+// Windows postinstall writes kondi-tui.exe; POSIX writes kondi-tui.
+const tuiBinary = join(
+  projectRoot, "tui", "target", "release",
+  process.platform === "win32" ? "kondi-tui.exe" : "kondi-tui",
+);
 
 if (existsSync(tuiBinary)) {
   try {
@@ -58,12 +63,31 @@ if (existsSync(tuiBinary)) {
     process.exit(e.status ?? 1);
   }
 } else {
-  // Run the Node backend from the user's current working directory — NOT from
-  // the install dir. Setting cwd: projectRoot here would make the agent operate
-  // on the kondi-chat install instead of the user's project, which was the
-  // common failure mode for any install where the TUI binary download failed.
+  // No prebuilt TUI binary — run the Node backend directly. Resolve the
+  // package-local `tsx` (a declared dependency) and run it with the current
+  // Node, instead of `npx tsx`: in a global install `npx` can't see the
+  // package's local tsx and prompts to install it. execFileSync with an
+  // argv array also avoids shell quoting issues with user args on Windows.
+  //
+  // cwd is intentionally NOT set to projectRoot — the backend must operate
+  // on the user's working directory, not the kondi-chat install dir.
+  const backend = join(projectRoot, "src", "cli", "backend.ts");
+  let tsxCli;
   try {
-    execSync(`npx tsx ${join(projectRoot, "src", "cli", "backend.ts")} ${process.argv.slice(2).join(" ")}`, {
+    const require = createRequire(import.meta.url);
+    const tsxPkgPath = require.resolve("tsx/package.json");
+    const tsxPkg = JSON.parse(readFileSync(tsxPkgPath, "utf-8"));
+    const binRel = typeof tsxPkg.bin === "string" ? tsxPkg.bin : tsxPkg.bin.tsx;
+    tsxCli = join(dirname(tsxPkgPath), binRel);
+  } catch {
+    console.error(
+      "kondi-chat: could not locate the 'tsx' runtime inside the package. " +
+      "Try reinstalling: npm install -g @thispointon/kondi-chat",
+    );
+    process.exit(1);
+  }
+  try {
+    execFileSync(process.execPath, [tsxCli, backend, ...process.argv.slice(2)], {
       stdio: "inherit",
     });
   } catch (e) {
