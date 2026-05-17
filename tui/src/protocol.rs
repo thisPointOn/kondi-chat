@@ -84,6 +84,25 @@ pub enum BackendEvent {
     /// Spec 01 — backend gave up waiting on a pending permission.
     #[serde(rename = "permission_timeout")]
     PermissionTimeout { id: String, tool: String },
+
+    /// Key-setup wizard — ask the user to pick from a list (`step: "select"`)
+    /// or type a value (`step: "input"`, optionally `masked`).
+    #[serde(rename = "wizard_prompt")]
+    WizardPrompt {
+        id: String,
+        step: String,
+        title: String,
+        #[serde(default)]
+        options: Vec<String>,
+        #[serde(default)]
+        masked: bool,
+        #[serde(default)]
+        hint: String,
+    },
+
+    /// Key-setup wizard finished — dismiss the modal, show a closing note.
+    #[serde(rename = "wizard_done")]
+    WizardDone { message: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,6 +153,16 @@ pub enum TuiCommand {
     /// Spec 01 — user decision on a pending permission request.
     #[serde(rename = "permission_response")]
     PermissionResponse { id: String, decision: String },
+
+    /// User response to a wizard_prompt. For a "select" step `value` is the
+    /// zero-based option index; for "input" it's the typed text.
+    #[serde(rename = "wizard_response")]
+    WizardResponse {
+        id: String,
+        value: String,
+        #[serde(default)]
+        cancelled: bool,
+    },
 }
 
 #[cfg(test)]
@@ -378,6 +407,73 @@ mod tests {
         let json = serde_json::to_string(&ev).unwrap();
         let back: BackendEvent = serde_json::from_str(&json).unwrap();
         assert!(matches!(back, BackendEvent::PermissionTimeout { .. }));
+    }
+
+    #[test]
+    fn backend_event_wizard_prompt_roundtrip() {
+        let ev = BackendEvent::WizardPrompt {
+            id: "wiz-1".into(),
+            step: "select".into(),
+            title: "Pick a provider".into(),
+            options: vec!["Anthropic".into(), "OpenAI".into()],
+            masked: false,
+            hint: String::new(),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: BackendEvent = serde_json::from_str(&json).unwrap();
+        if let BackendEvent::WizardPrompt { step, options, .. } = back {
+            assert_eq!(step, "select");
+            assert_eq!(options.len(), 2);
+        } else {
+            panic!("expected WizardPrompt");
+        }
+    }
+
+    #[test]
+    fn backend_event_wizard_prompt_defaults() {
+        // `options`, `masked`, `hint` are all optional on the wire.
+        let json = r#"{"type":"wizard_prompt","id":"w","step":"input","title":"Key"}"#;
+        let ev: BackendEvent = serde_json::from_str(json).unwrap();
+        if let BackendEvent::WizardPrompt { options, masked, hint, .. } = ev {
+            assert!(options.is_empty());
+            assert!(!masked);
+            assert_eq!(hint, "");
+        } else {
+            panic!("expected WizardPrompt");
+        }
+    }
+
+    #[test]
+    fn backend_event_wizard_done_roundtrip() {
+        let ev = BackendEvent::WizardDone { message: "saved".into() };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: BackendEvent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, BackendEvent::WizardDone { .. }));
+    }
+
+    #[test]
+    fn tui_command_wizard_response_roundtrip() {
+        let cmd = TuiCommand::WizardResponse { id: "wiz-1".into(), value: "2".into(), cancelled: false };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: TuiCommand = serde_json::from_str(&json).unwrap();
+        if let TuiCommand::WizardResponse { id, value, cancelled } = back {
+            assert_eq!(id, "wiz-1");
+            assert_eq!(value, "2");
+            assert!(!cancelled);
+        } else {
+            panic!("expected WizardResponse");
+        }
+    }
+
+    #[test]
+    fn tui_command_wizard_response_cancelled_default() {
+        let json = r#"{"type":"wizard_response","id":"w","value":""}"#;
+        let cmd: TuiCommand = serde_json::from_str(json).unwrap();
+        if let TuiCommand::WizardResponse { cancelled, .. } = cmd {
+            assert!(!cancelled);
+        } else {
+            panic!("expected WizardResponse");
+        }
     }
 
     // ── TuiCommand roundtrips ──────────────────────────────────────

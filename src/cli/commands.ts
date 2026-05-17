@@ -27,6 +27,7 @@ import type { ProfileManager } from '../router/profiles.ts';
 import type { Router as UnifiedRouter } from '../router/index.ts';
 import type { CouncilProfileManager } from '../council/profiles.ts';
 import { executeCouncil } from '../council/tool.ts';
+import { WizardManager, runKeySetup } from './key-setup.ts';
 import type { Analytics } from '../audit/analytics.ts';
 import type { CheckpointManager } from '../engine/checkpoints.ts';
 import type { SessionStore } from '../session/store.ts';
@@ -53,6 +54,7 @@ export interface CommandDeps {
   profiles: ProfileManager;
   router: UnifiedRouter;
   councilProfiles: CouncilProfileManager;
+  wizardManager: WizardManager;
   analytics: Analytics;
   checkpointManager: CheckpointManager;
   sessionStore: SessionStore;
@@ -67,7 +69,7 @@ export async function handleCommand(input: string, deps: CommandDeps): Promise<s
   const {
     session, contextManager, ledger, registry, collector, toolCtx,
     mcpClient, toolManager, workingDir,
-    profiles, router, councilProfiles, analytics,
+    profiles, router, councilProfiles, wizardManager, analytics,
     checkpointManager, sessionStore, rateLimiter, pendingImages, telemetry, emit,
   } = deps;
 
@@ -257,6 +259,13 @@ export async function handleCommand(input: string, deps: CommandDeps): Promise<s
         return result.content;
       }
       return 'Usage: /council [list|run <profile> <brief>]';
+    }
+    case '/keys': {
+      // Interactive provider-pick + key-entry wizard. It drives its own
+      // wizard_prompt / wizard_done events; the closing message is shown
+      // by the wizard, so there's nothing to return here.
+      await runKeySetup(wizardManager, registry);
+      return '';
     }
     case '/analytics': {
       const days = parts[1] ? parseInt(parts[1]) : 30;

@@ -22,6 +22,21 @@ pub struct PermissionDialog {
     pub tier: String,
 }
 
+/// State for the interactive key-setup wizard modal.
+#[derive(Debug, Clone)]
+pub struct WizardState {
+    pub id: String,
+    /// "select" — pick a numbered option; "input" — type a value.
+    pub step: String,
+    pub title: String,
+    pub options: Vec<String>,
+    /// Render typed input as dots (used for the API key).
+    pub masked: bool,
+    pub hint: String,
+    /// Accumulates keystrokes during an "input" step.
+    pub input: String,
+}
+
 pub struct App {
     /// Holds AT MOST one entry: the in-progress assistant message currently
     /// being streamed by the backend. When stats arrive (= turn complete),
@@ -60,6 +75,8 @@ pub struct App {
     pub start_time: Instant,
     pub session_cost: f64,
     pub pending_permissions: Vec<PermissionDialog>,
+    /// Active key-setup wizard modal, if any.
+    pub wizard: Option<WizardState>,
     pub git_info: Option<GitInfo>,
     /// Most recent completed assistant message body — used by Ctrl+Y to copy.
     pub last_assistant_content: Option<String>,
@@ -120,6 +137,7 @@ impl App {
             start_time: Instant::now(),
             session_cost: 0.0,
             pending_permissions: vec![],
+            wizard: None,
             git_info: None,
             last_assistant_content: None,
             pending_submits: VecDeque::new(),
@@ -479,9 +497,25 @@ impl App {
                 self.push_system(format!("Permission request for {tool} timed out and was denied"));
             }
             BackendEvent::CommandResult { output } => {
-                self.push_system(output);
+                // Some commands (e.g. /keys, which talks via wizard events)
+                // return no text — don't push a blank line for those.
+                if !output.trim().is_empty() {
+                    self.push_system(output);
+                }
                 self.is_processing = false;
                 self.status = String::new();
+            }
+            BackendEvent::WizardPrompt { id, step, title, options, masked, hint } => {
+                self.wizard = Some(WizardState {
+                    id, step, title, options, masked, hint,
+                    input: String::new(),
+                });
+            }
+            BackendEvent::WizardDone { message } => {
+                self.wizard = None;
+                if !message.trim().is_empty() {
+                    self.push_system(message);
+                }
             }
             BackendEvent::ModelOverride { label, pinned } => {
                 if pinned {

@@ -260,15 +260,73 @@ async fn main() -> io::Result<()> {
             // user can send it as a multi-line message or clean it up.
             // Critically: this does NOT trigger Enter/submit.
             if let Event::Paste(text) = &evt {
-                for ch in text.chars() {
-                    app.insert_char(ch);
+                // During the wizard's input step, a pasted value (e.g. an
+                // API key) goes into the wizard buffer with newlines
+                // stripped — not the main compose line.
+                if let Some(w) = app.wizard.as_mut() {
+                    if w.step == "input" {
+                        for ch in text.chars() {
+                            if ch != '\n' && ch != '\r' {
+                                w.input.push(ch);
+                            }
+                        }
+                    }
+                } else {
+                    for ch in text.chars() {
+                        app.insert_char(ch);
+                    }
                 }
                 // Don't fall through to key handling.
             }
 
             if let Event::Key(key) = evt {
+                // Key-setup wizard modal — intercepts all input while open.
+                let wizard_open = app.wizard.is_some();
+                if wizard_open {
+                    let wiz = app.wizard.clone().unwrap();
+                    let is_select = wiz.step == "select";
+                    match (key.code, key.modifiers) {
+                        (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                            send_command(&mut writer, TuiCommand::Quit).await;
+                            break;
+                        }
+                        (KeyCode::Esc, _) => {
+                            send_command(&mut writer, TuiCommand::WizardResponse {
+                                id: wiz.id.clone(),
+                                value: String::new(),
+                                cancelled: true,
+                            }).await;
+                            app.wizard = None; // dismiss immediately for responsiveness
+                        }
+                        (KeyCode::Char(c), _) if is_select && c.is_ascii_digit() && c != '0' => {
+                            let idx = (c as usize) - ('1' as usize);
+                            if idx < wiz.options.len() {
+                                send_command(&mut writer, TuiCommand::WizardResponse {
+                                    id: wiz.id.clone(),
+                                    value: idx.to_string(),
+                                    cancelled: false,
+                                }).await;
+                            }
+                        }
+                        (KeyCode::Enter, _) if !is_select => {
+                            send_command(&mut writer, TuiCommand::WizardResponse {
+                                id: wiz.id.clone(),
+                                value: wiz.input.clone(),
+                                cancelled: false,
+                            }).await;
+                        }
+                        (KeyCode::Backspace, _) if !is_select => {
+                            if let Some(w) = app.wizard.as_mut() { w.input.pop(); }
+                        }
+                        (KeyCode::Char(c), _) if !is_select => {
+                            if let Some(w) = app.wizard.as_mut() { w.input.push(c); }
+                        }
+                        _ => {}
+                    }
+                }
+
                 // Spec 01 — when a permission dialog is open, intercept y/n/a.
-                let permission_open = !app.pending_permissions.is_empty();
+                let permission_open = !wizard_open && !app.pending_permissions.is_empty();
                 if permission_open {
                     let pending_id = app.pending_permissions[0].id.clone();
                     let decision: Option<&str> = match (key.code, key.modifiers) {
@@ -290,7 +348,7 @@ async fn main() -> io::Result<()> {
                         app.pending_permissions.remove(0);
                     }
                 }
-                if !permission_open { match (key.code, key.modifiers) {
+                if !wizard_open && !permission_open { match (key.code, key.modifiers) {
                     (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                         send_command(&mut writer, TuiCommand::Quit).await;
                         break;

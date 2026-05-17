@@ -119,6 +119,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some(view) = app.detail_view.clone() {
         draw_detail(f, app, &view);
         if let Some(p) = app.pending_permissions.first().cloned() { draw_permission_overlay(f, &p, f.area()); }
+        if let Some(w) = app.wizard.clone() { draw_wizard_overlay(f, &w, f.area()); }
         return;
     }
 
@@ -172,6 +173,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     if let Some(p) = app.pending_permissions.first().cloned() {
         draw_permission_overlay(f, &p, area);
+    }
+    if let Some(w) = app.wizard.clone() {
+        draw_wizard_overlay(f, &w, area);
     }
 }
 
@@ -402,6 +406,67 @@ fn draw_permission_overlay(f: &mut Frame, p: &crate::app::PermissionDialog, anch
         .borders(Borders::ALL)
         .border_style(Style::default().fg(title_color))
         .title(" permission ");
+    let para = Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false });
+    f.render_widget(para, dialog_area);
+}
+
+fn draw_wizard_overlay(f: &mut Frame, w: &crate::app::WizardState, anchor: Rect) {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!(" {}", w.title),
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+
+    if w.step == "select" {
+        for (i, opt) in w.options.iter().enumerate() {
+            lines.push(Line::from(Span::raw(format!("  {}. {}", i + 1, opt))));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            " press a number to choose · [Esc] cancel",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        // "input" step — render the typed value, masked as dots for secrets.
+        let shown = if w.masked {
+            let n = w.input.chars().count();
+            if n > 64 {
+                format!("{} (+{})", "•".repeat(64), n - 64)
+            } else {
+                "•".repeat(n)
+            }
+        } else {
+            w.input.clone()
+        };
+        lines.push(Line::from(Span::raw(format!("  {}_", shown))));
+        lines.push(Line::from(""));
+        if !w.hint.is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!(" {}", w.hint),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        lines.push(Line::from(Span::styled(
+            " [Enter] confirm · [Esc] cancel",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    // +3 leaves a spare row in case a long hint wraps.
+    let h = (lines.len() as u16 + 3).min(anchor.height);
+    let width = anchor.width.saturating_sub(4).min(100);
+    let x = anchor.x + (anchor.width.saturating_sub(width)) / 2;
+    let y = anchor.y + anchor.height.saturating_sub(h);
+    let dialog_area = Rect { x, y, width, height: h };
+
+    f.render_widget(ratatui::widgets::Clear, dialog_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(" set up API key ");
     let para = Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false });
     f.render_widget(para, dialog_area);
 }

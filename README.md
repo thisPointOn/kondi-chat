@@ -52,19 +52,23 @@ If you want one polished model and don't care about cost, use Claude Code. If yo
 
 ## Install
 
-> The npm package isn't published yet. Until it lands, install from source or grab a prebuilt binary from a [GitHub Release](https://github.com/thisPointOn/kondi-chat/releases).
-
-**Prebuilt binary (no Node, no Rust toolchain needed):**
-
 ```bash
-# Linux x64 — adjust filename for darwin-x64/arm64, linux-arm64, win32-x64
-curl -L -o kondi-tui \
-  https://github.com/thisPointOn/kondi-chat/releases/latest/download/kondi-tui-linux-x64
-chmod +x kondi-tui
-./kondi-tui   # the binary spawns its own Node backend via npx (Node 18+ required)
+# Requires Node 18+. The postinstall downloads the prebuilt TUI binary
+# for your platform — no Rust toolchain needed.
+npm install -g @thispointon/kondi-chat
 ```
 
-**From source:**
+Supported platforms: Linux x64/arm64, macOS x64/arm64, Windows x64.
+
+**Windows / PowerShell:** if `kondi-chat` won't run (PowerShell blocks the npm-generated script shim), run this once:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+It's safe and non-admin — it lets locally-installed scripts run while still requiring signatures on downloaded ones. Alternatively, invoke `kondi-chat.cmd` directly.
+
+**From source** (for hacking on it):
 
 ```bash
 git clone https://github.com/thisPointOn/kondi-chat.git
@@ -73,8 +77,6 @@ npm install --ignore-scripts            # skip postinstall when building locally
 cd tui && cargo build --release && cd ..
 npm run chat:tui                        # run the TUI
 ```
-
-Requires Node 18+ and a Rust toolchain. Supported platforms: Linux x64/arm64, macOS x64/arm64, Windows x64.
 
 ## Set up your API keys
 

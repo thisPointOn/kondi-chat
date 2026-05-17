@@ -42,6 +42,7 @@ import { RoutingCollector } from '../router/collector.ts';
 import type { ModelRegistry } from '../router/registry.ts';
 import { pickCompressionModel } from './submit-helpers.ts';
 import { handleCommand } from './commands.ts';
+import { WizardManager } from './key-setup.ts';
 import { handleSubmit } from './submit.ts';
 import { Analytics } from '../audit/analytics.ts';
 import { TelemetryEmitter } from '../audit/telemetry.ts';
@@ -244,6 +245,9 @@ async function main() {
     skipPermissions,
   );
 
+  // Drives the interactive /keys setup wizard (provider pick + key entry).
+  const wizardManager = new WizardManager(emit);
+
   const toolCtx: ToolContext = {
     workingDir,
     session,
@@ -313,6 +317,15 @@ async function main() {
     } else {
       emit({ type: 'model_override', label: profiles.getActive().name, pinned: false });
     }
+  }
+
+  // No API keys → no models can be routed. Make the dead end actionable
+  // instead of leaving the user staring at "0 models".
+  if (available.length === 0) {
+    emit({
+      type: 'status',
+      text: 'No API keys found — kondi-chat needs at least one provider key to run. Type /keys to add one.',
+    });
   }
 
   // Telemetry-disabled startup banner removed — it rendered on every launch
@@ -402,6 +415,11 @@ async function main() {
       return;
     }
 
+    if (cmd.type === 'wizard_response') {
+      wizardManager.handleResponse(cmd.id, cmd.value, cmd.cancelled === true);
+      return;
+    }
+
     if (cmd.type === 'command') {
       // `/loop <goal>` is not a simple string-returning slash command —
       // it spawns a multi-iteration agent loop that needs the streaming
@@ -442,7 +460,7 @@ async function main() {
         mcpClient, toolManager,
         workingDir, profiles, router, councilProfiles,
         analytics, checkpointManager, sessionStore, rateLimiter,
-        pendingImages, telemetry, emit,
+        pendingImages, telemetry, wizardManager, emit,
       });
       emit({ type: 'command_result', output });
       refreshGit();
