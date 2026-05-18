@@ -20,6 +20,45 @@ use protocol::{BackendEvent, TuiCommand};
 /// 18 rows is enough for a roomy compose area + 8 lines of streaming preview.
 const VIEWPORT_HEIGHT: u16 = 12;
 
+/// Resolve how to launch the Node backend.
+///
+/// Prefers `node <local tsx CLI>`: `node` resolves to `node.exe` on
+/// Windows, whereas a bare `npx` is a `.cmd` shim that Rust's `Command`
+/// can't find ("program not found"). Falls back to a platform-correct
+/// `npx tsx` if `tsx` can't be located.
+fn backend_launcher(project_root: &std::path::Path) -> (String, Vec<String>) {
+    if let Some(tsx_dir) = find_tsx_dir(project_root) {
+        if let Ok(raw) = std::fs::read_to_string(tsx_dir.join("package.json")) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) {
+                let rel = json["bin"].as_str().map(String::from)
+                    .or_else(|| json["bin"]["tsx"].as_str().map(String::from));
+                if let Some(rel) = rel {
+                    let cli = tsx_dir.join(&rel);
+                    if cli.exists() {
+                        return ("node".to_string(), vec![cli.to_string_lossy().into_owned()]);
+                    }
+                }
+            }
+        }
+    }
+    let npx = if cfg!(windows) { "npx.cmd" } else { "npx" };
+    (npx.to_string(), vec!["tsx".to_string()])
+}
+
+/// Walk up from `project_root` looking for `node_modules/tsx`, mirroring
+/// Node's module resolution so a hoisted `tsx` install is found too.
+fn find_tsx_dir(project_root: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut dir = Some(project_root);
+    while let Some(d) = dir {
+        let candidate = d.join("node_modules").join("tsx");
+        if candidate.join("package.json").exists() {
+            return Some(candidate);
+        }
+        dir = d.parent();
+    }
+    None
+}
+
 #[tokio::main]
 async fn main() -> io::Result<()> {
     // Start the Node.js backend as a child process.
@@ -64,9 +103,10 @@ async fn main() -> io::Result<()> {
         a == "--prompt" || a == "--pipe" || a == "--json" || a == "--sessions"
     );
     if is_non_interactive {
-        let mut args = vec!["tsx".to_string(), "src/cli/backend.ts".to_string()];
+        let (program, mut args) = backend_launcher(&project_root);
+        args.push("src/cli/backend.ts".to_string());
         args.extend(forwarded);
-        let status = TokioCommand::new("npx")
+        let status = TokioCommand::new(&program)
             .args(&args)
             .current_dir(&project_root)
             .status()
@@ -88,10 +128,14 @@ async fn main() -> io::Result<()> {
     // Pass the user's actual working directory (where they ran `kondi-chat`)
     // to the backend via --cwd. The backend uses this as workingDir for file
     // tools, git context, .kondi-chat storage, etc. current_dir stays at
-    // project_root so npx/tsx resolve from the right place.
+    // project_root so node/tsx resolve from the right place.
     let user_cwd = std::env::current_dir()?.to_string_lossy().to_string();
-    let mut child = TokioCommand::new("npx")
-        .args(["tsx", "src/cli/backend.ts", "--cwd", &user_cwd])
+    let (program, mut backend_args) = backend_launcher(&project_root);
+    backend_args.push("src/cli/backend.ts".to_string());
+    backend_args.push("--cwd".to_string());
+    backend_args.push(user_cwd);
+    let mut child = TokioCommand::new(&program)
+        .args(&backend_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::from(backend_log))
