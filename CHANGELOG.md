@@ -5,6 +5,15 @@ All notable changes to kondi-chat will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-05-17
+
+### Added
+- Interactive `/keys` setup wizard — pick a provider from a list, paste the key into a masked prompt, and it's saved to `~/.kondi-chat/.env` with model availability re-checked live (no restart).
+- On startup with no API keys, a clear "No API keys found — type /keys to add one" message replaces the silent "0 models".
+
+### Fixed
+- **Windows: the TUI binary couldn't start the backend.** It spawned the Node backend via `Command::new("npx")`, which fails on Windows ("program not found") because `npx` is a `.cmd` shim, not a real executable. The TUI now resolves the package-local `tsx` and spawns it with `node` (which resolves to `node.exe`); falls back to a platform-correct `npx`.
+
 ## [0.1.1] - 2026-05-12
 
 ### Fixed

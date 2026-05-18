@@ -8,7 +8,7 @@ import { createRequire } from "node:module";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, "..");
-const version = "0.1.3";
+const version = "0.1.4";
 
 const arg = process.argv[2];
 
