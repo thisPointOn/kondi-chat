@@ -5,6 +5,14 @@ All notable changes to kondi-chat will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-05-18
+
+### Fixed
+- **Linux binaries are now static musl builds.** Earlier releases shipped Linux binaries built on the CI runner's glibc (2.39), so `kondi-chat` failed with `GLIBC_2.39 not found` on Debian, Ubuntu 22.04, and slim containers — most Linux that isn't bleeding-edge. The musl binaries statically link libc and run on any distro.
+
+### Changed
+- **Native Windows is no longer supported.** Windows-native was a recurring source of breakage (launcher, backend spawn, shell shims); Windows users should run kondi-chat under WSL, which is a Linux environment and uses the (now portable) Linux binary. The installer and launcher detect native Windows and point to WSL.
+
 ## [0.1.4] - 2026-05-17
 
 ### Added
