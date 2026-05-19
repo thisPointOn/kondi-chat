@@ -58,15 +58,15 @@ If you want one polished model and don't care about cost, use Claude Code. If yo
 npm install -g @thispointon/kondi-chat
 ```
 
-Supported platforms: Linux x64/arm64, macOS x64/arm64, Windows x64.
+Supported platforms: Linux x64/arm64, macOS x64/arm64. Linux binaries are static (musl) — they run on any distro.
 
-**Windows / PowerShell:** if `kondi-chat` won't run (PowerShell blocks the npm-generated script shim), run this once:
+**Windows:** run kondi-chat under **WSL** (Windows Subsystem for Linux) — native Windows isn't supported. One-time setup in PowerShell:
 
 ```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+wsl --install
 ```
 
-It's safe and non-admin — it lets locally-installed scripts run while still requiring signatures on downloaded ones. Alternatively, invoke `kondi-chat.cmd` directly.
+Then open the WSL/Ubuntu shell and run the `npm install -g` command above inside it.
 
 **From source** (for hacking on it):
 

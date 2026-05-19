@@ -23,12 +23,13 @@ const http = require('http');
 const REPO = 'thisPointOn/kondi-chat';
 
 // Map Node's os.platform()+os.arch() to the GitHub release artifact name.
+// Native Windows is intentionally absent — Windows users run kondi-chat
+// under WSL, which is Linux and uses the linux-x64 binary.
 const PLATFORM_MAP = {
   'linux-x64':    'kondi-tui-linux-x64',
   'linux-arm64':  'kondi-tui-linux-arm64',
   'darwin-x64':   'kondi-tui-darwin-x64',
   'darwin-arm64': 'kondi-tui-darwin-arm64',
-  'win32-x64':    'kondi-tui-win32-x64.exe',
 };
 
 function getPlatformKey() {
@@ -64,8 +65,14 @@ async function main() {
   const artifact = PLATFORM_MAP[key];
 
   if (!artifact) {
-    console.log(`[kondi-chat] No prebuilt TUI binary for ${key}. The Node backend will run without the TUI.`);
-    console.log(`[kondi-chat] To build from source: cd tui && cargo build --release`);
+    if (process.platform === 'win32') {
+      console.log('[kondi-chat] Native Windows is not supported.');
+      console.log('[kondi-chat] Run kondi-chat under WSL: in PowerShell run `wsl --install`,');
+      console.log('[kondi-chat] then `npm install -g @thispointon/kondi-chat` inside the WSL shell.');
+    } else {
+      console.log(`[kondi-chat] No prebuilt TUI binary for ${key}. The Node backend will run without the TUI.`);
+      console.log(`[kondi-chat] To build from source: cd tui && cargo build --release`);
+    }
     return;
   }
 

@@ -50,11 +50,19 @@ if (arg === "--help" || arg === "-h") {
   process.exit(0);
 }
 
-// Windows postinstall writes kondi-tui.exe; POSIX writes kondi-tui.
-const tuiBinary = join(
-  projectRoot, "tui", "target", "release",
-  process.platform === "win32" ? "kondi-tui.exe" : "kondi-tui",
-);
+// Native Windows is not supported — run kondi-chat under WSL, which is a
+// Linux environment. (Inside WSL, process.platform is "linux", so this
+// only triggers in real Windows PowerShell / cmd.)
+if (process.platform === "win32") {
+  console.error("kondi-chat: native Windows is not supported.");
+  console.error("Run it under WSL (Windows Subsystem for Linux):");
+  console.error("  1. In PowerShell:  wsl --install   (one time, reboot if asked)");
+  console.error("  2. Inside WSL:     npm install -g @thispointon/kondi-chat");
+  console.error("  3. Inside WSL:     kondi-chat");
+  process.exit(1);
+}
+
+const tuiBinary = join(projectRoot, "tui", "target", "release", "kondi-tui");
 
 if (existsSync(tuiBinary)) {
   try {

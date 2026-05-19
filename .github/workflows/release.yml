@@ -27,11 +27,15 @@ jobs:
     strategy:
       matrix:
         include:
+          # Linux binaries are static musl builds — no glibc dependency, so
+          # they run on any distro (Debian, older Ubuntu, slim containers).
+          # A glibc build picks up the CI runner's glibc and breaks anywhere
+          # older than it.
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             artifact: kondi-tui-linux-x64
           - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-musl
             artifact: kondi-tui-linux-arm64
             cross: true
           - os: macos-latest
@@ -40,9 +44,8 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: kondi-tui-darwin-arm64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact: kondi-tui-win32-x64.exe
+          # Native Windows is not supported — Windows users run under WSL,
+          # which is a Linux environment and uses the linux-x64 binary.
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -50,6 +53,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Install musl tools (Linux x64)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Install cross (Linux ARM64)
         if: matrix.cross
@@ -66,15 +73,10 @@ jobs:
         run: cross build --release --target ${{ matrix.target }}
 
       # Upload the raw binary (used by the npm postinstall script).
-      - name: Rename binary (Unix)
-        if: runner.os != 'Windows'
+      - name: Rename binary
         run: |
           cp tui/target/${{ matrix.target }}/release/kondi-tui ${{ matrix.artifact }}
           chmod +x ${{ matrix.artifact }}
-
-      - name: Rename binary (Windows)
-        if: runner.os == 'Windows'
-        run: copy tui\target\${{ matrix.target }}\release\kondi-tui.exe ${{ matrix.artifact }}
 
       - uses: actions/upload-artifact@v4
         with:

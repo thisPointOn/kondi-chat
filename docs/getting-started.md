@@ -8,15 +8,9 @@
 npm install -g @thispointon/kondi-chat
 ```
 
-Supported platforms: Linux x64/arm64, macOS x64/arm64, Windows x64.
+Supported platforms: Linux x64/arm64, macOS x64/arm64. Linux binaries are static (musl) and run on any distro.
 
-**Windows / PowerShell:** if `kondi-chat` won't run because PowerShell blocks the npm-generated script shim, run this once (safe, non-admin):
-
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-```
-
-Or invoke `kondi-chat.cmd` directly instead.
+**Windows:** native Windows isn't supported — run kondi-chat under **WSL** (Windows Subsystem for Linux). One-time, in PowerShell: `wsl --install`. Then open the WSL shell and run the `npm install -g` command above inside it.
 
 **From source** (for hacking on it):
 
