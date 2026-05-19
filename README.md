@@ -58,15 +58,21 @@ If you want one polished model and don't care about cost, use Claude Code. If yo
 npm install -g @thispointon/kondi-chat
 ```
 
-Supported platforms: Linux x64/arm64, macOS x64/arm64. Linux binaries are static (musl) — they run on any distro.
+### Platform support
 
-**Windows:** run kondi-chat under **WSL** (Windows Subsystem for Linux) — native Windows isn't supported. One-time setup in PowerShell:
+| Platform | Status |
+|----------|--------|
+| Linux x64 / arm64 | Supported — `npm install` and binary launch verified in a clean Debian container. Static musl binaries, so they run on any distro. |
+| macOS x64 / arm64 | Supported — same install path, native binaries. |
+| Windows | Via **WSL** only. Native Windows is not supported. |
+
+**Windows users run kondi-chat inside WSL** (Windows Subsystem for Linux). WSL is a Linux environment, so it uses the same Linux binary — there is no separate Windows build to break. One-time setup, in PowerShell:
 
 ```powershell
 wsl --install
 ```
 
-Then open the WSL/Ubuntu shell and run the `npm install -g` command above inside it.
+Then open the WSL / Ubuntu shell and run the `npm install -g` command above inside it.
 
 **From source** (for hacking on it):
 

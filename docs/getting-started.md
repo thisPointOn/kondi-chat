@@ -8,9 +8,11 @@
 npm install -g @thispointon/kondi-chat
 ```
 
-Supported platforms: Linux x64/arm64, macOS x64/arm64. Linux binaries are static (musl) and run on any distro.
+**Platform support:**
 
-**Windows:** native Windows isn't supported — run kondi-chat under **WSL** (Windows Subsystem for Linux). One-time, in PowerShell: `wsl --install`. Then open the WSL shell and run the `npm install -g` command above inside it.
+- **Linux** (x64/arm64) — supported; `npm install` and binary launch are verified in a clean Debian container. Static musl binaries, so they run on any distro.
+- **macOS** (x64/arm64) — supported; same install path, native binaries.
+- **Windows** — via **WSL** only; native Windows is not supported. WSL is a Linux environment, so it runs the same Linux binary. One-time, in PowerShell: `wsl --install`. Then open the WSL shell and run the `npm install -g` command above inside it.
 
 **From source** (for hacking on it):
 
