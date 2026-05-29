@@ -4,6 +4,12 @@ use ratatui::text::{Line, Span};
 use std::collections::VecDeque;
 use std::time::Instant;
 
+/// Hard upper bound on the compose-input length. Sized to roughly match the
+/// max visual capacity of the input box (~18 lines × a typical terminal
+/// width). Past this, `insert_char` is a no-op so the user can't type into
+/// invisible scroll territory inside the box.
+const MAX_INPUT_CHARS: usize = 8000;
+
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
     pub id: String,
@@ -255,6 +261,10 @@ impl App {
     }
 
     pub fn insert_char(&mut self, c: char) {
+        // Hard cap matches the compose box's max visual size — past this,
+        // the user can't see what they're typing, so we stop accepting
+        // input rather than silently growing off-screen. Also bounds paste.
+        if self.input.chars().count() >= MAX_INPUT_CHARS { return; }
         let byte = self.byte_at(self.input_cursor);
         self.input.insert(byte, c);
         self.input_cursor += 1;

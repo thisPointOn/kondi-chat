@@ -137,7 +137,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }).sum();
         content_lines.max(1)
     };
-    let input_height = (input_lines as u16 + 2).min(9).max(4);
+    // 4-row minimum (so the box is visually substantial when empty), grows
+    // up to 20 rows of content + 2 borders to fit ~18 lines of text. Pairs
+    // with MAX_INPUT_CHARS in app.rs which stops input growth past the box.
+    let input_height = (input_lines as u16 + 2).min(20).max(4);
 
     let suggestions = get_suggestions(&app.input, &app.model, &app.available_models);
     let suggestion_height = if suggestions.is_empty() { 0 } else { (suggestions.len() as u16).min(6) };

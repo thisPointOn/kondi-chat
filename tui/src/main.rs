@@ -17,8 +17,9 @@ use app::App;
 use protocol::{BackendEvent, TuiCommand};
 
 /// Height of the live inline viewport (status + in-progress + input + model).
-/// 18 rows is enough for a roomy compose area + 8 lines of streaming preview.
-const VIEWPORT_HEIGHT: u16 = 12;
+/// 22 rows lets the compose box grow to ~18 lines so long messages stay
+/// visible while you type, with room left for status / model bar / preview.
+const VIEWPORT_HEIGHT: u16 = 22;
 
 /// Resolve how to launch the Node backend.
 ///
