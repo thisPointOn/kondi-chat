@@ -171,6 +171,7 @@ export async function handleCommand(input: string, deps: CommandDeps): Promise<s
         router.setProfileScope({
           classifier: cheap ? { provider: cheap.provider, model: cheap.id } : undefined,
           rolePinning: p.rolePinning,
+          allowedProviders: p.allowedProviders,
         });
         writeActiveProfile(resolve(workingDir, '.kondi-chat'), profiles.getActive().name);
         // Switching mode clears any /use override — the user wants the
