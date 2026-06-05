@@ -83,6 +83,11 @@ pub struct App {
     pub pending_permissions: Vec<PermissionDialog>,
     /// Active key-setup wizard modal, if any.
     pub wizard: Option<WizardState>,
+    /// "Copy mode" — when true the main loop skips viewport draws and
+    /// insert_before flushes so terminal-native text selection isn't
+    /// killed by redraws. Toggle with Ctrl+P. Backend events still arrive
+    /// and accumulate in app state; they drain when copy mode exits.
+    pub copy_mode: bool,
     pub git_info: Option<GitInfo>,
     /// Most recent completed assistant message body — used by Ctrl+Y to copy.
     pub last_assistant_content: Option<String>,
@@ -144,6 +149,7 @@ impl App {
             session_cost: 0.0,
             pending_permissions: vec![],
             wizard: None,
+            copy_mode: false,
             git_info: None,
             last_assistant_content: None,
             pending_submits: VecDeque::new(),
@@ -501,6 +507,8 @@ impl App {
             }
             BackendEvent::PermissionRequest { id, tool, args: _, summary, tier } => {
                 self.pending_permissions.push(PermissionDialog { id, tool, summary, tier });
+                // Don't strand the user in copy mode with an invisible prompt.
+                self.copy_mode = false;
             }
             BackendEvent::PermissionTimeout { id, tool } => {
                 self.pending_permissions.retain(|p| p.id != id);
@@ -516,6 +524,7 @@ impl App {
                 self.status = String::new();
             }
             BackendEvent::WizardPrompt { id, step, title, options, masked, hint } => {
+                self.copy_mode = false; // wizard needs a visible UI
                 self.wizard = Some(WizardState {
                     id, step, title, options, masked, hint,
                     input: String::new(),

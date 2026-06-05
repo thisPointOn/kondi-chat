@@ -174,7 +174,12 @@ async fn main() -> io::Result<()> {
     let mut needs_draw = true;
 
     loop {
-        if needs_draw {
+        // Copy mode (Ctrl+P) pauses ALL viewport draws and insert_before
+        // flushes so the terminal's native text selection survives. Events
+        // and state updates still process — they just don't reach the
+        // screen until the user toggles back. Resumption re-runs this
+        // block, which drains pending_history + redraws in one pass.
+        if needs_draw && !app.copy_mode {
             // Drain completed messages into normal terminal scrollback.
             // insert_before's `set_line` does not wrap, so we must pre-wrap
             // every line to the terminal width or long content gets clipped
@@ -393,7 +398,26 @@ async fn main() -> io::Result<()> {
                         app.pending_permissions.remove(0);
                     }
                 }
-                if !wizard_open && !permission_open { match (key.code, key.modifiers) {
+                // Copy mode swallows everything except its own toggle and
+                // Ctrl+C so the user can freely select text without a stray
+                // keypress accidentally typing into the input buffer.
+                if !wizard_open && !permission_open && app.copy_mode {
+                    match (key.code, key.modifiers) {
+                        (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                            send_command(&mut writer, TuiCommand::Quit).await;
+                            break;
+                        }
+                        (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
+                            // Exit copy mode — the next redraw will drain
+                            // anything that queued up while paused, which
+                            // is the user's visual signal it resumed.
+                            app.copy_mode = false;
+                            needs_draw = true;
+                        }
+                        _ => {}
+                    }
+                }
+                if !wizard_open && !permission_open && !app.copy_mode { match (key.code, key.modifiers) {
                     (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                         send_command(&mut writer, TuiCommand::Quit).await;
                         break;
@@ -446,6 +470,31 @@ async fn main() -> io::Result<()> {
                     }
                     (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
                         app.show_activity = !app.show_activity;
+                    }
+                    (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
+                        // Enter copy mode: push a notice into scrollback
+                        // RIGHT NOW (the redraw block won't run again until
+                        // we toggle back), then go quiet so terminal text
+                        // selection survives.
+                        let notice = vec![ratatui::text::Line::from(
+                            ratatui::text::Span::styled(
+                                "── COPY MODE — viewport paused. Press Ctrl+P to resume. Ctrl+C to quit. ──",
+                                ratatui::style::Style::default()
+                                    .fg(ratatui::style::Color::Yellow)
+                                    .add_modifier(ratatui::style::Modifier::BOLD),
+                            ),
+                        )];
+                        let term_width = terminal.size()?.width as usize;
+                        let wrapped = ui::wrap_lines_to_width(&notice, term_width);
+                        let h = wrapped.len() as u16;
+                        if h > 0 {
+                            terminal.insert_before(h, |buf| {
+                                for (i, line) in wrapped.iter().enumerate() {
+                                    buf.set_line(0, i as u16, line, buf.area.width);
+                                }
+                            })?;
+                        }
+                        app.copy_mode = true;
                     }
                     (KeyCode::Backspace, _) => { app.backspace_at_cursor(); }
                     (KeyCode::Delete, _) => { app.delete_at_cursor(); }

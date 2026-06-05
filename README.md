@@ -454,6 +454,7 @@ kondi-chat --prompt "Fix the tests" --auto-approve run_command,write_file
 | `Ctrl+R` | Toggle reasoning detail view — hidden chain-of-thought from reasoning models (GLM-5.x, OpenAI o-series, DeepSeek-R1, Anthropic extended thinking) |
 | `Ctrl+Y` | Copy last assistant response to system clipboard (raw markdown) |
 | `Ctrl+A` | Toggle activity log |
+| `Ctrl+P` | Toggle **copy mode** — pauses all viewport redraws + scrollback inserts so terminal-native text selection isn't killed by streaming updates. Press again to resume; queued content drains. |
 | `←` / `→` | Move cursor within input |
 | `Home` / `End` | Jump to start / end of input |
 | `Backspace` / `Delete` | Delete before / at cursor |
