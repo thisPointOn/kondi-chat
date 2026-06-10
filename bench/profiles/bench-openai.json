@@ -1,0 +1,39 @@
+{
+  "name": "bench-openai",
+  "description": "Benchmark: OpenAI only (GPT-5.4 + nano compress)",
+  "planningPreference": [
+    "planning",
+    "reasoning",
+    "analysis"
+  ],
+  "executionPreference": [
+    "coding",
+    "fast-coding",
+    "general"
+  ],
+  "reviewPreference": [
+    "code-review",
+    "analysis",
+    "reasoning"
+  ],
+  "contextBudget": 30000,
+  "maxIterations": 25,
+  "loopCostCap": 3,
+  "loopIterationCap": 20,
+  "promotionThreshold": 2,
+  "includeReflection": true,
+  "includeVerification": true,
+  "preferLocal": false,
+  "maxOutputTokens": 8192,
+  "allowedProviders": [
+    "openai"
+  ],
+  "rolePinning": {
+    "discuss": "gpt-5.4",
+    "dispatch": "gpt-5.4",
+    "execute": "gpt-5.4",
+    "reflect": "gpt-5.4",
+    "compress": "gpt-5.4-nano",
+    "state_update": "gpt-5.4-nano"
+  }
+}

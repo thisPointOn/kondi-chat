@@ -1,0 +1,39 @@
+{
+  "name": "bench-zai",
+  "description": "Benchmark: Z.AI only (GLM-5.1 plans, GLM-4.6 codes, flash compress)",
+  "planningPreference": [
+    "planning",
+    "reasoning",
+    "analysis"
+  ],
+  "executionPreference": [
+    "coding",
+    "fast-coding",
+    "general"
+  ],
+  "reviewPreference": [
+    "code-review",
+    "analysis",
+    "reasoning"
+  ],
+  "contextBudget": 30000,
+  "maxIterations": 25,
+  "loopCostCap": 3,
+  "loopIterationCap": 20,
+  "promotionThreshold": 2,
+  "includeReflection": true,
+  "includeVerification": true,
+  "preferLocal": false,
+  "maxOutputTokens": 8192,
+  "allowedProviders": [
+    "zai"
+  ],
+  "rolePinning": {
+    "discuss": "glm-5.1",
+    "dispatch": "glm-5.1",
+    "execute": "glm-4.6",
+    "reflect": "glm-5.1",
+    "compress": "glm-4.5-flash",
+    "state_update": "glm-4.5-flash"
+  }
+}

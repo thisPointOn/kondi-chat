@@ -1,0 +1,39 @@
+{
+  "name": "bench-google",
+  "description": "Benchmark: Google only (Gemini 2.5 Pro + Flash compress)",
+  "planningPreference": [
+    "planning",
+    "reasoning",
+    "analysis"
+  ],
+  "executionPreference": [
+    "coding",
+    "fast-coding",
+    "general"
+  ],
+  "reviewPreference": [
+    "code-review",
+    "analysis",
+    "reasoning"
+  ],
+  "contextBudget": 30000,
+  "maxIterations": 25,
+  "loopCostCap": 3,
+  "loopIterationCap": 20,
+  "promotionThreshold": 2,
+  "includeReflection": true,
+  "includeVerification": true,
+  "preferLocal": false,
+  "maxOutputTokens": 8192,
+  "allowedProviders": [
+    "google"
+  ],
+  "rolePinning": {
+    "discuss": "models/gemini-2.5-pro",
+    "dispatch": "models/gemini-2.5-pro",
+    "execute": "models/gemini-2.5-pro",
+    "reflect": "models/gemini-2.5-pro",
+    "compress": "models/gemini-2.5-flash",
+    "state_update": "models/gemini-2.5-flash"
+  }
+}

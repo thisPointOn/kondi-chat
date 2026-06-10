@@ -11,3 +11,9 @@ ROADMAP.md
 launch-plan.md
 *_improvement_plan.md
 *-improvement-plan.md
+
+# benchmark artifacts (bench/*.mjs and bench/README.md are tracked)
+bench/cache/
+bench/work/
+bench/results/
+bench/tasks.json

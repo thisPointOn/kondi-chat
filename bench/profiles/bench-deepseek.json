@@ -1,0 +1,39 @@
+{
+  "name": "bench-deepseek",
+  "description": "Benchmark: DeepSeek only (V4 Pro + V4 Flash compress)",
+  "planningPreference": [
+    "planning",
+    "reasoning",
+    "analysis"
+  ],
+  "executionPreference": [
+    "coding",
+    "fast-coding",
+    "general"
+  ],
+  "reviewPreference": [
+    "code-review",
+    "analysis",
+    "reasoning"
+  ],
+  "contextBudget": 30000,
+  "maxIterations": 25,
+  "loopCostCap": 3,
+  "loopIterationCap": 20,
+  "promotionThreshold": 2,
+  "includeReflection": true,
+  "includeVerification": true,
+  "preferLocal": false,
+  "maxOutputTokens": 8192,
+  "allowedProviders": [
+    "deepseek"
+  ],
+  "rolePinning": {
+    "discuss": "deepseek-v4-pro",
+    "dispatch": "deepseek-v4-pro",
+    "execute": "deepseek-v4-pro",
+    "reflect": "deepseek-v4-pro",
+    "compress": "deepseek-v4-flash",
+    "state_update": "deepseek-v4-flash"
+  }
+}

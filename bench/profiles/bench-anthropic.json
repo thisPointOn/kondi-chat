@@ -1,0 +1,39 @@
+{
+  "name": "bench-anthropic",
+  "description": "Benchmark: Anthropic only (Sonnet 4.5 + Haiku compress)",
+  "planningPreference": [
+    "planning",
+    "reasoning",
+    "analysis"
+  ],
+  "executionPreference": [
+    "coding",
+    "fast-coding",
+    "general"
+  ],
+  "reviewPreference": [
+    "code-review",
+    "analysis",
+    "reasoning"
+  ],
+  "contextBudget": 30000,
+  "maxIterations": 25,
+  "loopCostCap": 3,
+  "loopIterationCap": 20,
+  "promotionThreshold": 2,
+  "includeReflection": true,
+  "includeVerification": true,
+  "preferLocal": false,
+  "maxOutputTokens": 8192,
+  "allowedProviders": [
+    "anthropic"
+  ],
+  "rolePinning": {
+    "discuss": "claude-sonnet-4-5-20250929",
+    "dispatch": "claude-sonnet-4-5-20250929",
+    "execute": "claude-sonnet-4-5-20250929",
+    "reflect": "claude-sonnet-4-5-20250929",
+    "compress": "claude-haiku-4-5-20251001",
+    "state_update": "claude-haiku-4-5-20251001"
+  }
+}
